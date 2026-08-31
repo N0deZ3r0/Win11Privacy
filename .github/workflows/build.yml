@@ -1,0 +1,102 @@
+name: Сборка
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Проверка и сборка
+    runs-on: windows-latest
+
+    steps:
+      - name: Получить исходники
+        uses: actions/checkout@v4
+
+      - name: Проверить синтаксис движка
+        shell: pwsh
+        run: |
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+                    (Resolve-Path .\Win11-Privacy-Engine.ps1).Path, [ref]$null, [ref]$errors)
+          if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Host "::error file=Win11-Privacy-Engine.ps1,line=$($_.Extent.StartLineNumber)::$($_.Message)" }
+              exit 1
+          }
+          Write-Host "Движок: синтаксис в порядке"
+
+      - name: Собрать Win11Privacy.exe
+        shell: pwsh
+        run: |
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (-not (Test-Path $csc)) { throw "csc.exe (.NET Framework 4) не найден на агенте сборки" }
+          & $csc /nologo /target:winexe /optimize+ /out:Win11Privacy.exe `
+              /reference:System.dll /reference:System.Core.dll `
+              /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
+              /win32res:app.res `
+              /resource:Win11-Privacy-Engine.ps1,engine.ps1 `
+              /resource:app.ico,app.ico /resource:app.png,app.png `
+              MainForm.cs Ui.cs Ui2.cs Ui3.cs Ui4.cs Json.cs
+          if ($LASTEXITCODE -ne 0) { throw "сборка не удалась" }
+
+      - name: Проверить готовый файл
+        shell: pwsh
+        run: |
+          $exe = Get-Item .\Win11Privacy.exe
+          Write-Host ("Размер: {0:N0} байт" -f $exe.Length)
+          if ($exe.Length -lt 200000) { throw "файл подозрительно мал" }
+
+          # движок должен быть вшит в exe и совпадать с исходником
+          $asm = [Reflection.Assembly]::LoadFile($exe.FullName)
+          $stream = $asm.GetManifestResourceStream('engine.ps1')
+          if ($null -eq $stream) { throw "движок не вшит в exe" }
+          $ms = New-Object IO.MemoryStream
+          $stream.CopyTo($ms)
+          $sha = [Security.Cryptography.SHA256]::Create()
+          $embedded = [BitConverter]::ToString($sha.ComputeHash($ms.ToArray()))
+          $source = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes('Win11-Privacy-Engine.ps1')))
+          if ($embedded -ne $source) { throw "вшитый движок не совпадает с исходником" }
+          Write-Host "Движок вшит и совпадает с исходником"
+
+          # программа обязана запрашивать права администратора
+          $manifest = Select-String -Path .\app.manifest -Pattern 'requireAdministrator' -Quiet
+          if (-not $manifest) { throw "в манифесте нет requireAdministrator" }
+          Write-Host "Манифест: права администратора запрашиваются"
+
+      - name: Сохранить сборку
+        uses: actions/upload-artifact@v4
+        with:
+          name: Win11Privacy
+          path: |
+            Win11Privacy.exe
+            Win11-Privacy-Engine.ps1
+            check-engine.cmd
+          retention-days: 30
+
+      - name: Выложить в релиз
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Win11Privacy.exe
+            Win11-Privacy-Engine.ps1
+          generate_release_notes: true
+          body: |
+            ## Приватность Windows 11 — ${{ github.ref_name }}
+
+            **Как запустить:** скачайте `Win11Privacy.exe`, правый клик → Свойства → галочка
+            «Разблокировать» → ОК, затем запустите. Программа запросит права администратора —
+            они нужны, потому что она меняет системные настройки.
+
+            Ничего устанавливать не требуется: приложение работает на встроенном в Windows
+            .NET Framework 4.8, движок вшит внутрь exe.
+
+            **Файлы**
+            | Файл | Зачем |
+            |---|---|
+            | `Win11Privacy.exe` | Само приложение |
+            | `Win11-Privacy-Engine.ps1` | Движок отдельно — можно изучить и запустить без интерфейса |

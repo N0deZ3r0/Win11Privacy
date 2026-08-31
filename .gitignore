@@ -1,0 +1,17 @@
+# Собранное приложение — раздаётся через Releases, в репозитории не хранится
+Win11Privacy.exe
+*.pdb
+
+# Результаты самопроверки движка (могут содержать данные компьютера)
+result-*.json
+result-*.txt
+
+# Резервные копии и профили, созданные программой
+Win11Privacy-Backup-*/
+*.win11privacy.bak
+
+# Мусор Windows и редакторов
+Thumbs.db
+desktop.ini
+.vs/
+*.user

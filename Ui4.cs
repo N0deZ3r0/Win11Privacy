@@ -1,0 +1,266 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
+using System.Windows.Forms;
+
+namespace Win11Privacy
+{
+    // ====================================================================== //
+    //  Кликабельная карточка раздела на «Обзоре»: иконка, название, статус
+    // ====================================================================== //
+    internal class ActionCard : Control
+    {
+        public string Glyph = "", Title = "", Status = "";
+        public Color Accent;
+        public Color StatusColor;
+        private bool _hover;
+
+        public ActionCard(string title, string glyph, Color accent)
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            Title = title; Glyph = glyph; Accent = accent;
+            StatusColor = Theme.TextDim;
+            BackColor = Theme.WindowBg;
+            Cursor = Cursors.Hand;
+        }
+
+        public void SetStatus(string text, Color color)
+        {
+            Status = text; StatusColor = color; Invalidate();
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; Invalidate(); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            using (SolidBrush b = new SolidBrush(Parent != null ? Parent.BackColor : Theme.WindowBg))
+                g.FillRectangle(b, ClientRectangle);
+            if (Width < 20 || Height < 20) return;
+            int u = Font.Height;
+
+            RectangleF r = new RectangleF(0.5F, 0.5F, Width - 1, Height - 1);
+            using (GraphicsPath p = Theme.RoundRect(r, 12))
+            {
+                using (LinearGradientBrush lb = new LinearGradientBrush(new Rectangle(0, 0, Width, Height),
+                    Theme.Mix(Theme.CardBg, Accent, _hover ? 0.10F : 0.04F), Theme.CardBg, LinearGradientMode.Vertical))
+                    g.FillPath(lb, p);
+                using (Pen pen = new Pen(_hover ? Theme.Mix(Theme.CardBorder, Accent, 0.55F) : Theme.CardBorder))
+                    g.DrawPath(pen, p);
+            }
+            using (Pen pen = new Pen(Color.FromArgb(Theme.Dark ? 22 : 40, Color.White)))
+                g.DrawLine(pen, 12, 1, Width - 12, 1);
+
+            int pad = (int)(u * 0.85F);
+            int chip = (int)(u * 1.95F);
+            int cy = (Height - chip) / 2;
+            Font icon = Theme.IconFont(Font.Size * 1.25F);
+            using (GraphicsPath p = Theme.RoundRect(new RectangleF(pad, cy, chip, chip), chip * 0.32F))
+            using (SolidBrush b = new SolidBrush(Theme.Mix(Theme.CardBg, Accent, 0.20F))) g.FillPath(b, p);
+            if (icon != null && !string.IsNullOrEmpty(Glyph))
+                TextRenderer.DrawText(g, Glyph, icon, new Rectangle(pad, cy, chip, chip), Accent,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+
+            // стрелка справа
+            int chev = (int)(u * 1.4F);
+            Font chevF = Theme.IconFont(Font.Size * 0.9F);
+            if (chevF != null)
+                TextRenderer.DrawText(g, "", chevF, new Rectangle(Width - chev - (int)(u * 0.5F), 0, chev, Height),
+                    _hover ? Accent : Theme.TextFaint,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+
+            int tx = pad + chip + (int)(u * 0.65F);
+            int tw = Width - tx - chev - (int)(u * 0.8F);
+            TextRenderer.DrawText(g, Title, new Font(Font, FontStyle.Bold),
+                new Rectangle(tx, (int)(Height / 2F - u * 1.45F), tw, (int)(u * 1.5F)), Theme.Text,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+            TextRenderer.DrawText(g, Status, Font,
+                new Rectangle(tx, (int)(Height / 2F + 0), tw, (int)(u * 1.5F)), StatusColor,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+        }
+    }
+
+    // ====================================================================== //
+    //  Мини-показатель в статусной панели: иконка, число, подпись
+    // ====================================================================== //
+    internal class MiniStat : Control
+    {
+        public string Glyph = "", Value = "—", Caption = "";
+        public Color Accent;
+
+        public MiniStat(string caption, string glyph, Color accent)
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                     ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
+            Caption = caption; Glyph = glyph; Accent = accent;
+        }
+
+        public void SetValue(string v) { Value = v; Invalidate(); }
+
+        protected override void OnFontChanged(EventArgs e)
+        {
+            base.OnFontChanged(e);
+            Size = new Size((int)(Font.Height * 10.5F), (int)(Font.Height * 2.9F));
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            int u = Font.Height;
+            int chip = (int)(u * 2.1F);
+            int cy = (Height - chip) / 2;
+            Font icon = Theme.IconFont(Font.Size * 1.1F);
+            using (GraphicsPath p = Theme.RoundRect(new RectangleF(0, cy, chip, chip), chip * 0.32F))
+            using (SolidBrush b = new SolidBrush(Theme.Mix(Theme.CardBg, Accent, 0.20F))) g.FillPath(b, p);
+            if (icon != null && !string.IsNullOrEmpty(Glyph))
+                TextRenderer.DrawText(g, Glyph, icon, new Rectangle(0, cy, chip, chip), Accent,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            int tx = chip + (int)(u * 0.55F);
+            using (Font vf = new Font(Font.FontFamily, Font.Size * 1.2F, FontStyle.Bold))
+                TextRenderer.DrawText(g, Value, vf, new Rectangle(tx, (int)(u * 0.1F), Width - tx, (int)(u * 1.6F)),
+                    Accent, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+            using (Font cf = new Font(Font.FontFamily, Font.Size * 0.85F))
+                TextRenderer.DrawText(g, Caption, cf, new Rectangle(tx, (int)(u * 1.6F), Width - tx, (int)(u * 1.3F)),
+                    Theme.TextDim, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+        }
+    }
+
+    // ====================================================================== //
+    //  Небольшой «чип» с текстом (система в шапке «Обзора»)
+    // ====================================================================== //
+    internal class ChipLabel : Control
+    {
+        public ChipLabel()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                     ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
+        }
+
+        public void SetText(string text)
+        {
+            Text = text;
+            int u = Font.Height;
+            Size sz = TextRenderer.MeasureText(text, Font);
+            Size = new Size(sz.Width + (int)(u * 1.4F), (int)(u * 1.7F));
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            if (string.IsNullOrEmpty(Text)) return;
+            RectangleF r = new RectangleF(0.5F, 0.5F, Width - 1, Height - 1);
+            using (GraphicsPath p = Theme.RoundRect(r, Height / 2F))
+            {
+                using (SolidBrush b = new SolidBrush(Theme.CardBg)) g.FillPath(b, p);
+                using (Pen pen = new Pen(Theme.CardBorder)) g.DrawPath(pen, p);
+            }
+            TextRenderer.DrawText(g, Text, Font, ClientRectangle, Theme.TextDim,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+        }
+    }
+    // ====================================================================== //
+    //  Адаптивная сетка плиток: сама выбирает число колонок по ширине,
+    //  плитки растягиваются на всю ширину поровну
+    // ====================================================================== //
+    internal class TileGrid : Panel
+    {
+        public float MinTileWidthU = 13.5F;   // минимальная ширина плитки, в высотах шрифта
+        public float TileHeightU = 5.1F;      // высота плитки
+        public float GapU = 0.55F;            // зазор
+        public int MaxCols = 4;
+        private bool _busy;
+
+        public TileGrid()
+        {
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+            BackColor = Theme.WindowBg;
+        }
+
+        protected override void OnResize(EventArgs e) { base.OnResize(e); Arrange(); }
+        protected override void OnControlAdded(ControlEventArgs e) { base.OnControlAdded(e); Arrange(); }
+        protected override void OnControlRemoved(ControlEventArgs e) { base.OnControlRemoved(e); Arrange(); }
+        protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); Arrange(); }
+
+        private int CalcCols(int width, int count)
+        {
+            int u = Font.Height;
+            int gap = (int)(u * GapU);
+            int minW = Math.Max(40, (int)(u * MinTileWidthU));
+            int cols = (width + gap) / (minW + gap);
+            if (cols < 1) cols = 1;
+            int cap = Math.Min(MaxCols, Math.Max(1, count));
+            if (cols > cap) cols = cap;
+            return cols;
+        }
+
+        private int GridHeight(int width, int count)
+        {
+            if (count == 0) return 0;
+            int u = Font.Height;
+            int gap = (int)(u * GapU);
+            int th = (int)(u * TileHeightU);
+            int cols = CalcCols(width, count);
+            int rows = (count + cols - 1) / cols;
+            return rows * (th + gap) - gap;
+        }
+
+        public override Size GetPreferredSize(Size proposedSize)
+        {
+            int w = (proposedSize.Width > 0 && proposedSize.Width < 30000) ? proposedSize.Width : ClientSize.Width;
+            return new Size(w, GridHeight(w, Controls.Count));
+        }
+
+        public void Arrange()
+        {
+            if (_busy || Controls.Count == 0) return;
+            _busy = true;
+            try
+            {
+                int u = Font.Height;
+                int gap = (int)(u * GapU);
+                int th = (int)(u * TileHeightU);
+                int w = ClientSize.Width;
+                if (w < 40) return;
+                int cols = CalcCols(w, Controls.Count);
+                int tw = (w - gap * (cols - 1)) / cols;
+                for (int i = 0; i < Controls.Count; i++)
+                {
+                    int r = i / cols, c = i % cols;
+                    Controls[i].SetBounds(c * (tw + gap), r * (th + gap), tw, th);
+                }
+                if (Dock == DockStyle.None)
+                {
+                    int need = GridHeight(w, Controls.Count);
+                    if (Height != need) Height = need;
+                }
+            }
+            finally { _busy = false; }
+        }
+    }
+
+    // ====================================================================== //
+    //  Панель содержимого с двойной буферизацией — без мерцания
+    // ====================================================================== //
+    internal class ContentPanel : Panel
+    {
+        public ContentPanel()
+        {
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+        }
+    }
+}
