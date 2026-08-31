@@ -263,4 +263,67 @@ namespace Win11Privacy
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
         }
     }
+
+    // ====================================================================== //
+    //  Отдельная настройка внутри модуля: маленькая строка с галочкой
+    // ====================================================================== //
+    internal class SubOptionRow : Control
+    {
+        public readonly string Id;
+        private readonly string _name;
+        private bool _checked = true, _hover;
+
+        public SubOptionRow(string id, string name)
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            Id = id; _name = name;
+            BackColor = Theme.CardBg;
+            Cursor = Cursors.Hand;
+        }
+
+        public bool Checked { get { return _checked; } set { _checked = value; Invalidate(); } }
+        public string Name2 { get { return _name; } }
+
+        protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); Height = (int)(Font.Height * 1.75F); }
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; Invalidate(); }
+        protected override void OnClick(EventArgs e) { base.OnClick(e); _checked = !_checked; Invalidate(); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            int u = Font.Height;
+            int left = (int)(u * 3.4F);              // отступ под уровень модуля
+
+            if (_hover)
+            {
+                using (GraphicsPath p = Theme.RoundRect(new RectangleF(left - u * 0.4F, 0.5F, Width - left, Height - 1), 5))
+                using (SolidBrush b = new SolidBrush(Theme.RowHover)) g.FillPath(b, p);
+            }
+
+            int box = (int)(u * 0.95F);
+            int by = (Height - box) / 2;
+            RectangleF br = new RectangleF(left, by, box, box);
+            using (GraphicsPath p = Theme.RoundRect(br, box * 0.28F))
+            {
+                if (_checked) using (SolidBrush b = new SolidBrush(Theme.Accent)) g.FillPath(b, p);
+                using (Pen pen = new Pen(_checked ? Theme.Accent : Theme.TrackOff, 1.3F)) g.DrawPath(pen, p);
+            }
+            if (_checked)
+                using (Pen pen = new Pen(Theme.AccentText, 1.6F))
+                {
+                    pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round;
+                    g.DrawLine(pen, left + box * 0.24F, by + box * 0.54F, left + box * 0.43F, by + box * 0.73F);
+                    g.DrawLine(pen, left + box * 0.43F, by + box * 0.73F, left + box * 0.78F, by + box * 0.28F);
+                }
+
+            int tx = left + box + (int)(u * 0.55F);
+            TextRenderer.DrawText(g, _name, Font, new Rectangle(tx, 0, Width - tx - (int)(u * 0.5F), Height),
+                _checked ? Theme.TextDim : Theme.TextFaint,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+        }
+    }
 }

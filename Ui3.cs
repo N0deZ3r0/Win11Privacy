@@ -15,21 +15,42 @@ namespace Win11Privacy
         private readonly string _app, _cap, _when, _dur, _glyph;
         private readonly bool _active;
         private readonly Color _capColor;
-        private bool _hover;
+        private bool _hover, _btnHover;
+        private Rectangle _btnRect;
+
+        public readonly string Key;          // ключ в ConsentStore
+        public bool Denied;                  // доступ уже запрещён
+        public event EventHandler ToggleAccess;
 
         public SpyRow(string app, string cap, string glyph, Color capColor,
-                      string when, string duration, bool active)
+                      string when, string duration, bool active, string key, bool denied)
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             _app = app; _cap = cap; _glyph = glyph; _capColor = capColor;
             _when = when; _dur = duration; _active = active;
+            Key = key ?? ""; Denied = denied;
             BackColor = Theme.CardBg;
+        }
+
+        private bool HasButton { get { return Key.Length > 0; } }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            bool over = HasButton && _btnRect.Contains(e.Location);
+            if (over != _btnHover) { _btnHover = over; Cursor = over ? Cursors.Hand : Cursors.Default; Invalidate(); }
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (HasButton && _btnRect.Contains(e.Location) && ToggleAccess != null) ToggleAccess(this, EventArgs.Empty);
         }
 
         protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); Height = (int)(Font.Height * 3.0F); }
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; _btnHover = false; Invalidate(); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -67,7 +88,7 @@ namespace Win11Privacy
 
             int tx = bx + badge + (int)(u * 0.65F);
 
-            // правая часть: «СЕЙЧАС» или время
+            // правая часть: кнопка доступа, затем «СЕЙЧАС» или время
             int rightEdge = Width - (int)(u * 0.5F);
             if (_active)
             {
@@ -91,6 +112,31 @@ namespace Win11Privacy
                     Theme.TextDim, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
                 rightEdge -= ws.Width + (int)(u * 0.5F);
             }
+
+            // кнопка «Запретить» / «Запрещено»
+            if (HasButton)
+            {
+                string cap = Denied ? "Запрещено" : "Запретить";
+                using (Font bf = new Font(Font.FontFamily, Font.Size * 0.9F, FontStyle.Regular))
+                {
+                    Size cs = TextRenderer.MeasureText(g, cap, bf, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
+                    int bw = cs.Width + (int)(u * 1.1F), bh = (int)(u * 1.5F);
+                    _btnRect = new Rectangle(rightEdge - bw, (Height - bh) / 2, bw, bh);
+                    RectangleF br = new RectangleF(_btnRect.X + 0.5F, _btnRect.Y + 0.5F, _btnRect.Width - 1, _btnRect.Height - 1);
+                    Color face = Denied ? Theme.Mix(Theme.CardBg, Theme.Ok, 0.22F)
+                                        : (_btnHover ? Theme.ButtonHover : Theme.ButtonBg);
+                    Color edge = Denied ? Theme.Ok : (_btnHover ? Theme.Mix(Theme.ButtonBorder, _capColor, 0.6F) : Theme.ButtonBorder);
+                    using (GraphicsPath p = Theme.RoundRect(br, bh / 2F))
+                    {
+                        using (SolidBrush b = new SolidBrush(face)) g.FillPath(b, p);
+                        using (Pen pen = new Pen(edge)) g.DrawPath(pen, p);
+                    }
+                    TextRenderer.DrawText(g, cap, bf, _btnRect, Denied ? Theme.Ok : Theme.Text,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                    rightEdge -= bw + (int)(u * 0.5F);
+                }
+            }
+            else _btnRect = Rectangle.Empty;
 
             // имя программы + датчик и длительность
             int textW = Math.Max(50, rightEdge - tx);

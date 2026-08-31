@@ -513,6 +513,12 @@ namespace Win11Privacy
             set { Toggle.Checked = value; }
         }
 
+        // Чип «N настроек» справа: по нему модуль раскрывается в список пунктов
+        public int SubCount;
+        public bool Expanded;
+        public event EventHandler ExpandRequested;
+        private Rectangle _chipRect;
+
         private int U { get { return Font.Height; } }
 
         protected override void OnFontChanged(EventArgs e)
@@ -524,7 +530,23 @@ namespace Win11Privacy
         }
 
         protected override void OnResize(EventArgs e) { base.OnResize(e); Relayout(); }
-        protected override void OnClick(EventArgs e) { base.OnClick(e); Toggle.Checked = !Toggle.Checked; }
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (SubCount > 0 && _chipRect.Contains(e.Location))
+            {
+                _suppressClick = true;
+                if (ExpandRequested != null) ExpandRequested(this, EventArgs.Empty);
+            }
+        }
+        private bool _suppressClick;
+
+        protected override void OnClick(EventArgs e)
+        {
+            base.OnClick(e);
+            if (_suppressClick) { _suppressClick = false; return; }
+            Toggle.Checked = !Toggle.Checked;
+        }
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; Invalidate(); }
         protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Toggle.Enabled = Enabled; Invalidate(); }
@@ -605,6 +627,27 @@ namespace Win11Privacy
             TextRenderer.DrawText(g, Description, Font,
                 new Rectangle(_textLeft, padY + _titleH + (int)(u * 0.2F), _textWidth, _descH),
                 Enabled ? Theme.TextDim : Theme.TextFaint, TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
+
+            // чип с числом настроек внутри модуля
+            if (SubCount > 0)
+            {
+                string chip = (Expanded ? "\u25B4 " : "\u25BE ") + SubCount + " настроек";
+                using (Font cf = new Font(Font.FontFamily, Font.Size * 0.85F))
+                {
+                    Size cs = TextRenderer.MeasureText(g, chip, cf, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
+                    int cw = cs.Width + (int)(u * 0.9F), ch = (int)(u * 1.4F);
+                    int cx = Width - Toggle.Width - (int)(u * 1.6F) - cw;
+                    _chipRect = new Rectangle(cx, padY + (_titleH - ch) / 2, cw, ch);
+                    using (GraphicsPath p = Theme.RoundRect(new RectangleF(_chipRect.X + 0.5F, _chipRect.Y + 0.5F, cw - 1, ch - 1), ch / 2F))
+                    {
+                        using (SolidBrush b = new SolidBrush(Expanded ? Theme.Mix(Theme.CardBg, Theme.Accent, 0.22F) : Theme.ButtonBg)) g.FillPath(b, p);
+                        using (Pen pen = new Pen(Expanded ? Theme.Accent : Theme.ButtonBorder)) g.DrawPath(pen, p);
+                    }
+                    TextRenderer.DrawText(g, chip, cf, _chipRect, Expanded ? Theme.Accent : Theme.TextDim,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                }
+            }
+            else _chipRect = Rectangle.Empty;
         }
     }
 

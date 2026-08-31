@@ -60,7 +60,19 @@ param(
     [switch]$InstallSensorGuard,
     [switch]$RemoveSensorGuard,
     [switch]$SensorGuard,
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    # --- отдельные настройки внутри модулей ---
+    [switch]$ListDefs,
+    [string[]]$SkipItems = @(),
+    # --- доступ программ к датчикам ---
+    [switch]$SensorSet,
+    [string]$SensorKey = '',
+    [string]$SensorValue = 'Deny',
+    # --- предустановленные приложения ---
+    [switch]$ListApps,
+    [switch]$RemoveApps,
+    [string[]]$AppItems = @(),
+    [switch]$AllUsers
 )
 
 $ErrorActionPreference = 'Continue'
@@ -85,6 +97,8 @@ function Expand-List {
 }
 $Modules   = Expand-List $Modules
 $WipeItems = Expand-List $WipeItems
+$SkipItems = Expand-List $SkipItems
+$AppItems  = Expand-List $AppItems
 
 # =========================================================================== #
 #  Константы
@@ -273,7 +287,16 @@ function Detect-Oem {
 #  Декларативные определения настроек
 # =========================================================================== #
 $script:Defs = New-Object System.Collections.Generic.List[object]
-function Def { param($M, $T, $P, $N, $V, $Type = 'DWord', $C = '') $script:Defs.Add(@{ M=$M; T=$T; P=$P; N=$N; V=$V; Type=$Type; C=$C }) }
+$script:DefSeq = @{}
+# У каждой настройки есть свой номер вида telemetry#3 — по нему интерфейс
+# может отключить отдельный пункт внутри модуля.
+function Def {
+    param($M, $T, $P, $N, $V, $Type = 'DWord', $C = '')
+    $n = 0
+    if ($script:DefSeq.ContainsKey($M)) { $n = [int]$script:DefSeq[$M] }
+    $script:DefSeq[$M] = $n + 1
+    $script:Defs.Add(@{ M=$M; T=$T; P=$P; N=$N; V=$V; Type=$Type; C=$C; Id=("{0}#{1}" -f $M, $n) })
+}
 
 $dc  = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection'
 Def 'telemetry' 'reg' $dc 'AllowTelemetry' 0 'DWord' 'уровень телеметрии — минимальный'
@@ -416,6 +439,15 @@ foreach ($tp in @(
 
 Def 'hosts' 'hosts' '' '' '' '' 'блок телеметрийных доменов в hosts'
 
+# Блокировка самих адресов: hosts телеметрия обходит через шифрованный DNS
+# и зашитые IP, поэтому адреса блокируются правилом брандмауэра.
+Def 'fwips' 'fwips' '' '' '' '' 'блокировка адресов сбора телеметрии'
+
+# Шифрованный DNS (DoH) позволяет обойти hosts и блокировку по доменам
+Def 'doh' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' 'DoHPolicy' 1 'DWord' 'Windows: шифрованный DNS — запретить'
+Def 'doh' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' 'DnsOverHttpsMode' 'off' 'String' 'Edge: шифрованный DNS — выкл'
+Def 'doh' 'reg' 'HKLM:\SOFTWARE\Policies\Google\Chrome' 'DnsOverHttpsMode' 'off' 'String' 'Chrome: шифрованный DNS — выкл'
+
 # Брандмауэр: исходящие соединения служб и программ телеметрии
 Def 'firewall' 'fwsvc' 'DiagTrack' '' '' '' 'исходящие DiagTrack — блок'
 Def 'firewall' 'fwsvc' 'dmwappushservice' '' '' '' 'исходящие dmwappushservice — блок'
@@ -465,7 +497,7 @@ Def 'app_vs' 'reg' 'HKCU:\Software\Microsoft\VisualStudio\Telemetry' 'TurnOffSwi
 Def 'app_vs' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\VisualStudio\Feedback' 'DisableFeedbackDialog' 1 'DWord' 'Visual Studio: окно отзывов — выкл'
 
 $script:ModuleOrder = @('telemetry','errors','activity','input','edge','delivery','location','ads','widgets','search','copilot','ai',
-                        'defender','services','hosts','firewall','buffer','app_nvidia','app_vscode','app_chrome','app_firefox',
+                        'defender','services','hosts','firewall','fwips','doh','buffer','app_nvidia','app_vscode','app_chrome','app_firefox',
                         'app_office','app_devtools','app_vs','oem','cleanup','startup')
 $script:ModuleTitles = @{
     telemetry='Телеметрия и диагностика'; errors='Отчёты об ошибках'; activity='История активности и буфер обмена';
@@ -473,7 +505,7 @@ $script:ModuleTitles = @{
     location='Геолокация и поиск устройства'; ads='Рекламный ID и реклама в интерфейсе'; widgets='Виджеты и лента новостей';
     search='Поиск: Bing, Cortana, облако'; copilot='Copilot и Recall';
     ai='ИИ-функции Windows'; defender='Защитник: облако и образцы'; services='Службы и задачи телеметрии'; hosts='Блокировка телеметрийных доменов (hosts)';
-    firewall='Брандмауэр: блокировка служб телеметрии'; buffer='Неотправленная телеметрия'; app_nvidia='NVIDIA';
+    firewall='Брандмауэр: блокировка служб телеметрии'; fwips='Брандмауэр: адреса сбора телеметрии'; doh='Шифрованный DNS (обход блокировки)'; buffer='Неотправленная телеметрия'; app_nvidia='NVIDIA';
     app_vscode='Visual Studio Code'; app_chrome='Google Chrome'; app_firefox='Mozilla Firefox'; app_office='Microsoft Office';
     app_devtools='PowerShell 7 / .NET SDK'; app_vs='Visual Studio'; oem='Компоненты сбора данных производителя';
     cleanup='Чистка временных файлов'; startup='Автозагрузка (отчёт)'
@@ -614,6 +646,7 @@ function Apply-Def {
         'hosts'   { Apply-Hosts }
         'fwsvc'   { Apply-FwRule -Kind 'svc' -Target $d.P -Comment $d.C }
         'fwapp'   { Apply-FwRule -Kind 'app' -Target $d.P -Comment $d.C }
+        'fwips'   { Apply-FwIpBlock }
     }
 }
 
@@ -665,6 +698,7 @@ function Check-Def {
         'hosts' {
             $ok = Test-HostsBlock; $actual = if ($ok) { 'блок установлен' } else { 'нет блока' }
         }
+        'fwips' { $ok = Test-FwIpRule; $actual = if ($ok) { 'адреса заблокированы' } else { 'нет правила' } }
         'fwsvc' { $ok = Test-FwRule -Kind 'svc' -Target $d.P; $actual = if ($ok) { 'правило есть' } else { 'нет правила' } }
         'fwapp' { $ok = Test-FwRule -Kind 'app' -Target $d.P; $actual = if ($ok) { 'правило есть' } else { 'нет правила' } }
     }
@@ -738,6 +772,68 @@ function Apply-FwRule {
         }
         Write-Log "   [+] $Comment"; $script:Changes++
     } catch { Write-Log "   [!] не удалось: $Comment -- $($_.Exception.Message)"; $script:Failures++ }
+}
+
+# Адреса телеметрии: часть известна давно, часть узнаём разбором имён
+# перед самой блокировкой — так список не устаревает.
+$script:FwIpRuleName = 'Win11Privacy: адреса телеметрии'
+$script:TelemetryIps = @(
+    '13.64.90.137','13.68.31.193','13.68.82.8','13.69.109.130','13.69.239.72',
+    '13.73.26.107','20.44.86.43','40.79.85.125','51.104.136.2',
+    '65.52.100.7','65.52.100.9','65.52.100.11','65.55.252.43','65.55.252.63',
+    '65.55.252.70','65.55.252.71','65.55.252.92','65.55.252.93',
+    '66.119.144.157','168.61.24.141','168.61.146.25','168.62.187.13',
+    '191.232.139.2','191.232.80.58','191.239.52.100'
+)
+
+function Get-TelemetryIpList {
+    $set = @{}
+    foreach ($ip in $script:TelemetryIps) { $set[$ip] = $true }
+    foreach ($d in $script:HostsDomains) {
+        try {
+            foreach ($r in (Resolve-DnsName -Name $d -Type A -ErrorAction Stop)) {
+                if ($r.IPAddress -and (Test-PublicIp $r.IPAddress)) { $set[$r.IPAddress] = $true }
+            }
+        } catch { }
+    }
+    return @($set.Keys)
+}
+
+function Test-FwIpRule {
+    return [bool](Get-NetFirewallRule -DisplayName $script:FwIpRuleName -ErrorAction SilentlyContinue)
+}
+
+function Apply-FwIpBlock {
+    if ($DryRun) { Write-Log '   [тест] будут заблокированы адреса сбора телеметрии'; return }
+    try {
+        $ips = Get-TelemetryIpList
+        if ($ips.Count -eq 0) { Write-Log '   [-] адреса не определились'; return }
+        Get-NetFirewallRule -DisplayName $script:FwIpRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+        New-NetFirewallRule -DisplayName $script:FwIpRuleName -Group $script:FwGroup -Direction Outbound -Action Block `
+            -RemoteAddress $ips -Profile Any -Enabled True -ErrorAction Stop | Out-Null
+        Write-Log ("   [+] заблокировано адресов: {0}" -f $ips.Count)
+        Write-Log '   [-] если что-то перестанет работать — снимите этот пункт и нажмите «Откат»'
+        $script:Changes++
+    } catch { Write-Log "   [!] не удалось заблокировать адреса: $($_.Exception.Message)"; $script:Failures++ }
+}
+
+# Шифрованный DNS в системе и браузерах — через него hosts не работает
+function Get-DohStatus {
+    $win = $false
+    try {
+        $root = 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\InterfaceSpecificParameters'
+        foreach ($k in @(Get-ChildItem -LiteralPath $root -Recurse -ErrorAction SilentlyContinue)) {
+            if ($k.PSChildName -match '^\d+\.' -or $k.PSPath -match 'DohInterfaceSettings') {
+                $v = (Get-ItemProperty -LiteralPath $k.PSPath -ErrorAction SilentlyContinue).DohFlags
+                if ($null -ne $v -and [int64]$v -ne 0) { $win = $true }
+            }
+        }
+    } catch { }
+    $policy = (Get-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' 'DoHPolicy')
+    $edge = (Get-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' 'DnsOverHttpsMode')
+    $chrome = (Get-RegValue 'HKLM:\SOFTWARE\Policies\Google\Chrome' 'DnsOverHttpsMode')
+    return @{ windows = $win; policy = "$policy"; edge = "$edge"; chrome = "$chrome"
+              blocked = ("$policy" -eq '1' -and "$edge" -eq 'off' -and "$chrome" -eq 'off') }
 }
 
 function Remove-FwRules {
@@ -1514,7 +1610,10 @@ function Get-SpyReport {
             if (-not $active -and $stop -gt $start) { $minutes = [math]::Round(($stop - $start) / 600000000.0, 1) }
             if ($active) { $activeNow++ }
             if ($last -ge $since7) { $week++ }
-            $items += @{ app = (ConvertTo-FriendlyAppName $k.PSChildName)
+            $rel = ($k.PSPath -replace '^.*\\ConsentStore\\', '')
+            $allow = 'Allow'
+            try { $vv = (Get-ItemProperty -LiteralPath $k.PSPath -Name 'Value' -ErrorAction Stop).Value; if ($vv) { $allow = "$vv" } } catch { }
+            $items += @{ app = (ConvertTo-FriendlyAppName $k.PSChildName); key = $rel; value = $allow
                          last = $last.ToString('yyyy-MM-dd HH:mm'); minutes = $minutes; active = [bool]$active
                          sort = $last.Ticks }
         }
@@ -1758,11 +1857,38 @@ function Invoke-FootprintWipe {
     }
 }
 
+# --- отозвать или вернуть доступ программы к датчику ---
+if ($SensorSet) {
+    $root = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\' + $SensorKey
+    $r = @{ key = $SensorKey; value = $SensorValue; ok = $false }
+    try {
+        if (-not (Test-Path -LiteralPath $root)) { New-Item -Path $root -Force -ErrorAction Stop | Out-Null }
+        New-ItemProperty -LiteralPath $root -Name 'Value' -Value $SensorValue -PropertyType String -Force -ErrorAction Stop | Out-Null
+        $r.ok = $true
+    } catch { $r.error = $_.Exception.Message }
+    Emit-Json $r
+    exit 0
+}
+
+# --- список отдельных настроек внутри модулей ---
+if ($ListDefs) {
+    $groups = @()
+    foreach ($m in $script:ModuleOrder) {
+        $mi = @($script:Defs | Where-Object { $_.M -eq $m })
+        if ($mi.Count -eq 0) { continue }
+        $groups += @{ module = $m; title = $script:ModuleTitles[$m]
+                      items = @($mi | ForEach-Object { @{ id = $_.Id; name = $_.C } }) }
+    }
+    Emit-Json @{ groups = $groups }
+    exit 0
+}
+
 if ($Spy) {
     $r = Get-SpyReport
     try { $null = Update-SensorHistory $r } catch { }
     $r.days = Get-SensorDays
     $r.sensorGuard = [bool](Get-ScheduledTask -TaskName $script:SensorTask -ErrorAction SilentlyContinue)
+    $r.doh = Get-DohStatus
     Emit-Json $r
     exit 0
 }
@@ -1864,6 +1990,122 @@ if ($SensorGuard) {
 }
 
 # =========================================================================== #
+#  ПРЕДУСТАНОВЛЕННЫЕ ПРИЛОЖЕНИЯ
+#  Список того, что можно безопасно удалить, и само удаление.
+# =========================================================================== #
+
+# Трогать нельзя никогда — без этого система ломается
+$script:AppxProtected = @(
+    'Microsoft.WindowsStore','Microsoft.DesktopAppInstaller','Microsoft.StorePurchaseApp',
+    'Microsoft.VCLibs','Microsoft.NET','Microsoft.UI.Xaml','Microsoft.Services.Store',
+    'Microsoft.WindowsTerminal','Microsoft.SecHealthUI','Microsoft.Windows.Photos.Addon',
+    'MicrosoftWindows.Client','Microsoft.AAD','Microsoft.AccountsControl','Microsoft.Win32WebViewHost',
+    'Microsoft.CredDialogHost','Microsoft.ECApp','Microsoft.LockApp','Microsoft.Windows.ShellExperienceHost',
+    'Microsoft.Windows.StartMenuExperienceHost','Microsoft.Windows.SecureAssessmentBrowser',
+    'Microsoft.WindowsAppRuntime','Microsoft.HEIFImageExtension','Microsoft.HEVCVideoExtension',
+    'Microsoft.WebpImageExtension','Microsoft.RawImageExtension','Microsoft.VP9VideoExtensions',
+    'Microsoft.WebMediaExtensions','Microsoft.MicrosoftEdge'
+)
+
+# Что обычно ставят без спроса — помечаем как «можно убрать»
+$script:AppxBloat = @{
+    'Microsoft.BingNews'                = 'Новости MSN'
+    'Microsoft.BingWeather'             = 'Погода MSN'
+    'Microsoft.BingSearch'              = 'Поиск Bing в Пуске'
+    'Microsoft.BingFinance'             = 'Финансы MSN'
+    'Microsoft.BingSports'              = 'Спорт MSN'
+    'Clipchamp.Clipchamp'               = 'Видеоредактор Clipchamp'
+    'Microsoft.GamingApp'               = 'Приложение Xbox'
+    'Microsoft.XboxGameOverlay'         = 'Игровая панель Xbox'
+    'Microsoft.XboxGamingOverlay'       = 'Игровая панель Xbox'
+    'Microsoft.XboxIdentityProvider'    = 'Вход Xbox'
+    'Microsoft.XboxSpeechToTextOverlay' = 'Субтитры Xbox'
+    'Microsoft.MicrosoftSolitaireCollection' = 'Коллекция пасьянсов'
+    'Microsoft.MicrosoftOfficeHub'      = 'Промо Microsoft 365'
+    'Microsoft.Office.OneNote'          = 'OneNote из магазина'
+    'MicrosoftTeams'                    = 'Teams (личный)'
+    'MSTeams'                           = 'Teams (личный)'
+    'Microsoft.SkypeApp'                = 'Skype'
+    'Microsoft.YourPhone'               = 'Связь с телефоном'
+    'Microsoft.People'                  = 'Люди'
+    'Microsoft.WindowsMaps'             = 'Карты'
+    'Microsoft.WindowsFeedbackHub'      = 'Центр отзывов'
+    'Microsoft.GetHelp'                 = 'Справка'
+    'Microsoft.Getstarted'              = 'Советы'
+    'Microsoft.Microsoft3DViewer'       = 'Просмотр 3D'
+    'Microsoft.MixedReality.Portal'     = 'Портал смешанной реальности'
+    'Microsoft.ZuneMusic'               = 'Медиапроигрыватель'
+    'Microsoft.ZuneVideo'               = 'Фильмы и ТВ'
+    'Microsoft.Todos'                   = 'To Do'
+    'Microsoft.PowerAutomateDesktop'    = 'Power Automate'
+    'Microsoft.Windows.DevHome'         = 'Dev Home'
+    'MicrosoftCorporationII.QuickAssist'= 'Быстрая помощь'
+    'Microsoft.Copilot'                 = 'Copilot'
+    'Microsoft.Windows.Ai.Copilot.Provider' = 'Copilot (компонент)'
+    'Microsoft.OutlookForWindows'       = 'Новый Outlook'
+    'Microsoft.MicrosoftStickyNotes'    = 'Записки'
+    'Microsoft.549981C3F5F10'           = 'Cortana'
+}
+
+function Test-AppxProtected {
+    param([string]$Name)
+    foreach ($p in $script:AppxProtected) { if ($Name -like ($p + '*')) { return $true } }
+    return $false
+}
+
+function Get-AppxList {
+    $list = @()
+    $pkgs = @()
+    try { $pkgs = @(Get-AppxPackage -ErrorAction Stop | Where-Object { -not $_.IsFramework }) } catch { }
+    foreach ($p in $pkgs) {
+        $name = [string]$p.Name
+        if (Test-AppxProtected $name) { continue }
+        $bloat = $script:AppxBloat.ContainsKey($name)
+        $title = if ($bloat) { $script:AppxBloat[$name] } else { $name }
+        $list += @{ name = $name; title = $title; publisher = [string]$p.Publisher
+                    version = [string]$p.Version; bloat = [bool]$bloat
+                    system = [bool]($p.SignatureKind -eq 'System') }
+    }
+    return @($list | Sort-Object { -[int][bool]$_.bloat }, { $_.title })
+}
+
+if ($ListApps) {
+    Emit-Json @{ apps = (Get-AppxList); time = (Get-Date).ToString('yyyy-MM-dd HH:mm') }
+    exit 0
+}
+
+if ($RemoveApps) {
+    Write-Section 'Удаление предустановленных приложений'
+    if ($AppItems.Count -eq 0) { Write-Log '   [-] ничего не выбрано'; Write-Log '###DONE###'; exit 0 }
+    $done = 0
+    foreach ($name in $AppItems) {
+        if (Test-AppxProtected $name) { Write-Log ("   [-] {0} — системный компонент, пропущен" -f $name); continue }
+        if ($DryRun) { Write-Log ("   [тест] {0} — будет удалён" -f $name); continue }
+        $pkgs = @(Get-AppxPackage -Name $name -ErrorAction SilentlyContinue)
+        if ($pkgs.Count -eq 0) { Write-Log ("   [-] {0} — не найден" -f $name); continue }
+        foreach ($p in $pkgs) {
+            try {
+                Remove-AppxPackage -Package $p.PackageFullName -ErrorAction Stop
+                Write-Log ("   [+] удалён: {0}" -f $name); $done++; $script:Changes++
+            } catch { Write-Log ("   [!] {0} -- {1}" -f $name, $_.Exception.Message); $script:Failures++ }
+        }
+        if ($AllUsers -and (Test-Admin)) {
+            try {
+                $prov = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop | Where-Object { $_.DisplayName -eq $name })
+                foreach ($pp in $prov) {
+                    Remove-AppxProvisionedPackage -Online -PackageName $pp.PackageName -ErrorAction Stop | Out-Null
+                    Write-Log ("   [+] больше не ставится новым пользователям: {0}" -f $name)
+                }
+            } catch { }
+        }
+    }
+    Write-Log ("   удалено приложений: {0}" -f $done)
+    Emit-Json @{ removed = $done }
+    Write-Log '###DONE###'
+    exit 0
+}
+
+# =========================================================================== #
 #  САМОПРОВЕРКА: может ли программа реально менять настройки на этом ПК
 # =========================================================================== #
 if ($SelfTest) {
@@ -1958,6 +2200,7 @@ if ($Audit) {
     $oemInfo = $null
     foreach ($d in $script:Defs) {
         if ($Modules -notcontains $d.M) { continue }
+        if ($SkipItems -contains $d.Id) { continue }
         $items += (Check-Def $d)
     }
     if ($Modules -contains 'oem') {
@@ -1976,7 +2219,7 @@ if ($Audit) {
     }
     $result = @{
         time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); ok = $okCount; total = $items.Count; groups = $groups
-        dns = (Get-DnsEvidence); buffer = (Get-BufferInfo); edition = (Get-Edition)
+        dns = (Get-DnsEvidence); buffer = (Get-BufferInfo); edition = (Get-Edition); doh = (Get-DohStatus)
         monitorEnabled = (Get-MonitorEnabled); hostsBlocked = (Test-HostsBlock)
     }
     Emit-Json $result
@@ -2116,7 +2359,10 @@ foreach ($m in $script:ModuleOrder) {
     $modDefs = @($script:Defs | Where-Object { $_.M -eq $m })
     if ($modDefs.Count -eq 0) { continue }
     Write-Section $script:ModuleTitles[$m]
-    foreach ($d in $modDefs) { Apply-Def $d }
+    foreach ($d in $modDefs) {
+        if ($SkipItems -contains $d.Id) { Write-Log ("   [п] {0} -- пропущено по вашему выбору" -f $d.C); continue }
+        Apply-Def $d
+    }
 }
 
 # --- Компоненты производителя ---------------------------------------------- #
