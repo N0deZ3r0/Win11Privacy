@@ -13,6 +13,10 @@ jobs:
     name: Проверка и сборка
     runs-on: windows-latest
 
+    # нужно, чтобы шаг «Выложить в релиз» мог создать релиз и приложить файлы
+    permissions:
+      contents: write
+
     steps:
       - name: Получить исходники
         uses: actions/checkout@v7
