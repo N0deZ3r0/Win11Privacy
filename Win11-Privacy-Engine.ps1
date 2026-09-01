@@ -89,7 +89,16 @@ param(
     # --- запрет выхода в сеть отдельной программе ---
     [switch]$BlockApp,
     [switch]$UnblockApp,
-    [string]$AppPath = ''
+    [string]$AppPath = '',
+    # --- журнал изменений и данные программы ---
+    [switch]$RestoreItems,
+    [string[]]$ChangeItems = @(),
+    [switch]$DataInfo,
+    [switch]$PurgeData,
+    # --- как часто проверяет страж ---
+    [switch]$GuardDaily,
+    # --- уборка мусора от версий со сломанным Def ---
+    [switch]$CleanJunk
 )
 
 $ErrorActionPreference = 'Continue'
@@ -117,6 +126,7 @@ $WipeItems = Expand-List $WipeItems
 $SkipItems = Expand-List $SkipItems
 $AppItems  = Expand-List $AppItems
 $StartupItems = Expand-List $StartupItems
+$ChangeItems  = Expand-List $ChangeItems
 
 # =========================================================================== #
 #  Константы
@@ -334,11 +344,15 @@ $script:DefSeq = @{}
 # У каждой настройки есть свой номер вида telemetry#3 — по нему интерфейс
 # может отключить отдельный пункт внутри модуля.
 function Def {
+    # ОСТОРОЖНО: имена переменных в PowerShell регистронезависимы. Счётчик
+    # раньше звался $n и затирал параметр $N — в реестр вместо AllowTelemetry
+    # писалось значение с именем «0». Любая локальная переменная здесь обязана
+    # отличаться от имён параметров не только регистром.
     param($M, $T, $P, $N, $V, $Type = 'DWord', $C = '')
-    $n = 0
-    if ($script:DefSeq.ContainsKey($M)) { $n = [int]$script:DefSeq[$M] }
-    $script:DefSeq[$M] = $n + 1
-    $script:Defs.Add(@{ M=$M; T=$T; P=$P; N=$N; V=$V; Type=$Type; C=$C; Id=("{0}#{1}" -f $M, $n) })
+    $seq = 0
+    if ($script:DefSeq.ContainsKey($M)) { $seq = [int]$script:DefSeq[$M] }
+    $script:DefSeq[$M] = $seq + 1
+    $script:Defs.Add(@{ M=$M; T=$T; P=$P; N=$N; V=$V; Type=$Type; C=$C; Id=("{0}#{1}" -f $M, $seq) })
 }
 
 $dc  = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection'
@@ -686,6 +700,58 @@ function Set-FirefoxPolicy {
 # =========================================================================== #
 #  Применение / проверка одного определения
 # =========================================================================== #
+# --------------------------------------------------------------------------- #
+#  УБОРКА ЗА СТАРЫМИ ВЕРСИЯМИ
+#  В версиях 1.1.0–1.5.0 счётчик внутри Def затирал имя параметра, и настройки
+#  писались в реестр под числовыми именами: «0», «1», «2» вместо AllowTelemetry.
+#  Они ничего не настраивали. Находим ровно свои: имя — число, оно совпадает с
+#  номером определения по этому пути, а значение — с тем, что мы бы записали.
+# --------------------------------------------------------------------------- #
+function Find-JunkValues {
+    $byIdx = @{}
+    $paths = @{}
+    foreach ($d in $script:Defs) {
+        if ($d.T -ne 'reg' -and $d.T -ne 'regif') { continue }
+        $paths["$($d.P)"] = $true
+        $parts = "$($d.Id)" -split '#'
+        if ($parts.Count -ne 2) { continue }
+        $k = "$($d.P)|$([int]$parts[1])"
+        if (-not $byIdx.ContainsKey($k)) { $byIdx[$k] = $d }
+    }
+    $junk = @()
+    foreach ($path in @($paths.Keys)) {
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $names = @()
+        # без -ErrorAction Stop отказ доступа не ловится try/catch и сыплется в вывод
+        try { $names = @((Get-Item -LiteralPath $path -ErrorAction Stop).GetValueNames()) } catch { continue }
+        foreach ($nm in $names) {
+            if ($nm -notmatch '^[0-9]{1,3}$') { continue }
+            $k = "$path|$([int]$nm)"
+            if (-not $byIdx.ContainsKey($k)) { continue }
+            $cur = Get-RegValue $path $nm
+            if ($null -eq $cur) { continue }
+            if ("$cur" -ne "$($byIdx[$k].V)") { continue }      # значение чужое — не наше
+            $junk += @{ path = $path; name = $nm; title = "$($byIdx[$k].C)" }
+        }
+    }
+    return @($junk)
+}
+
+function Remove-JunkValues {
+    $junkList = @(Find-JunkValues)
+    if ($junkList.Count -eq 0) { return 0 }
+    $gone = 0
+    foreach ($j in $junkList) {
+        if ($DryRun) { Write-Log ("   [тест] мусор от старой версии: {0} -> {1}" -f $j.path, $j.name); continue }
+        try {
+            Remove-ItemProperty -LiteralPath $j.path -Name $j.name -Force -ErrorAction Stop
+            Write-Log ("   [+] убран мусорный параметр {0} ({1})" -f $j.name, $j.title)
+            $gone++
+        } catch { Write-Log ("   [!] не удалось убрать {0} -> {1}" -f $j.path, $j.name) }
+    }
+    return $gone
+}
+
 function Apply-Def {
     param($d)
     switch ($d.T) {
@@ -1551,11 +1617,13 @@ if ($InstallGuard) {
         $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -Guard')
         $t1 = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
         $t1.Delay = 'PT3M'
-        $t2 = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 12:00
+        # по умолчанию раз в неделю; -GuardDaily — каждый день в то же время
+        $t2 = if ($GuardDaily) { New-ScheduledTaskTrigger -Daily -At 12:00 }
+              else { New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 12:00 }
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
         $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
         Register-ScheduledTask -TaskName $script:GuardTask -Action $action -Trigger @($t1, $t2) -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
-        Write-Log ("   [+] страж установлен: проверка через 3 минуты после входа в систему и по воскресеньям в 12:00")
+        Write-Log ("   [+] страж установлен: проверка через 3 минуты после входа в систему и {0}" -f $(if ($GuardDaily) { 'каждый день в 12:00' } else { 'по воскресеньям в 12:00' }))
         Write-Log ("   [+] отслеживается модулей: {0}" -f $mods.Count)
         Write-Log ("   [+] журнал: {0}" -f (Join-Path $script:DataDir 'guard.log'))
     } catch { Write-Log "   [!] не удалось установить стража: $($_.Exception.Message)" }
@@ -2363,7 +2431,8 @@ if ($ListDefs) {
         $mi = @($script:Defs | Where-Object { $_.M -eq $m })
         if ($mi.Count -eq 0) { continue }
         $groups += @{ module = $m; title = $script:ModuleTitles[$m]
-                      items = @($mi | ForEach-Object { @{ id = $_.Id; name = $_.C } }) }
+                      items = @($mi | ForEach-Object { @{ id = $_.Id; name = $_.C; kind = $_.T
+                                                          target = "$($_.P)"; valueName = "$($_.N)" } }) }
     }
     Emit-Json @{ groups = $groups }
     exit 0
@@ -2592,6 +2661,17 @@ if ($RemoveApps) {
     exit 0
 }
 
+if ($CleanJunk) {
+    if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Emit-Json @{ error='нужны права администратора' }; Write-Log '###DONE###'; exit 1 }
+    Write-Section 'Уборка за старыми версиями'
+    $before = @(Find-JunkValues).Count
+    $gone = Remove-JunkValues
+    if ($before -eq 0) { Write-Log '   [-] мусорных параметров нет' }
+    Emit-Json @{ found = $before; removed = $gone }
+    Write-Log '###DONE###'
+    exit 0
+}
+
 if ($ListStartup) {
     $stList = @(Get-StartupList)
     $stOn   = @($stList | Where-Object { $_.enabled })
@@ -2664,7 +2744,7 @@ function Get-ProofSnapshot {
             if ($d.M -eq 'etw') { $etwTotal++; if ($r.ok) { $etwOff++ } }
         }
     }
-    $dns = $(if ($null -ne $Dns) { @($Dns) } else { @(Get-DnsEvidence) })
+    $dnsEvidence = $(if ($null -ne $Dns) { @($Dns) } else { @(Get-DnsEvidence) })
     $buf = Get-BufferInfo
     $fw = @(Get-NetFirewallRule -Group $script:FwGroup -ErrorAction SilentlyContinue).Count
     $startOn = 0; $startBad = 0
@@ -2686,8 +2766,8 @@ function Get-ProofSnapshot {
         time       = (Get-Date).ToString('yyyy-MM-dd HH:mm')
         ok         = $ok
         total      = $tot
-        dnsBlocked = @($dns | Where-Object { $_.blocked }).Count
-        dnsOpen    = @($dns | Where-Object { -not $_.blocked }).Count
+        dnsBlocked = @($dnsEvidence | Where-Object { $_.blocked }).Count
+        dnsOpen    = @($dnsEvidence | Where-Object { -not $_.blocked }).Count
         bufferMb   = $buf.mb
         bufferFiles= $buf.files
         fwRules    = $fw
@@ -2836,6 +2916,7 @@ if ($Audit) {
         time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); ok = $okCount; total = $items.Count; groups = $groups
         dns = $dnsList; buffer = (Get-BufferInfo); edition = (Get-Edition); doh = (Get-DohStatus)
         monitorEnabled = (Get-MonitorEnabled); hostsBlocked = (Test-HostsBlock)
+        junk = @(Find-JunkValues).Count
     }
     # Доказательство результата в том же прогоне: интерфейсу больше не нужно
     # звать -Proof отдельно, а значит все проверки выполняются один раз.
@@ -2899,11 +2980,177 @@ function Restore-Journal {
     return @{ restored = $ok; startup = $startBack; failed = $bad }
 }
 
-if ($ChangeLog) {
+# --------------------------------------------------------------------------- #
+#  Журнал изменений в человеческом виде. Записи группируются по ключу: важно
+#  самое раннее состояние — именно его вернёт откат. Название берём из
+#  описания настройки, чтобы в списке было «уровень телеметрии», а не путь.
+# --------------------------------------------------------------------------- #
+function Get-ChangeGroups {
     $j = Load-Json 'changes.json'
-    $n = 0
-    if ($j -and $j.items) { $n = @($j.items).Count }
-    Emit-Json @{ count = $n; updated = $(if ($j) { "$($j.updated)" } else { '' }) }
+    if (-not $j -or -not $j.items) { return @() }
+    $byPath = @{}
+    foreach ($d in $script:Defs) {
+        if ($d.T -ne 'reg' -and $d.T -ne 'regif') { continue }
+        $k = ("{0}|{1}" -f $d.P, $d.N).ToLowerInvariant()
+        if (-not $byPath.ContainsKey($k)) { $byPath[$k] = @{ title = [string]$d.C; module = [string]$d.M } }
+    }
+    $order = New-Object System.Collections.Generic.List[string]
+    $groups = @{}
+    foreach ($e in @($j.items)) {
+        $kind = "$($e.kind)"
+        if ($kind -eq 'startup') {
+            $key = 'startup|' + "$($e.id)"
+            $title = $(if ("$($e.name)") { "$($e.name)" } else { "$($e.id)" })
+            $where = 'автозагрузка'
+            $was = $(if ("$($e.old)" -eq 'On') { 'запускалась' } else { 'была отключена' })
+            $now = $(if ("$($e.newValue)" -eq 'On') { 'запускается' } else { 'отключена' })
+        } else {
+            $key = ("reg|{0}|{1}" -f "$($e.path)", "$($e.name)").ToLowerInvariant()
+            $pk = ("{0}|{1}" -f "$($e.path)", "$($e.name)").ToLowerInvariant()
+            $title = $(if ($byPath.ContainsKey($pk)) { $byPath[$pk].title } else { "$($e.name)" })
+            $where = "$($e.path)"
+            $was = $(if ($e.existed) { "$($e.old)" } else { 'не было' })
+            $now = "$($e.newValue)"
+        }
+        if (-not $groups.ContainsKey($key)) {
+            $order.Add($key)
+            $groups[$key] = @{ id = (ConvertTo-StartupId $key); kind = $kind; title = $title
+                               where = $where; was = $was; now = $now
+                               time = "$($e.time)"; count = 1 }
+        } else {
+            # самое раннее «было» уже записано, обновляем только текущее значение
+            $groups[$key].now = $now
+            $groups[$key].count = [int]$groups[$key].count + 1
+        }
+    }
+    $out = @()
+    foreach ($k in $order) { $out += $groups[$k] }
+    [array]::Reverse($out)          # свежие изменения сверху
+    return $out
+}
+
+# Возвращает одну запись журнала и убирает её из changes.json
+function Restore-ChangeKey {
+    param([string]$Key)
+    $j = Load-Json 'changes.json'
+    if (-not $j -or -not $j.items) { return @{ ok = $false; error = 'журнал пуст' } }
+    $items = @($j.items)
+    $mine = @(); $rest = @()
+    foreach ($e in $items) {
+        $k = $(if ("$($e.kind)" -eq 'startup') { 'startup|' + "$($e.id)" }
+               else { ("reg|{0}|{1}" -f "$($e.path)", "$($e.name)").ToLowerInvariant() })
+        if ($k -eq $Key) { $mine += $e } else { $rest += $e }
+    }
+    if ($mine.Count -eq 0) { return @{ ok = $false; error = 'запись не найдена' } }
+    $first = $mine[0]              # самое раннее состояние
+    try {
+        if ("$($first.kind)" -eq 'startup') {
+            $r = Set-StartupState ([string]$first.id) ("$($first.old)" -eq 'On')
+            if (-not $r.ok) { return @{ ok = $false; error = "$($r.error)" } }
+        } elseif ($first.existed) {
+            if (-not (Test-Path -LiteralPath $first.path)) { New-Item -Path $first.path -Force -ErrorAction Stop | Out-Null }
+            New-ItemProperty -LiteralPath $first.path -Name $first.name -Value $first.old -PropertyType $first.type -Force -ErrorAction Stop | Out-Null
+        } else {
+            Remove-ItemProperty -LiteralPath $first.path -Name $first.name -Force -ErrorAction SilentlyContinue
+        }
+    } catch { return @{ ok = $false; error = $_.Exception.Message } }
+    Save-Json 'changes.json' @{ items = $rest; updated = (Get-Date).ToString('s') }
+    return @{ ok = $true }
+}
+
+if ($ChangeLog) {
+    $chg = @(Get-ChangeGroups)
+    $j = Load-Json 'changes.json'
+    Emit-Json @{ items = $chg; count = $chg.Count
+                 raw = $(if ($j -and $j.items) { @($j.items).Count } else { 0 })
+                 updated = $(if ($j) { "$($j.updated)" } else { '' }) }
+    exit 0
+}
+
+if ($RestoreItems) {
+    if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Emit-Json @{ error='нужны права администратора' }; Write-Log '###DONE###'; exit 1 }
+    Write-Section 'Возврат выбранных изменений'
+    if ($ChangeItems.Count -eq 0) { Write-Log '   [-] ничего не выбрано'; Emit-Json @{ restored = 0 }; Write-Log '###DONE###'; exit 0 }
+    $done = 0
+    foreach ($id in $ChangeItems) {
+        $key = ConvertFrom-StartupId $id
+        if (-not $key) { Write-Log ("   [!] непонятная запись: {0}" -f $id); $script:Failures++; continue }
+        $r = Restore-ChangeKey $key
+        if ($r.ok) { Write-Log ("   [+] возвращено: {0}" -f $key); $done++; $script:Changes++ }
+        else { Write-Log ("   [!] {0} -- {1}" -f $key, $r.error); $script:Failures++ }
+    }
+    Write-Log ("   возвращено записей: {0}" -f $done)
+    Emit-Json @{ restored = $done; failures = $script:Failures }
+    Write-Log '###DONE###'
+    exit 0
+}
+
+# --------------------------------------------------------------------------- #
+#  Что программа накопила о вас у себя. Для программы про приватность честно
+#  показывать и свои файлы — и уметь их стереть.
+# --------------------------------------------------------------------------- #
+$script:DataFiles = @(
+    @{ file = 'sensor-history.json'; title = 'История датчиков по дням: кто включал камеру, микрофон и геолокацию' },
+    @{ file = 'sensor-apps.json';    title = 'Список программ, которым доступ к датчикам уже известен' },
+    @{ file = 'startup-known.json';  title = 'Известные записи автозагрузки — по ним страж замечает новые' },
+    @{ file = 'changes.json';        title = 'Журнал изменений: что программа поменяла и что было до неё' },
+    @{ file = 'proof-before.json';   title = 'Снимок «до»: состояние системы перед первым применением' },
+    @{ file = 'xray-last.json';      title = 'Последний результат рентгена телеметрии' },
+    @{ file = 'xray-baseline.json';  title = 'Эталон рентгена: сколько событий уходило до настройки' },
+    @{ file = 'profile.json';        title = 'Профиль стража: какие разделы он сторожит' },
+    @{ file = 'guard-last.json';     title = 'Последняя проверка стража' },
+    @{ file = 'guard.log';           title = 'Журнал работы стража' }
+)
+
+function Get-DataFiles {
+    $out = @()
+    $seen = @{}
+    foreach ($d in $script:DataFiles) {
+        $seen[$d.file] = $true
+        $full = Join-Path $script:DataDir $d.file
+        if (-not (Test-Path -LiteralPath $full)) { continue }
+        $fi = Get-Item -LiteralPath $full -ErrorAction SilentlyContinue
+        if (-not $fi) { continue }
+        $out += @{ file = $d.file; title = $d.title; kb = [math]::Round($fi.Length / 1KB, 1)
+                   changed = $fi.LastWriteTime.ToString('yyyy-MM-dd HH:mm') }
+    }
+    # снимки состояния и всё прочее, что могло появиться рядом
+    if (Test-Path -LiteralPath $script:DataDir) {
+        foreach ($fi in @(Get-ChildItem -LiteralPath $script:DataDir -File -ErrorAction SilentlyContinue)) {
+            if ($seen.ContainsKey($fi.Name)) { continue }
+            if ($fi.Name -like 'engine*.ps1') { continue }   # это сам движок для стража, не данные
+            $out += @{ file = $fi.Name; title = 'Снимок состояния или служебный файл'
+                       kb = [math]::Round($fi.Length / 1KB, 1)
+                       changed = $fi.LastWriteTime.ToString('yyyy-MM-dd HH:mm') }
+        }
+    }
+    return @($out | Sort-Object { -[double]$_.kb })
+}
+
+if ($DataInfo) {
+    $dataList = @(Get-DataFiles)
+    $sum = 0.0
+    foreach ($d in $dataList) { $sum += [double]$d.kb }
+    Emit-Json @{ items = $dataList; count = $dataList.Count; kb = [math]::Round($sum, 1)
+                 folder = $script:DataDir }
+    exit 0
+}
+
+if ($PurgeData) {
+    Write-Section 'Удаление данных программы'
+    $dataList = @(Get-DataFiles)
+    if ($dataList.Count -eq 0) { Write-Log '   [-] программа ничего о вас не хранит'; Emit-Json @{ removed = 0 }; Write-Log '###DONE###'; exit 0 }
+    $gone = 0
+    foreach ($d in $dataList) {
+        $full = Join-Path $script:DataDir $d.file
+        if ($DryRun) { Write-Log ("   [тест] {0}" -f $d.file); continue }
+        try { Remove-Item -LiteralPath $full -Force -ErrorAction Stop; Write-Log ("   [+] удалён: {0}" -f $d.file); $gone++ }
+        catch { Write-Log ("   [!] не удалось удалить {0} -- {1}" -f $d.file, $_.Exception.Message); $script:Failures++ }
+    }
+    Write-Log ("   удалено файлов: {0}" -f $gone)
+    Write-Log '   Журнал отката тоже стёрт — вернуть настройки «как было» программа больше не сможет.'
+    Emit-Json @{ removed = $gone }
+    Write-Log '###DONE###'
     exit 0
 }
 
@@ -2986,6 +3233,18 @@ if ($Revert) {
     }
     try { New-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location' -Name 'Value' -Value 'Allow' -PropertyType String -Force -ErrorAction Stop | Out-Null; Write-Log '   [+] доступ к местоположению возвращён (Allow)' } catch { }
 
+    Write-Section 'Данные программы'
+    $left = @(Get-DataFiles)
+    # копия движка для стража больше не нужна — задача уже удалена
+    try { Remove-Item -LiteralPath (Join-Path $script:DataDir 'engine.ps1') -Force -ErrorAction SilentlyContinue } catch { }
+    if ($left.Count -eq 0) { Write-Log '   [-] программа ничего о вас не хранит' }
+    else {
+        foreach ($d in $left) {
+            try { Remove-Item -LiteralPath (Join-Path $script:DataDir $d.file) -Force -ErrorAction Stop; Write-Log ("   [+] удалён: {0}" -f $d.file) }
+            catch { Write-Log ("   [!] не удалось удалить {0}" -f $d.file) }
+        }
+    }
+
     Write-Log ''
     Write-Log 'Настройки реестра возвращены по журналу изменений — ручной импорт .reg больше не нужен.'
     Write-Log 'Папка резервной копии на рабочем столе остаётся как запасной вариант.'
@@ -3044,6 +3303,14 @@ if (-not $NoRestorePoint -and -not $DryRun) {
         Checkpoint-Computer -Description 'Win11Privacy: до изменений' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop
         Write-Log '   [+] точка восстановления создана'
     } catch { Write-Log "   [!] точку восстановления создать не удалось: $($_.Exception.Message)" }
+}
+
+# --- Уборка за старыми версиями --------------------------------------------- #
+$junkFound = @(Find-JunkValues)
+if ($junkFound.Count -gt 0) {
+    Write-Section 'Уборка за старыми версиями программы'
+    Write-Log ("   найдено параметров, записанных под числовыми именами: {0}" -f $junkFound.Count)
+    $null = Remove-JunkValues
 }
 
 # --- Модули по определениям ------------------------------------------------- #

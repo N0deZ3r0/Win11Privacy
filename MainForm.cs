@@ -62,7 +62,12 @@ namespace Win11Privacy
         private Control _pageApps;
         private StackPanel _appsList;
         private Label _appsState;
-        private ModernButton _btnAppsRefresh, _btnAppsRemove;
+        private ModernButton _btnAppsRemove;
+        private Control _pageChanges;
+        private StackPanel _changesList;
+        private Label _changesState;
+        private ModernButton _btnChangesBack;
+        private readonly Dictionary<string, TextBox> _pageSearch = new Dictionary<string, TextBox>();
         private Control _pageStartup;
         private StackPanel _startupList;
         private Label _startupState;
@@ -132,7 +137,9 @@ namespace Win11Privacy
         {
             LoadLangPref();
             L.DetectFromSystem();
-            Theme.Detect();
+            if (_themeChoice == 1) Theme.Apply(true);
+            else if (_themeChoice == 2) Theme.Apply(false);
+            else Theme.Detect();
 #if LIGHTTEST
             Theme.Apply(false);
 #endif
@@ -247,9 +254,10 @@ namespace Win11Privacy
             _pageApps     = BuildAppsPage();
             _pageStartup  = BuildStartupPage();
             _pageGuard    = BuildGuardPage();
+            _pageChanges  = BuildChangesPage();
             _pageLog      = BuildLogPage();
             _pageAbout    = BuildAboutPage();
-            foreach (Control p in new[] { _pageHome, _pageSettings, _pageXray, _pageDossier, _pageAudit, _pageMonitor, _pageApps, _pageStartup, _pageGuard, _pageLog, _pageAbout })
+            foreach (Control p in new[] { _pageHome, _pageSettings, _pageXray, _pageDossier, _pageAudit, _pageMonitor, _pageApps, _pageStartup, _pageGuard, _pageChanges, _pageLog, _pageAbout })
             {
                 p.Dock = DockStyle.Fill; p.Visible = false; _content.Controls.Add(p);
             }
@@ -285,6 +293,7 @@ namespace Win11Privacy
             AddNav(nav, "apps",     L.T("Приложения"), GApp);
             AddNav(nav, "startup",  L.T("Автозапуск"), GPower);
             AddNav(nav, "guard",    L.T("Страж"),     GShield);
+            AddNav(nav, "changes",  L.T("Изменения"), GUndo);
             AddNav(nav, "log",      L.T("Журнал"),    GNav5);
             AddNav(nav, "about",    L.T("О программе"),GNav6);
             nav.Height = (int)(u * 2.7F * _nav.Count + u * 1.0F);
@@ -466,6 +475,7 @@ namespace Win11Privacy
             if (key == "apps") return _pageApps;
             if (key == "startup") return _pageStartup;
             if (key == "guard") return _pageGuard;
+            if (key == "changes") return _pageChanges;
             if (key == "log") return _pageLog;
             return _pageAbout;
         }
@@ -524,6 +534,7 @@ namespace Win11Privacy
             _pageApps.Visible     = (key == "apps");
             _pageStartup.Visible  = (key == "startup");
             _pageGuard.Visible    = (key == "guard");
+            _pageChanges.Visible  = (key == "changes");
             _pageLog.Visible      = (key == "log");
             _pageAbout.Visible    = (key == "about");
             if (changed && !first) AnimatePageIn(PageOf(key));
@@ -535,6 +546,8 @@ namespace Win11Privacy
             if (key == "monitor" && _monitorList != null && _monitorList.Controls.Count == 0) RefreshMonitor();
             if (key == "apps" && _appsList != null && _appsList.Controls.Count == 0) RefreshApps();
             if (key == "startup" && _startupList != null && _startupList.Controls.Count == 0) RefreshStartup();
+            if (key == "changes" && _changesList != null && _changesList.Controls.Count == 0) RefreshChanges();
+            if (key == "about" && _aboutData != null && !_mockMode) RefreshDataInfo();
         }
 
         // ================================================================== //
@@ -1807,10 +1820,19 @@ namespace Win11Privacy
             head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             head.Controls.Add(PageTitle(L.T("Проверка на деле")), 0, 0);
+            FlowLayoutPanel auditBtns = new FlowLayoutPanel();
+            auditBtns.AutoSize = true; auditBtns.WrapContents = false;
+            auditBtns.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
+            auditBtns.Margin = new Padding(0);
+            _btnCleanJunk = new ModernButton(L.T("Убрать мусор"), false);
+            _btnCleanJunk.Font = Font; _btnCleanJunk.Visible = false;
+            _btnCleanJunk.Margin = new Padding(0, 0, (int)(u * 0.5F), (int)(u * 0.45F));
+            _btnCleanJunk.Click += OnCleanJunk;
             ModernButton rerun = new ModernButton(L.T("Проверить сейчас"), true); rerun.Font = new Font(Font, FontStyle.Bold);
-            rerun.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
+            rerun.Margin = new Padding(0, 0, 0, (int)(u * 0.45F));
             rerun.Click += delegate { RunAudit(); };
-            head.Controls.Add(rerun, 1, 0);
+            auditBtns.Controls.Add(_btnCleanJunk); auditBtns.Controls.Add(rerun);
+            head.Controls.Add(auditBtns, 1, 0);
             page.Controls.Add(head, 0, 0);
 
             // верх: кольцо + плитки
@@ -1918,55 +1940,19 @@ namespace Win11Privacy
         // ================================================================== //
         private Control BuildAppsPage()
         {
-            int u = Font.Height;
-            TableLayoutPanel page = new TableLayoutPanel();
-            page.ColumnCount = 1; page.RowCount = 3;
-            page.BackColor = Theme.WindowBg;
-            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            page.RowStyles.Add(new RowStyle(SizeType.Absolute, (int)(u * 7.6F)));
-            page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-
-            page.Controls.Add(PageTitle(L.T("Предустановленные приложения")), 0, 0);
-
-            Card ctl = new Card();
-            ctl.Dock = DockStyle.Fill;
-            ctl.Margin = new Padding(0, (int)(u * 0.5F), 0, (int)(u * 0.5F));
-            ctl.Padding = new Padding((int)(u * 0.9F), (int)(u * 0.7F), (int)(u * 0.9F), (int)(u * 0.7F));
-            TableLayoutPanel ci = new TableLayoutPanel();
-            ci.Dock = DockStyle.Fill; ci.AutoSize = true; ci.ColumnCount = 1; ci.RowCount = 2;
-            ci.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            ci.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            ci.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            _appsState = new Label();
-            _appsState.AutoSize = false; _appsState.Dock = DockStyle.Fill;
-            _appsState.TextAlign = ContentAlignment.MiddleLeft; _appsState.ForeColor = Theme.TextDim;
-            _appsState.Text = L.T("Приложения, которые Windows ставит без спроса. Отмеченные «можно убрать» —\n") +
-                              L.T("проверенный список; системные компоненты в перечень не попадают вовсе.");
-            ci.Controls.Add(_appsState, 0, 0);
-            FlowLayoutPanel ab = new FlowLayoutPanel();
-            AttachButtonRow(ab, ctl);
-            ab.Margin = new Padding(0, (int)(u * 0.5F), 0, 0);
-            _btnAppsRefresh = new ModernButton(L.T("Обновить список"), false);
-            _btnAppsRefresh.Click += delegate { RefreshApps(); };
-            ModernButton pickBloat = new ModernButton(L.T("Отметить лишнее"), false);
-            pickBloat.Click += delegate { SelectBloat(); };
+            ModernButton refresh = new ModernButton(L.T("Обновить список"), false);
+            refresh.Click += delegate { RefreshApps(); };
+            ModernButton pick = new ModernButton(L.T("Отметить лишнее"), false);
+            pick.Click += delegate { SelectBloat(); };
             _btnAppsRemove = new ModernButton(L.T("Удалить выбранные"), true);
             _btnAppsRemove.Click += OnRemoveApps;
-            foreach (ModernButton b in new[] { _btnAppsRefresh, pickBloat, _btnAppsRemove })
-            { b.Font = b.Primary ? new Font(Font, FontStyle.Bold) : Font; b.Margin = new Padding((int)(u * 0.4F), 0, 0, (int)(u * 0.3F)); ab.Controls.Add(b); }
-            ci.Controls.Add(ab, 0, 1);
-            ctl.Controls.Add(ci);
-            page.Controls.Add(ctl, 0, 1);
-
-            Card list = new Card();
-            list.Dock = DockStyle.Fill; list.Padding = new Padding((int)(u * 0.6F));
-            list.Margin = new Padding(0, 0, 0, (int)(u * 0.3F));
-            _appsList = new StackPanel();
-            _appsList.Dock = DockStyle.Fill; _appsList.Font = Font;
-            _appsList.Padding = new Padding((int)(u * 0.4F));
-            Dwm.DarkScrollbars(_appsList);
-            list.Controls.Add(_appsList);
-            page.Controls.Add(list, 0, 2);
+            Label state; StackPanel list; TextBox search;
+            TableLayoutPanel page = ListPage(L.T("Предустановленные приложения"),
+                L.T("Приложения, которые Windows ставит без спроса. Отмеченные «можно убрать» —\n") +
+                L.T("проверенный список; системные компоненты в перечень не попадают вовсе."),
+                "apps", out state, out list, out search, refresh, pick, _btnAppsRemove);
+            _appsState = state; _appsList = list;
+            if (search != null) search.TextChanged += delegate { FilterList(_appsList, search.Text); };
             return page;
         }
 
@@ -2060,34 +2046,6 @@ namespace Win11Privacy
         // ================================================================== //
         private Control BuildStartupPage()
         {
-            int u = Font.Height;
-            TableLayoutPanel page = new TableLayoutPanel();
-            page.ColumnCount = 1; page.RowCount = 3;
-            page.BackColor = Theme.WindowBg;
-            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            page.RowStyles.Add(new RowStyle(SizeType.Absolute, (int)(u * 7.6F)));
-            page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-
-            page.Controls.Add(PageTitle(L.T("Что стартует вместе с Windows")), 0, 0);
-
-            Card ctl = new Card();
-            ctl.Dock = DockStyle.Fill;
-            ctl.Margin = new Padding(0, (int)(u * 0.5F), 0, (int)(u * 0.5F));
-            ctl.Padding = new Padding((int)(u * 0.9F), (int)(u * 0.7F), (int)(u * 0.9F), (int)(u * 0.7F));
-            TableLayoutPanel ci = new TableLayoutPanel();
-            ci.Dock = DockStyle.Fill; ci.AutoSize = true; ci.ColumnCount = 1; ci.RowCount = 2;
-            ci.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            ci.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            ci.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            _startupState = new Label();
-            _startupState.AutoSize = false; _startupState.Dock = DockStyle.Fill;
-            _startupState.TextAlign = ContentAlignment.MiddleLeft; _startupState.ForeColor = Theme.TextDim;
-            _startupState.Text = L.T("Обновляторы, агенты телеметрии и помощники производителя запускаются при\n") +
-                                 L.T("каждом входе. Отключение обратимо: запись остаётся на месте, просто гасится.");
-            ci.Controls.Add(_startupState, 0, 0);
-            FlowLayoutPanel sb = new FlowLayoutPanel();
-            AttachButtonRow(sb, ctl);
-            sb.Margin = new Padding(0, (int)(u * 0.5F), 0, 0);
             ModernButton refresh = new ModernButton(L.T("Обновить список"), false);
             refresh.Click += delegate { RefreshStartup(); };
             ModernButton pick = new ModernButton(L.T("Отметить лишнее"), false);
@@ -2096,21 +2054,13 @@ namespace Win11Privacy
             _btnStartupOff.Click += delegate { SetStartupSelected(false); };
             _btnStartupOn = new ModernButton(L.T("Вернуть выбранные"), false);
             _btnStartupOn.Click += delegate { SetStartupSelected(true); };
-            foreach (ModernButton b in new[] { refresh, pick, _btnStartupOff, _btnStartupOn })
-            { b.Font = b.Primary ? new Font(Font, FontStyle.Bold) : Font; b.Margin = new Padding((int)(u * 0.4F), 0, 0, (int)(u * 0.3F)); sb.Controls.Add(b); }
-            ci.Controls.Add(sb, 0, 1);
-            ctl.Controls.Add(ci);
-            page.Controls.Add(ctl, 0, 1);
-
-            Card list = new Card();
-            list.Dock = DockStyle.Fill; list.Padding = new Padding((int)(u * 0.6F));
-            list.Margin = new Padding(0, 0, 0, (int)(u * 0.3F));
-            _startupList = new StackPanel();
-            _startupList.Dock = DockStyle.Fill; _startupList.Font = Font;
-            _startupList.Padding = new Padding((int)(u * 0.4F));
-            Dwm.DarkScrollbars(_startupList);
-            list.Controls.Add(_startupList);
-            page.Controls.Add(list, 0, 2);
+            Label state; StackPanel list; TextBox search;
+            TableLayoutPanel page = ListPage(L.T("Что стартует вместе с Windows"),
+                L.T("Обновляторы, агенты телеметрии и помощники производителя запускаются при\n") +
+                L.T("каждом входе. Отключение обратимо: запись остаётся на месте, просто гасится."),
+                "startup", out state, out list, out search, refresh, pick, _btnStartupOff, _btnStartupOn);
+            _startupState = state; _startupList = list;
+            if (search != null) search.TextChanged += delegate { FilterList(_startupList, search.Text); };
             return page;
         }
 
@@ -2215,61 +2165,235 @@ namespace Win11Privacy
         }
 
         // ================================================================== //
-        //  Страница: Страж
+        //  Каркас страницы-списка: заголовок с поиском, карточка с описанием
+        //  и кнопками, список в карточке. Пять страниц повторяли его слово
+        //  в слово — теперь он один.
         // ================================================================== //
-        private Control BuildGuardPage()
+        private TableLayoutPanel ListPage(string title, string hint, string searchKey,
+                                          out Label state, out StackPanel list, out TextBox search,
+                                          params ModernButton[] buttons)
         {
             int u = Font.Height;
             TableLayoutPanel page = new TableLayoutPanel();
             page.ColumnCount = 1; page.RowCount = 3;
             page.BackColor = Theme.WindowBg;
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            page.RowStyles.Add(new RowStyle(SizeType.Absolute, (int)(u * 7.6F)));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            page.RowStyles[1] = new RowStyle(SizeType.Absolute, (int)(u * 7.6F));
-            page.Controls.Add(PageTitle(L.T("Страж приватности")), 0, 0);
+            TableLayoutPanel head = new TableLayoutPanel();
+            head.ColumnCount = 2; head.RowCount = 1; head.Dock = DockStyle.Fill; head.AutoSize = true;
+            head.BackColor = Theme.WindowBg;
+            head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            head.Controls.Add(PageTitle(title), 0, 0);
+            search = null;
+            if (searchKey != null)
+            {
+                TextBox tb = new TextBox();
+                tb.Font = Font;
+                tb.BackColor = Theme.CardBg; tb.ForeColor = Theme.Text;
+                tb.BorderStyle = BorderStyle.FixedSingle;
+                tb.Width = (int)(u * 13F);
+                tb.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
+                tb.Margin = new Padding((int)(u * 0.8F), 0, (int)(u * 0.5F), (int)(u * 0.45F));
+                Dwm.Placeholder(tb, L.T("Поиск по списку…"));
+                head.Controls.Add(tb, 1, 0);
+                search = tb;
+                _pageSearch[searchKey] = tb;
+            }
+            page.Controls.Add(head, 0, 0);
 
-            Card intro = new Card();
-            intro.Dock = DockStyle.Fill; intro.Margin = new Padding(0,(int)(u*0.5F),0,(int)(u*0.5F));
-            intro.Padding = new Padding((int)(u*0.9F),(int)(u*0.7F),(int)(u*0.9F),(int)(u*0.7F));
-            TableLayoutPanel ii = new TableLayoutPanel(); ii.Dock = DockStyle.Fill; ii.AutoSize = true;
-            ii.ColumnCount = 1; ii.RowCount = 2;
-            ii.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            ii.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            ii.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            _guardState = new Label(); _guardState.AutoSize = false; _guardState.Dock = DockStyle.Fill;
-            _guardState.TextAlign = ContentAlignment.MiddleLeft; _guardState.ForeColor = Theme.TextDim;
-            _guardState.Text = L.T("Крупные обновления Windows тихо возвращают часть настроек назад.\n") +
-                              L.T("Страж проверяет систему по расписанию, возвращает сбитое и предупреждает.");
-            ii.Controls.Add(_guardState, 0, 0);
-            FlowLayoutPanel gb = new FlowLayoutPanel(); gb.AutoSize = true; gb.FlowDirection = FlowDirection.LeftToRight;
-            AttachButtonRow(gb, intro);
-            gb.Margin = new Padding(0, (int)(u * 0.5F), 0, 0);
-            _btnGuardInstall = new ModernButton(L.T("Включить стража"), true); _btnGuardInstall.Font = new Font(Font, FontStyle.Bold);
-            _btnGuardInstall.Click += OnGuardInstall;
+            Card ctl = new Card();
+            ctl.Dock = DockStyle.Fill;
+            ctl.Margin = new Padding(0, (int)(u * 0.5F), 0, (int)(u * 0.5F));
+            ctl.Padding = new Padding((int)(u * 0.9F), (int)(u * 0.7F), (int)(u * 0.9F), (int)(u * 0.7F));
+            TableLayoutPanel ci = new TableLayoutPanel();
+            ci.Dock = DockStyle.Fill; ci.AutoSize = true; ci.ColumnCount = 1; ci.RowCount = 2;
+            ci.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            ci.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            ci.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            state = new Label();
+            state.AutoSize = false; state.Dock = DockStyle.Fill;
+            state.TextAlign = ContentAlignment.MiddleLeft; state.ForeColor = Theme.TextDim;
+            state.Text = hint;
+            ci.Controls.Add(state, 0, 0);
+            FlowLayoutPanel row = new FlowLayoutPanel();
+            AttachButtonRow(row, ctl);
+            row.Margin = new Padding(0, (int)(u * 0.5F), 0, 0);
+            foreach (ModernButton b in buttons)
+            {
+                b.Font = b.Primary ? new Font(Font, FontStyle.Bold) : Font;
+                b.Margin = new Padding((int)(u * 0.4F), 0, 0, (int)(u * 0.3F));
+                row.Controls.Add(b);
+            }
+            ci.Controls.Add(row, 0, 1);
+            ctl.Controls.Add(ci);
+            page.Controls.Add(ctl, 0, 1);
+
+            Card listCard = new Card();
+            listCard.Dock = DockStyle.Fill; listCard.Padding = new Padding((int)(u * 0.6F));
+            listCard.Margin = new Padding(0, 0, 0, (int)(u * 0.3F));
+            list = new StackPanel();
+            list.Dock = DockStyle.Fill; list.Font = Font;
+            list.Padding = new Padding((int)(u * 0.4F));
+            Dwm.DarkScrollbars(list);
+            listCard.Controls.Add(list);
+            page.Controls.Add(listCard, 0, 2);
+            return page;
+        }
+
+        // Прячет строки, не подходящие под запрос, вместе с пустыми разделами
+        private static void FilterList(StackPanel list, string query)
+        {
+            if (list == null) return;
+            string q = (query ?? "").Trim().ToLowerInvariant();
+            list.Hidden.Clear();
+            if (q.Length > 0)
+            {
+                SectionHeader head = null; bool any = false;
+                foreach (Control c in list.Controls)
+                {
+                    SectionHeader sh = c as SectionHeader;
+                    if (sh != null)
+                    {
+                        if (head != null && !any) list.Hidden.Add(head);
+                        head = sh; any = false; continue;
+                    }
+                    IFilterable f = c as IFilterable;
+                    bool match = (f == null) || f.FilterText.ToLowerInvariant().Contains(q);
+                    if (!match) list.Hidden.Add(c); else any = true;
+                }
+                if (head != null && !any) list.Hidden.Add(head);
+            }
+            try { list.VerticalScroll.Value = 0; } catch { }
+            list.Restack();
+        }
+
+        // ================================================================== //
+        //  Страница: Изменения — что программа поменяла и как вернуть обратно
+        // ================================================================== //
+        private Control BuildChangesPage()
+        {
+            ModernButton refresh = new ModernButton(L.T("Обновить"), false);
+            refresh.Click += delegate { RefreshChanges(); };
+            _btnChangesBack = new ModernButton(L.T("Вернуть выбранные"), true);
+            _btnChangesBack.Click += OnRestoreSelected;
+            ModernButton all = new ModernButton(L.T("Вернуть всё"), false);
+            all.Click += OnRestoreAll;
+            Label state; StackPanel list; TextBox search;
+            TableLayoutPanel page = ListPage(L.T("Что программа изменила"),
+                L.T("Каждое изменение записано вместе с прежним значением. Любую строку\n") +
+                L.T("можно вернуть по отдельности — система станет ровно такой, как была."),
+                "changes", out state, out list, out search, refresh, _btnChangesBack, all);
+            _changesState = state; _changesList = list;
+            if (search != null) search.TextChanged += delegate { FilterList(_changesList, search.Text); };
+            return page;
+        }
+
+        private void RefreshChanges()
+        {
+            RunJson("-ChangeLog", L.T("Чтение журнала изменений…"), delegate(Dictionary<string, object> d)
+            {
+                RenderChanges(d);
+            });
+        }
+
+        private void RenderChanges(Dictionary<string, object> d)
+        {
+            _changesList.Controls.Clear();
+            List<object> items = (d != null) ? Json.GetArr(d, "items") : new List<object>();
+            if (items.Count == 0)
+            {
+                SectionHeader sh = new SectionHeader(L.T("Программа ещё ничего не меняла"));
+                sh.Font = Font; _changesList.Controls.Add(sh);
+                _changesList.Restack();
+                _changesState.Text = L.T("Журнал пуст: настройки ещё не применялись.\n") +
+                                     L.T("После применения здесь появится каждое изменение с прежним значением.");
+                if (_btnChangesBack != null) _btnChangesBack.Enabled = false;
+                return;
+            }
+            if (_btnChangesBack != null) _btnChangesBack.Enabled = true;
+            SectionHeader head = new SectionHeader(L.T("Свежие изменения сверху"));
+            head.Font = Font; _changesList.Controls.Add(head);
+            foreach (object o in items)
+            {
+                Dictionary<string, object> it = Json.Obj(o);
+                string was = Json.GetStr(it, "was"), now = Json.GetStr(it, "now");
+                string what = L.T("было: ") + was + L.T("   ·   стало: ") + now + "   ·   " + Json.GetStr(it, "where");
+                WipeRow r = new WipeRow(Json.GetStr(it, "id"), L.T(Json.GetStr(it, "title")), what,
+                                        Json.GetStr(it, "time").Replace("T", " "),
+                                        Json.GetStr(it, "kind") == "startup" ? GPower : GUndo, true);
+                r.Font = Font;
+                _changesList.Controls.Add(r);
+            }
+            _changesList.Restack();
+            _changesState.Text = L.T("Записей в журнале: ") + items.Count + L.T(", изменений всего: ") + Json.GetInt(d, "raw") + ".\n" +
+                                 L.T("Отметьте строки и нажмите «Вернуть выбранные» — вернётся то значение, что было до программы.");
+        }
+
+        private void OnRestoreSelected(object sender, EventArgs e)
+        {
+            List<string> ids = new List<string>();
+            foreach (Control c in _changesList.Controls)
+            {
+                WipeRow r = c as WipeRow;
+                if (r != null && r.Checked) ids.Add(r.Id);
+            }
+            if (ids.Count == 0)
+            {
+                MessageBox.Show(this, L.T("Отметьте галочками, что вернуть."), L.T("Ничего не выбрано"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (MessageBox.Show(this, L.T("Будет возвращено изменений: ") + ids.Count + ".\n\n" +
+                L.T("Каждый параметр вернётся в то значение, которое было до программы,\n") +
+                L.T("и пропадёт из журнала.\n\nПродолжить?"),
+                L.T("Возврат изменений"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            RunStreaming("-RestoreItems -ChangeItems \"" + string.Join(",", ids.ToArray()) + "\"",
+                L.T("Возврат выбранных изменений…"), delegate { Navigate("changes"); RefreshChanges(); });
+        }
+
+        private void OnRestoreAll(object sender, EventArgs e)
+        {
+            if (MessageBox.Show(this, L.T("Программа вернёт все параметры реестра и записи автозапуска\n") +
+                L.T("в то состояние, в котором они были до неё, и очистит журнал.\n\nПродолжить?"),
+                L.T("Возврат изменений"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            RunStreaming("-RestoreAll", L.T("Возврат всех изменений…"), delegate { Navigate("changes"); RefreshChanges(); });
+        }
+
+        // ================================================================== //
+        //  Страница: Страж
+        // ================================================================== //
+        private Control BuildGuardPage()
+        {
+            _btnGuardInstall = new ModernButton(L.T("Включить стража"), true); _btnGuardInstall.Click += OnGuardInstall;
             _btnGuardNow = new ModernButton(L.T("Проверить"), false); _btnGuardNow.Click += OnGuardNow;
             _btnGuardRemove = new ModernButton(L.T("Отключить"), false); _btnGuardRemove.Click += OnGuardRemove;
             _btnWatcher = new ModernButton(L.T("Уведомления"), false); _btnWatcher.Click += OnWatcherToggle;
             _btnSensorGuard = new ModernButton(L.T("Датчики"), false); _btnSensorGuard.Click += OnSensorToggle;
             _btnSnapshot = new ModernButton(L.T("Снимок"), false); _btnSnapshot.Click += OnSnapshot;
-            foreach (ModernButton b in new[] { _btnGuardInstall, _btnGuardNow, _btnGuardRemove, _btnWatcher, _btnSensorGuard, _btnSnapshot })
-            { b.Font = b.Primary ? new Font(Font, FontStyle.Bold) : Font; b.Margin = new Padding((int)(u*0.4F),0,0,(int)(u*0.3F)); gb.Controls.Add(b); }
-            ii.Controls.Add(gb, 0, 1);
-            intro.Controls.Add(ii);
-            page.Controls.Add(intro, 0, 1);
-
-            Card body = new Card(); body.Dock = DockStyle.Fill; body.Padding = new Padding((int)(u*0.6F));
-            body.Margin = new Padding(0,0,0,(int)(u*0.3F));
-            _guardBody = new StackPanel(); _guardBody.Dock = DockStyle.Fill; _guardBody.Font = Font;
-            _guardBody.Padding = new Padding((int)(u*0.4F));
-            Dwm.DarkScrollbars(_guardBody);
-            body.Controls.Add(_guardBody);
-            page.Controls.Add(body, 0, 2);
+            _btnGuardFreq = new ModernButton(GuardFreqText(), false);
+            _btnGuardFreq.Click += delegate
+            {
+                _guardDaily = !_guardDaily;
+                _btnGuardFreq.Text = GuardFreqText();
+                _status.Text = _guardDaily ? L.T("Страж будет проверять каждый день. Нажмите «Включить стража».")
+                                           : L.T("Страж будет проверять раз в неделю. Нажмите «Включить стража».");
+            };
+            Label state; StackPanel list; TextBox search;
+            TableLayoutPanel page = ListPage(L.T("Страж приватности"),
+                L.T("Крупные обновления Windows тихо возвращают часть настроек назад.\n") +
+                L.T("Страж проверяет систему по расписанию, возвращает сбитое и предупреждает."),
+                null, out state, out list, out search,
+                _btnGuardInstall, _btnGuardNow, _btnGuardRemove, _btnGuardFreq, _btnWatcher, _btnSensorGuard, _btnSnapshot);
+            _guardState = state; _guardBody = list;
             return page;
         }
-        private ModernButton _btnGuardInstall, _btnGuardNow, _btnGuardRemove, _btnWatcher, _btnSensorGuard, _btnSnapshot;
-        private bool _watcherOn, _sensorOn;
+
+        private ModernButton _btnGuardInstall, _btnGuardNow, _btnGuardRemove, _btnWatcher, _btnSensorGuard, _btnSnapshot, _btnGuardFreq;
+        private bool _watcherOn, _sensorOn, _guardDaily;
+        private string GuardFreqText() { return _guardDaily ? L.T("Проверка: каждый день") : L.T("Проверка: раз в неделю"); }
 
         // ================================================================== //
         //  Страница: Журнал
@@ -2315,10 +2439,13 @@ namespace Win11Privacy
             aboutHead.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             aboutHead.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             aboutHead.Controls.Add(PageTitle(L.T("О программе")), 0, 0);
+            FlowLayoutPanel aboutBtns = new FlowLayoutPanel();
+            aboutBtns.AutoSize = true; aboutBtns.WrapContents = false;
+            aboutBtns.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
+            aboutBtns.Margin = new Padding((int)(u * 1.2F), 0, 0, (int)(u * 0.45F));
             ModernButton bLang = new ModernButton(L.English ? "Русский" : "English", false);
             bLang.Font = Font;
-            bLang.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
-            bLang.Margin = new Padding((int)(u * 1.2F), 0, 0, (int)(u * 0.5F));
+            bLang.Margin = new Padding(0, 0, (int)(u * 0.4F), 0);
             bLang.Click += delegate
             {
                 L.English = !L.English;
@@ -2329,11 +2456,34 @@ namespace Win11Privacy
                     L.T("Приватность Windows 11"), MessageBoxButtons.OK, MessageBoxIcon.Information);
                 bLang.Text = L.English ? "Русский" : "English";
             };
-            aboutHead.Controls.Add(bLang, 1, 0);
+            aboutBtns.Controls.Add(bLang);
+
+            ModernButton bTheme = new ModernButton(ThemeButtonText(), false);
+            bTheme.Font = Font;
+            bTheme.Margin = new Padding(0, 0, (int)(u * 0.4F), 0);
+            bTheme.Click += delegate
+            {
+                _themeChoice = (_themeChoice + 1) % 3;
+                SaveUiState();
+                bTheme.Text = ThemeButtonText();
+                MessageBox.Show(this, L.T("Тема сменится после перезапуска программы."),
+                    L.T("Приватность Windows 11"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+            aboutBtns.Controls.Add(bTheme);
+
+            ModernButton bPurge = new ModernButton(L.T("Удалить данные программы"), false);
+            bPurge.Font = Font;
+            bPurge.Margin = new Padding(0);
+            bPurge.Click += OnPurgeData;
+            aboutBtns.Controls.Add(bPurge);
+            aboutHead.Controls.Add(aboutBtns, 1, 0);
             f.Controls.Add(aboutHead);
 
             _aboutEdition = AboutCard(L.T("Ваша система"), L.T("Определение…"));
             f.Controls.Add(_aboutEdition);
+
+            _aboutData = AboutCard(L.T("Что программа хранит о вас у себя"), L.T("Чтение…"));
+            f.Controls.Add(_aboutData);
 
             f.Controls.Add(AboutCard(L.T("Что умеет эта программа, чего нет у других"),
                 L.T("• Досье: кто и когда реально включал камеру, микрофон и геолокацию — с длительностью и меткой «сейчас».\n") +
@@ -2368,8 +2518,54 @@ namespace Win11Privacy
             _aboutFlow = f;
             return page;
         }
-        private Control _aboutEdition;
+        private Control _aboutEdition, _aboutData;
+#pragma warning disable 0649
+        private bool _mockMode;   // ставится только в тестовой сборке
+#pragma warning restore 0649
         private FlowLayoutPanel _aboutFlow;
+
+        private string ThemeButtonText()
+        {
+            if (_themeChoice == 1) return L.T("Тема: тёмная");
+            if (_themeChoice == 2) return L.T("Тема: светлая");
+            return L.T("Тема: как в Windows");
+        }
+
+        // Что программа накопила у себя — и кнопка это стереть
+        private void RefreshDataInfo()
+        {
+            RunJson("-DataInfo", L.T("Чтение данных программы…"), delegate(Dictionary<string, object> d)
+            {
+                if (d == null) { SetAboutBody(_aboutData, L.T("Не удалось прочитать папку с данными.")); return; }
+                List<object> items = Json.GetArr(d, "items");
+                StringBuilder sb = new StringBuilder();
+                sb.Append(L.T("Папка: ")).Append(Json.GetStr(d, "folder")).Append("\n");
+                if (items.Count == 0) sb.Append(L.T("Программа ничего о вас не хранит."));
+                else
+                {
+                    foreach (object o in items)
+                    {
+                        Dictionary<string, object> it = Json.Obj(o);
+                        sb.Append("• ").Append(L.T(Json.GetStr(it, "title")))
+                          .Append(" — ").Append(Json.GetStr(it, "kb")).Append(L.T(" КБ, изменён "))
+                          .Append(Json.GetStr(it, "changed")).Append("\n");
+                    }
+                    sb.Append(L.T("Всего: ")).Append(Json.GetStr(d, "kb")).Append(L.T(" КБ. Наружу ничего из этого не уходит."));
+                }
+                SetAboutBody(_aboutData, sb.ToString());
+            });
+        }
+
+        private void OnPurgeData(object sender, EventArgs e)
+        {
+            if (MessageBox.Show(this,
+                L.T("Программа удалит всё, что накопила о вас у себя: историю датчиков,\n") +
+                L.T("журнал изменений, снимки и эталоны рентгена.\n\n") +
+                L.T("Вернуть настройки «как было» после этого будет нечем — журнал отката\n") +
+                L.T("пропадёт вместе с остальным.\n\nПродолжить?"),
+                L.T("Удаление данных программы"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            RunStreaming("-PurgeData", L.T("Удаление данных программы…"), delegate { Navigate("about"); RefreshDataInfo(); });
+        }
 
         // Карточки «О программе» тянутся по ширине окна, но не шире 54 строчных высот
         private void FitAboutCards(Control page)
@@ -2565,9 +2761,12 @@ namespace Win11Privacy
                 if (!File.Exists(p)) return;
                 Dictionary<string, object> d = Json.ParseObject(File.ReadAllText(p));
                 if (d != null && d.ContainsKey("en")) L.English = Json.GetBool(d, "en");
+                if (d != null && d.ContainsKey("theme")) _themeChoice = Json.GetInt(d, "theme");
             }
             catch { }
         }
+        // 0 — как в Windows, 1 — тёмная, 2 — светлая
+        private int _themeChoice;
 
         private void LoadUiState()
         {
@@ -2603,7 +2802,8 @@ namespace Win11Privacy
                 string txt = "{ \"w\": " + s.Width + ", \"h\": " + s.Height +
                              ", \"max\": " + (WindowState == FormWindowState.Maximized ? "true" : "false") +
                              ", \"side\": " + (_userCollapsed ? "true" : "false") +
-                             ", \"en\": " + (L.English ? "true" : "false") + " }";
+                             ", \"en\": " + (L.English ? "true" : "false") +
+                             ", \"theme\": " + _themeChoice + " }";
                 File.WriteAllText(p, txt);
             }
             catch { }
@@ -2694,7 +2894,12 @@ namespace Win11Privacy
                 if (k >= Keys.D1 && k <= Keys.D9) idx = (int)(k - Keys.D1);
                 else if (k == Keys.D0) idx = 9;
                 if (idx >= 0 && idx < _nav.Count) { Navigate((string)_nav[idx].Tag); return true; }
-                if (k == Keys.F && _search != null) { Navigate("settings"); _search.Focus(); return true; }
+                if (k == Keys.F)
+                {
+                    TextBox box;
+                    if (_pageSearch.TryGetValue(_current, out box) && box != null) { box.Focus(); return true; }
+                    if (_search != null) { Navigate("settings"); _search.Focus(); return true; }
+                }
             }
             return base.ProcessCmdKey(ref msg, keyData);
         }
@@ -3032,9 +3237,30 @@ namespace Win11Privacy
             });
         }
 
+        private ModernButton _btnCleanJunk;
+
+        // Старые версии писали параметры реестра под числовыми именами —
+        // предлагаем убрать этот мусор, если он ещё лежит в системе.
+        private void OnCleanJunk(object sender, EventArgs e)
+        {
+            if (MessageBox.Show(this,
+                L.T("Версии программы до 1.6 записывали часть настроек в реестр под\n") +
+                L.T("числовыми именами: «0», «1», «2» вместо настоящих. Такие параметры\n") +
+                L.T("ничего не настраивают. Программа уберёт только их — те, что совпадают\n") +
+                L.T("и по номеру, и по значению.\n\nПродолжить?"),
+                L.T("Уборка за старыми версиями"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            RunStreaming("-CleanJunk", L.T("Уборка мусорных параметров…"), delegate { Navigate("audit"); RunAudit(); });
+        }
+
         private void RenderAudit(Dictionary<string, object> d)
         {
             int ok = Json.GetInt(d, "ok"), total = Json.GetInt(d, "total");
+            int junk = Json.GetInt(d, "junk");
+            if (_btnCleanJunk != null)
+            {
+                _btnCleanJunk.Visible = junk > 0;
+                _btnCleanJunk.Text = L.T("Убрать мусор") + (junk > 0 ? " (" + junk + ")" : "");
+            }
             _ring.SetScore(ok, total);
             _auditHint.Visible = false;
             _auditWhen.Text = L.T("Проверено: ") + Json.GetStr(d, "time");
@@ -3195,7 +3421,8 @@ namespace Win11Privacy
         {
             List<string> mods = SelectedModules();
             if (mods.Count == 0) { MessageBox.Show(this, L.T("Сначала выберите на странице «Настройки», что отслеживать."), L.T("Страж"), MessageBoxButtons.OK, MessageBoxIcon.Information); Navigate("settings"); return; }
-            RunStreaming("-InstallGuard -Modules " + string.Join(",", mods.ToArray()), L.T("Установка стража…"), delegate { RunDetect(); });
+            RunStreaming("-InstallGuard -Modules " + string.Join(",", mods.ToArray()) + (_guardDaily ? " -GuardDaily" : ""),
+                L.T("Установка стража…"), delegate { RunDetect(); });
         }
         private void OnGuardRemove(object sender, EventArgs e)
         { RunStreaming("-RemoveGuard", L.T("Удаление стража…"), delegate { RunDetect(); }); }
@@ -3482,6 +3709,8 @@ namespace Win11Privacy
             t.Tick += delegate {
                 t.Stop();
                 if (shot != null) { try { using (Bitmap bmp = new Bitmap(f.Width, f.Height)) { f.DrawToBitmap(bmp, new Rectangle(0, 0, f.Width, f.Height)); bmp.Save(shot); Console.WriteLine("SHOT " + shot); } } catch (Exception ex) { Console.WriteLine("SHOTERR " + ex.Message); } }
+                // сборке важно не только «окно открылось», но и что на странице что-то есть
+                Console.WriteLine("PAGE " + page + " controls=" + CountControls(f.PageOf(page)));
                 Console.WriteLine("UITEST ok"); f.Close();
             };
             f.Shown += delegate {
@@ -3505,7 +3734,12 @@ namespace Win11Privacy
                 }
                 f.Navigate(page);
                 string q = Environment.GetEnvironmentVariable("WIN11_TEST_QUERY");
-                if (!string.IsNullOrEmpty(q) && f._search != null) f._search.Text = q;
+                if (!string.IsNullOrEmpty(q))
+                {
+                    TextBox box;
+                    if (f._pageSearch.TryGetValue(page, out box) && box != null) box.Text = q;
+                    else if (f._search != null) f._search.Text = q;
+                }
                 if (Environment.GetEnvironmentVariable("WIN11_TEST_SCROLL") == "1" && f._dossierList != null)
                 {
                     try { f._dossierList.VerticalScroll.Value = f._dossierList.VerticalScroll.Maximum; f._dossierList.Restack(); } catch { }
@@ -3608,6 +3842,16 @@ namespace Win11Privacy
             return path;
         }
 
+#if UITEST
+        private static int CountControls(Control c)
+        {
+            if (c == null) return 0;
+            int n = 0;
+            foreach (Control cc in c.Controls) n += 1 + CountControls(cc);
+            return n;
+        }
+#endif
+
         private static bool IsAdmin()
         {
             try { return new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator); }
@@ -3618,6 +3862,7 @@ namespace Win11Privacy
         // Тестовые данные для скриншотов без реального PowerShell
         internal void InjectMocks()
         {
+            _mockMode = true;
             string audit = "{\"time\":\"2026-08-31 15:20\",\"ok\":58,\"total\":63,\"groups\":[" +
                 "{\"module\":\"telemetry\",\"title\":\"Телеметрия и диагностика\",\"ok\":12,\"total\":12,\"items\":[{\"name\":\"уровень телеметрии — минимальный\",\"ok\":true,\"actual\":\"0\"}]}," +
                 "{\"module\":\"ads\",\"title\":\"Рекламный ID и реклама\",\"ok\":22,\"total\":22,\"items\":[]}," +
@@ -3739,6 +3984,19 @@ namespace Win11Privacy
                 "{\"id\":\"a10\",\"name\":\"Telegram\",\"publisher\":\"Telegram FZ-LLC\",\"cmd\":\"C:\\\\Users\\\\user\\\\AppData\\\\Roaming\\\\Telegram Desktop\\\\Telegram.exe -autostart\",\"source\":\"папка автозагрузки, этот пользователь\",\"kind\":\"folder\",\"enabled\":false,\"advise\":true,\"keep\":false,\"note\":\"программа сама себя запускает при входе\"}," +
                 "{\"id\":\"a11\",\"name\":\"AdobeAAMUpdater-1.0\",\"publisher\":\"Adobe Inc.\",\"cmd\":\"C:\\\\Program Files (x86)\\\\Common Files\\\\Adobe\\\\OOBE\\\\PDApp\\\\UWA\\\\UpdaterStartupUtility.exe\",\"source\":\"реестр, все пользователи\",\"kind\":\"run\",\"enabled\":false,\"advise\":true,\"keep\":false,\"note\":\"служба обновлений Adobe\"}]}";
             RenderStartup(Json.ParseObject(startJson));
+
+            string changesJson = "{\"count\":4,\"raw\":37,\"updated\":\"2026-09-01T21:14:00\",\"items\":[" +
+                "{\"id\":\"c1\",\"kind\":\"startup\",\"title\":\"GoogleUpdate\",\"where\":\"автозагрузка\",\"was\":\"запускалась\",\"now\":\"отключена\",\"time\":\"2026-09-01T21:14:00\",\"count\":1}," +
+                "{\"id\":\"c2\",\"kind\":\"reg\",\"title\":\"уровень телеметрии — минимальный\",\"where\":\"HKLM:\\\\SOFTWARE\\\\Policies\\\\Microsoft\\\\Windows\\\\DataCollection\",\"was\":\"3\",\"now\":\"0\",\"time\":\"2026-09-01T20:58:00\",\"count\":2}," +
+                "{\"id\":\"c3\",\"kind\":\"reg\",\"title\":\"рекламный идентификатор — выкл\",\"where\":\"HKCU:\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\AdvertisingInfo\",\"was\":\"не было\",\"now\":\"0\",\"time\":\"2026-09-01T20:58:00\",\"count\":1}," +
+                "{\"id\":\"c4\",\"kind\":\"reg\",\"title\":\"Copilot в Windows — выкл\",\"where\":\"HKCU:\\\\SOFTWARE\\\\Policies\\\\Microsoft\\\\Windows\\\\WindowsCopilot\",\"was\":\"не было\",\"now\":\"1\",\"time\":\"2026-09-01T20:58:00\",\"count\":1}]}";
+            RenderChanges(Json.ParseObject(changesJson));
+
+            SetAboutBody(_aboutData, "Папка: C:\\ProgramData\\Win11Privacy\n" +
+                "• История датчиков по дням: кто включал камеру, микрофон и геолокацию — 9,9 КБ, изменён 2026-09-01 20:03\n" +
+                "• Журнал изменений: что программа поменяла и что было до неё — 4,2 КБ, изменён 2026-09-01 21:14\n" +
+                "• Снимок «до»: состояние системы перед первым применением — 1,1 КБ, изменён 2026-09-01 20:58\n" +
+                "Всего: 15,2 КБ. Наружу ничего из этого не уходит.");
 
             _lastFoot = Json.ParseObject(foot);
             if (Environment.GetEnvironmentVariable("WIN11_TEST_ONLYFOOT") == "1") _lastSpy = null;

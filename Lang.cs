@@ -40,7 +40,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(821, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(877, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -862,6 +862,62 @@ namespace Win11Privacy
             _map["и встроенного механизма диагностики Windows.</footer></body></html>"] = "and the built-in Windows diagnostics.</footer></body></html>";
             _map["Win11Privacy.exe --profile \"C:\\путь\\profile.json\" --silent   тихо применить профиль\n"] = "Win11Privacy.exe --profile \"C:\\path\\profile.json\" --silent   apply a profile silently\n";
             _map["Win11Privacy.exe --audit                                     проверка (код возврата = число несоответствий)\n"] = "Win11Privacy.exe --audit                                     check (exit code = number of mismatches)\n";
+            _map["Изменения"] = "Changes";
+            _map["Что программа изменила"] = "What this program changed";
+            _map["Каждое изменение записано вместе с прежним значением. Любую строку\n"] = "Every change is recorded together with the previous value. Any line\n";
+            _map["можно вернуть по отдельности — система станет ровно такой, как была."] = "can be reverted on its own — the system goes back exactly as it was.";
+            _map["Чтение журнала изменений…"] = "Reading the change log…";
+            _map["Программа ещё ничего не меняла"] = "This program has not changed anything yet";
+            _map["Журнал пуст: настройки ещё не применялись.\n"] = "The log is empty: no settings applied yet.\n";
+            _map["После применения здесь появится каждое изменение с прежним значением."] = "After applying, every change will appear here with its previous value.";
+            _map["Свежие изменения сверху"] = "Newest changes first";
+            _map["было: "] = "was: ";
+            _map["   ·   стало: "] = "   ·   now: ";
+            _map["Записей в журнале: "] = "Entries in the log: ";
+            _map[", изменений всего: "] = ", changes in total: ";
+            _map["Отметьте строки и нажмите «Вернуть выбранные» — вернётся то значение, что было до программы."] = "Tick the lines and press \"Restore selected\" — the value from before this program comes back.";
+            _map["Отметьте галочками, что вернуть."] = "Tick what you want to restore.";
+            _map["Будет возвращено изменений: "] = "Changes to be restored: ";
+            _map["Каждый параметр вернётся в то значение, которое было до программы,\n"] = "Each setting goes back to the value it had before this program,\n";
+            _map["и пропадёт из журнала.\n\nПродолжить?"] = "and leaves the log.\n\nContinue?";
+            _map["Возврат изменений"] = "Restoring changes";
+            _map["Возврат выбранных изменений…"] = "Restoring the selected changes…";
+            _map["Вернуть всё"] = "Restore everything";
+            _map["Программа вернёт все параметры реестра и записи автозапуска\n"] = "Every registry setting and startup entry goes back to the state\n";
+            _map["в то состояние, в котором они были до неё, и очистит журнал.\n\nПродолжить?"] = "it had before this program, and the log is cleared.\n\nContinue?";
+            _map["Возврат всех изменений…"] = "Restoring all changes…";
+            _map["Поиск по списку…"] = "Search the list…";
+            _map["Убрать мусор"] = "Clear the junk";
+            _map["Уборка за старыми версиями"] = "Cleaning up after older versions";
+            _map["Уборка мусорных параметров…"] = "Clearing junk settings…";
+            _map["Версии программы до 1.6 записывали часть настроек в реестр под\n"] = "Versions before 1.6 wrote some settings into the registry under\n";
+            _map["числовыми именами: «0», «1», «2» вместо настоящих. Такие параметры\n"] = "numeric names: \"0\", \"1\", \"2\" instead of the real ones. Such settings\n";
+            _map["ничего не настраивают. Программа уберёт только их — те, что совпадают\n"] = "do nothing at all. Only those are removed — the ones matching both\n";
+            _map["и по номеру, и по значению.\n\nПродолжить?"] = "the number and the value.\n\nContinue?";
+            _map["Удалить данные программы"] = "Delete program data";
+            _map["Что программа хранит о вас у себя"] = "What this program keeps about you";
+            _map["Чтение…"] = "Reading…";
+            _map["Чтение данных программы…"] = "Reading the program data…";
+            _map["Не удалось прочитать папку с данными."] = "Could not read the data folder.";
+            _map["Папка: "] = "Folder: ";
+            _map["Программа ничего о вас не хранит."] = "This program keeps nothing about you.";
+            _map[" КБ, изменён "] = " KB, changed ";
+            _map["Всего: "] = "In total: ";
+            _map[" КБ. Наружу ничего из этого не уходит."] = " KB. None of it ever leaves this computer.";
+            _map["Программа удалит всё, что накопила о вас у себя: историю датчиков,\n"] = "Everything the program collected about you will be deleted: sensor\n";
+            _map["журнал изменений, снимки и эталоны рентгена.\n\n"] = "history, the change log, snapshots and X-ray baselines.\n\n";
+            _map["Вернуть настройки «как было» после этого будет нечем — журнал отката\n"] = "After that there is nothing left to restore the old settings with —\n";
+            _map["пропадёт вместе с остальным.\n\nПродолжить?"] = "the rollback log goes as well.\n\nContinue?";
+            _map["Удаление данных программы"] = "Deleting program data";
+            _map["Удаление данных программы…"] = "Deleting the program data…";
+            _map["Тема сменится после перезапуска программы."] = "The theme will change after restarting the program.";
+            _map["Тема: тёмная"] = "Theme: dark";
+            _map["Тема: светлая"] = "Theme: light";
+            _map["Тема: как в Windows"] = "Theme: follow Windows";
+            _map["Проверка: каждый день"] = "Check: every day";
+            _map["Проверка: раз в неделю"] = "Check: once a week";
+            _map["Страж будет проверять каждый день. Нажмите «Включить стража»."] = "The guard will check every day. Press \"Turn the guard on\".";
+            _map["Страж будет проверять раз в неделю. Нажмите «Включить стража»."] = "The guard will check once a week. Press \"Turn the guard on\".";
         }
     }
 }

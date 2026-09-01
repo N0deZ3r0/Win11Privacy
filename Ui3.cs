@@ -10,8 +10,9 @@ namespace Win11Privacy
     // ====================================================================== //
     //  Строка досье: какая программа включала камеру / микрофон / геолокацию
     // ====================================================================== //
-    internal class SpyRow : Control
+    internal class SpyRow : Control, IFilterable
     {
+        public string FilterText { get { return _app + " " + _cap + " " + _when; } }
         private readonly string _app, _cap, _when, _dur, _glyph;
         private readonly bool _active;
         private readonly Color _capColor;
@@ -294,10 +295,11 @@ namespace Win11Privacy
     // ====================================================================== //
     //  Строка цифрового следа: чекбокс «стереть», название, описание, значение
     // ====================================================================== //
-    internal class WipeRow : Control
+    internal class WipeRow : Control, IFilterable
     {
         public readonly string Id;
         public readonly bool CanWipe;
+        public string FilterText { get { return _title + " " + _what + " " + _value; } }
         private readonly string _title, _what, _value, _glyph;
         private bool _checked, _hover;
         private Font _bold;
@@ -445,8 +447,9 @@ namespace Win11Privacy
     //  сколько соединений и кнопка запрета выхода в сеть — видно, кто
     //  стучится, и тут же можно закрыть ему дорогу.
     // ================================================================== //
-    internal class NetAppRow : Control
+    internal class NetAppRow : Control, IFilterable
     {
+        public string FilterText { get { return _name + " " + AppPath; } }
         public readonly string AppPath;
         public bool Blocked;
         public event EventHandler ToggleBlock;

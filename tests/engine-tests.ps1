@@ -217,6 +217,56 @@ Check 'функции автозагрузки объявлены выше ст�
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
+Write-Host 'Имена параметров реестра (регрессия: $n затирал параметр $N в Def)'
+if ($defs) {
+    $regItems = @()
+    foreach ($g in @($defs.groups)) { foreach ($i in @($g.items)) { if ("$($i.kind)" -eq 'reg') { $regItems += $i } } }
+    Check 'определения реестра отдают имя параметра' ($regItems.Count -gt 50) ("получено: " + $regItems.Count)
+    $numeric = @($regItems | Where-Object { "$($_.valueName)" -match '^[0-9]+$' })
+    Check 'ни одно имя параметра не превратилось в число' ($numeric.Count -eq 0) `
+          ("числовых: " + $numeric.Count + " (первое: " + $(if ($numeric.Count) { $numeric[0].name } else { '-' }) + ")")
+    $known = @($regItems | Where-Object { "$($_.valueName)" -eq 'AllowTelemetry' })
+    Check 'AllowTelemetry на месте' ($known.Count -ge 1)
+}
+
+# Тот же класс ошибки в любой другой функции: локальная переменная, которая
+# отличается от параметра только регистром, молча его затирает.
+$collide = 0
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    $pnames = @{}
+    if ($fn.Body.ParamBlock) { foreach ($pp in $fn.Body.ParamBlock.Parameters) { $pnames[$pp.Name.VariablePath.UserPath] = $true } }
+    if ($pnames.Count -eq 0) { continue }
+    foreach ($asg in $fn.Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+        $tgt = $asg.Left -as [System.Management.Automation.Language.VariableExpressionAst]
+        if (-not $tgt) { continue }
+        $vn = $tgt.VariablePath.UserPath
+        foreach ($pn in $pnames.Keys) {
+            if ($vn -ceq $pn) { continue }
+            if ($vn -ieq $pn) {
+                Write-Host ("        " + $fn.Name + ": строка " + $asg.Extent.StartLineNumber + ", " + $vn + " затирает параметр " + $pn)
+                $collide++
+            }
+        }
+    }
+}
+Check 'локальные переменные не затирают параметры функций' ($collide -eq 0) ("столкновений: " + $collide)
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Журнал изменений и данные программы'
+$log2 = Get-EngineJson @('-ChangeLog')
+Check 'журнал изменений отвечает' ($null -ne $log2 -and $null -ne $log2.count)
+$rawLog = Run-Engine @('-ChangeLog')
+$lineLog = @($rawLog -split "`n" | Where-Object { $_.TrimStart().StartsWith('###JSON###') })[0]
+Check 'записи журнала приходят списком' ($lineLog -match '"items"\s*:\s*\[')
+$data = Get-EngineJson @('-DataInfo')
+Check 'данные программы читаются' ($null -ne $data -and $null -ne $data.folder)
+if ($data) { Check 'папка данных названа' ("$($data.folder)" -like '*Win11Privacy*') "$($data.folder)" }
+$noItems = Get-EngineJson @('-RestoreItems')
+Check 'возврат без выбора ничего не делает' ($null -ne $noItems)
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
 Write-Host 'Применение (тестовый прогон, ничего не меняется)'
 if ($isAdmin) {
     $mods = 'telemetry,errors,activity,input,edge,ads,copilot'
