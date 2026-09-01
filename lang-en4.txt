@@ -1,0 +1,49 @@
+# Страница «Автозапуск» и данные, которые для неё отдаёт движок
+Автозапуск	Startup
+Что стартует вместе с Windows	What starts with Windows
+Обновляторы, агенты телеметрии и помощники производителя запускаются при\n	Updaters, telemetry agents and vendor helpers run at every sign-in.\n
+каждом входе. Отключение обратимо: запись остаётся на месте, просто гасится.	Turning one off is reversible: the entry stays put, it is only switched off.
+Отключить выбранные	Turn off selected
+Вернуть выбранные	Turn back on
+Чтение автозагрузки…	Reading the startup list…
+Не удалось прочитать автозагрузку	Could not read the startup list
+Стартует без нужды — можно отключить	Starts for no good reason — safe to turn off
+Остальное — отключайте, только если знаете, что это	The rest — turn off only if you know what it is
+Уже отключено	Already off
+отключено	off
+лучше не трогать	better left alone
+лишнее	not needed
+Записей автозапуска: 	Startup entries: 
+, работает: 	, running: 
+, лишних: 	, not needed: 
+Отключённое возвращается кнопкой «Вернуть выбранные» или общим откатом.	Anything switched off comes back with "Turn back on" or the full rollback.
+Отметьте галочками, какие записи менять.	Tick the entries you want to change.
+Будет отключено записей автозапуска: 	Startup entries to be turned off: 
+Сами программы остаются на месте — они просто перестанут\n	The programs themselves stay installed — they will simply stop\n
+запускаться при входе. Вернуть можно этой же страницей.\n\nПродолжить?	starting at sign-in. This page brings them back.\n\nContinue?
+Отключение автозапуска	Turning off startup entries
+Возврат автозапуска…	Restoring startup entries…
+Отключение автозапуска…	Turning off startup entries…
+Программ стартует вместе с Windows	Programs starting with Windows
+• Быстрые клавиши: Ctrl+1…9 и Ctrl+0 — страницы, Ctrl+F — поиск по настройкам.	• Shortcuts: Ctrl+1…9 and Ctrl+0 — pages, Ctrl+F — search the settings.
+# откуда взялась запись
+реестр, все пользователи	registry, all users
+реестр, этот пользователь	registry, this user
+папка автозагрузки, этот пользователь	startup folder, this user
+папка автозагрузки, все пользователи	startup folder, all users
+планировщик задач, при входе	task scheduler, at sign-in
+# что это за программа
+обновлятор Google: работает постоянно и шлёт статистику	Google updater: always running, sends usage stats
+автозапуск и обновлятор Edge	Edge auto-launch and updater
+служба обновлений Adobe	Adobe update service
+спутник драйвера NVIDIA: телеметрия и вход в аккаунт	NVIDIA driver companion: telemetry and account sign-in
+OneDrive: синхронизация в облако	OneDrive: syncing to the cloud
+мессенджер Microsoft: висит в фоне ради уведомлений	Microsoft messenger: sits in the background for notifications
+программа сама себя запускает при входе	the program launches itself at sign-in
+облако или спутник, который стартует без спроса	cloud client or companion that starts unasked
+проверка обновлений в фоне	background update check
+фоновый «оптимизатор» с рекламой платной версии	background "optimiser" that advertises its paid version
+программа производителя: собирает сведения о ноутбуке	vendor program: collects details about the laptop
+удалённый доступ: ждёт подключения при каждом входе	remote access: waits for connections at every sign-in
+торрент-клиент стартует вместе с Windows	torrent client starts with Windows
+помощник Microsoft	Microsoft assistant

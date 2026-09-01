@@ -63,6 +63,10 @@ namespace Win11Privacy
         private StackPanel _appsList;
         private Label _appsState;
         private ModernButton _btnAppsRefresh, _btnAppsRemove;
+        private Control _pageStartup;
+        private StackPanel _startupList;
+        private Label _startupState;
+        private ModernButton _btnStartupOff, _btnStartupOn;
         private bool _defsLoaded;
         private FlowLayoutPanel _homeActions;
         private float _chartsMinU = 15.5F;
@@ -176,7 +180,6 @@ namespace Win11Privacy
             A(S5,"oem",L.T("Слежка производителя ноутбука"),L.T("Компоненты сбора данных Honor/HP/Lenovo/Dell/ASUS. Драйверы не трогаются."),GFactory,true,false,true);
 
             A(S6,"cleanup",L.T("Чистка временных файлов"),L.T("Temp, кэш обновлений, эскизы, дампы, корзина."),GDelete,true,false,false);
-            A(S6,"startup",L.T("Показать автозагрузку"),L.T("Отчёт по автозапуску, ничего не отключается."),GPower,true,false,false);
         }
 
         // ================================================================== //
@@ -241,10 +244,11 @@ namespace Win11Privacy
             _pageAudit    = BuildAuditPage();
             _pageMonitor  = BuildMonitorPage();
             _pageApps     = BuildAppsPage();
+            _pageStartup  = BuildStartupPage();
             _pageGuard    = BuildGuardPage();
             _pageLog      = BuildLogPage();
             _pageAbout    = BuildAboutPage();
-            foreach (Control p in new[] { _pageHome, _pageSettings, _pageXray, _pageDossier, _pageAudit, _pageMonitor, _pageApps, _pageGuard, _pageLog, _pageAbout })
+            foreach (Control p in new[] { _pageHome, _pageSettings, _pageXray, _pageDossier, _pageAudit, _pageMonitor, _pageApps, _pageStartup, _pageGuard, _pageLog, _pageAbout })
             {
                 p.Dock = DockStyle.Fill; p.Visible = false; _content.Controls.Add(p);
             }
@@ -278,6 +282,7 @@ namespace Win11Privacy
             AddNav(nav, "audit",    L.T("Проверка"),  GNav2);
             AddNav(nav, "monitor",  L.T("Монитор"),   GNav3);
             AddNav(nav, "apps",     L.T("Приложения"), GApp);
+            AddNav(nav, "startup",  L.T("Автозапуск"), GPower);
             AddNav(nav, "guard",    L.T("Страж"),     GShield);
             AddNav(nav, "log",      L.T("Журнал"),    GNav5);
             AddNav(nav, "about",    L.T("О программе"),GNav6);
@@ -362,11 +367,37 @@ namespace Win11Privacy
                 if (_navTip != null) _navTip.SetToolTip(n, c ? n.Text : "");
             }
             if (_hamburger != null) _hamburger.Invalidate();
-            foreach (NavItem n in _nav)
-                if (n.Selected && _navHost != null) _navHost.MoveTo(n, false);
-            if (_navHost != null) _navHost.Invalidate();
+            LayoutNav();
             _side.ResumeLayout(true);
             _side.Invalidate(true);
+        }
+
+        // ================================================================== //
+        //  Пунктов навигации одиннадцать — на невысоком экране они перестают
+        //  помещаться и залезают под подпись о системе. Шаг сетки сжимается
+        //  под свободную высоту, а подпись прячется первой.
+        // ================================================================== //
+        private void LayoutNav()
+        {
+            if (_navHost == null || _side == null || _nav.Count == 0) return;
+            int u = Font.Height;
+            int head = (int)(u * 3.2F) + (int)(u * 2.3F);          // шапка бренда + гамбургер
+            int free = _side.ClientSize.Height - _side.Padding.Vertical - head - _navHost.Padding.Top;
+            int full = (int)(u * 2.7F) * _nav.Count;
+            int sysH = (int)(u * 3.2F);
+            bool showSys = !EffectiveCollapsed() && (free - sysH) >= full;
+            if (_sysInfoLabel != null) _sysInfoLabel.Visible = showSys;
+            if (showSys) free -= sysH;
+            int pitch = Math.Min((int)(u * 2.7F), Math.Max((int)(u * 2.05F), free / _nav.Count));
+            int ih = Math.Max((int)(u * 1.7F), pitch - (int)(u * 0.2F));
+            for (int i = 0; i < _nav.Count; i++)
+            {
+                _nav[i].Height = ih;
+                _nav[i].Top = _navHost.Padding.Top + i * pitch;
+            }
+            _navHost.Height = _navHost.Padding.Top + pitch * _nav.Count + (int)(u * 0.4F);
+            foreach (NavItem n in _nav) if (n.Selected) _navHost.MoveTo(n, false);
+            _navHost.Invalidate();
         }
 
         protected override void OnResize(EventArgs e)
@@ -374,6 +405,7 @@ namespace Win11Privacy
             base.OnResize(e);
             bool auto = ClientSize.Width < Font.Height * 58;
             if (auto != _autoCollapsed) { _autoCollapsed = auto; AnimateSidebar(); }
+            LayoutNav();
         }
 
         // Плавное сворачивание/разворачивание панели
@@ -431,6 +463,7 @@ namespace Win11Privacy
             if (key == "audit") return _pageAudit;
             if (key == "monitor") return _pageMonitor;
             if (key == "apps") return _pageApps;
+            if (key == "startup") return _pageStartup;
             if (key == "guard") return _pageGuard;
             if (key == "log") return _pageLog;
             return _pageAbout;
@@ -488,6 +521,7 @@ namespace Win11Privacy
             _pageAudit.Visible    = (key == "audit");
             _pageMonitor.Visible  = (key == "monitor");
             _pageApps.Visible     = (key == "apps");
+            _pageStartup.Visible  = (key == "startup");
             _pageGuard.Visible    = (key == "guard");
             _pageLog.Visible      = (key == "log");
             _pageAbout.Visible    = (key == "about");
@@ -499,6 +533,7 @@ namespace Win11Privacy
             if (key == "audit" && _auditGroups != null && _auditGroups.Controls.Count == 0) RunAudit();
             if (key == "monitor" && _monitorList != null && _monitorList.Controls.Count == 0) RefreshMonitor();
             if (key == "apps" && _appsList != null && _appsList.Controls.Count == 0) RefreshApps();
+            if (key == "startup" && _startupList != null && _startupList.Controls.Count == 0) RefreshStartup();
         }
 
         // ================================================================== //
@@ -1934,6 +1969,167 @@ namespace Win11Privacy
         }
 
         // ================================================================== //
+        //  Страница: Автозапуск
+        //  Что стартует вместе с Windows. Отключается ровно так же, как в
+        //  диспетчере задач — отметкой, а не удалением: включить обратно
+        //  можно той же кнопкой, и всё это попадает в журнал отката.
+        // ================================================================== //
+        private Control BuildStartupPage()
+        {
+            int u = Font.Height;
+            TableLayoutPanel page = new TableLayoutPanel();
+            page.ColumnCount = 1; page.RowCount = 3;
+            page.BackColor = Theme.WindowBg;
+            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            page.RowStyles.Add(new RowStyle(SizeType.Absolute, (int)(u * 7.6F)));
+            page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            page.Controls.Add(PageTitle(L.T("Что стартует вместе с Windows")), 0, 0);
+
+            Card ctl = new Card();
+            ctl.Dock = DockStyle.Fill;
+            ctl.Margin = new Padding(0, (int)(u * 0.5F), 0, (int)(u * 0.5F));
+            ctl.Padding = new Padding((int)(u * 0.9F), (int)(u * 0.7F), (int)(u * 0.9F), (int)(u * 0.7F));
+            TableLayoutPanel ci = new TableLayoutPanel();
+            ci.Dock = DockStyle.Fill; ci.AutoSize = true; ci.ColumnCount = 1; ci.RowCount = 2;
+            ci.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            ci.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            ci.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _startupState = new Label();
+            _startupState.AutoSize = false; _startupState.Dock = DockStyle.Fill;
+            _startupState.TextAlign = ContentAlignment.MiddleLeft; _startupState.ForeColor = Theme.TextDim;
+            _startupState.Text = L.T("Обновляторы, агенты телеметрии и помощники производителя запускаются при\n") +
+                                 L.T("каждом входе. Отключение обратимо: запись остаётся на месте, просто гасится.");
+            ci.Controls.Add(_startupState, 0, 0);
+            FlowLayoutPanel sb = new FlowLayoutPanel();
+            AttachButtonRow(sb, ctl);
+            sb.Margin = new Padding(0, (int)(u * 0.5F), 0, 0);
+            ModernButton refresh = new ModernButton(L.T("Обновить список"), false);
+            refresh.Click += delegate { RefreshStartup(); };
+            ModernButton pick = new ModernButton(L.T("Отметить лишнее"), false);
+            pick.Click += delegate { SelectStartupBloat(); };
+            _btnStartupOff = new ModernButton(L.T("Отключить выбранные"), true);
+            _btnStartupOff.Click += delegate { SetStartupSelected(false); };
+            _btnStartupOn = new ModernButton(L.T("Вернуть выбранные"), false);
+            _btnStartupOn.Click += delegate { SetStartupSelected(true); };
+            foreach (ModernButton b in new[] { refresh, pick, _btnStartupOff, _btnStartupOn })
+            { b.Font = b.Primary ? new Font(Font, FontStyle.Bold) : Font; b.Margin = new Padding((int)(u * 0.4F), 0, 0, (int)(u * 0.3F)); sb.Controls.Add(b); }
+            ci.Controls.Add(sb, 0, 1);
+            ctl.Controls.Add(ci);
+            page.Controls.Add(ctl, 0, 1);
+
+            Card list = new Card();
+            list.Dock = DockStyle.Fill; list.Padding = new Padding((int)(u * 0.6F));
+            list.Margin = new Padding(0, 0, 0, (int)(u * 0.3F));
+            _startupList = new StackPanel();
+            _startupList.Dock = DockStyle.Fill; _startupList.Font = Font;
+            _startupList.Padding = new Padding((int)(u * 0.4F));
+            Dwm.DarkScrollbars(_startupList);
+            list.Controls.Add(_startupList);
+            page.Controls.Add(list, 0, 2);
+            return page;
+        }
+
+        private void RefreshStartup()
+        {
+            RunJson("-ListStartup", L.T("Чтение автозагрузки…"), delegate(Dictionary<string, object> d)
+            {
+                RenderStartup(d);
+            });
+        }
+
+        private void RenderStartup(Dictionary<string, object> d)
+        {
+            _startupList.Controls.Clear();
+            if (d == null)
+            {
+                SectionHeader sh = new SectionHeader(L.T("Не удалось прочитать автозагрузку")); sh.Font = Font;
+                _startupList.Controls.Add(sh); _startupList.Restack(); return;
+            }
+            List<object> items = Json.GetArr(d, "items");
+            // три группы: лишнее, остальное работающее, уже погашенное
+            string[] heads = new string[] {
+                L.T("Стартует без нужды — можно отключить"),
+                L.T("Остальное — отключайте, только если знаете, что это"),
+                L.T("Уже отключено")
+            };
+            for (int pass = 0; pass < 3; pass++)
+            {
+                bool head = false;
+                foreach (object o in items)
+                {
+                    Dictionary<string, object> a = Json.Obj(o);
+                    bool on = Json.GetBool(a, "enabled");
+                    bool advise = Json.GetBool(a, "advise");
+                    int group = !on ? 2 : (advise ? 0 : 1);
+                    if (group != pass) continue;
+                    if (!head)
+                    {
+                        SectionHeader sh = new SectionHeader(heads[pass]);
+                        sh.Font = Font; _startupList.Controls.Add(sh); head = true;
+                    }
+                    string name = Json.GetStr(a, "name");
+                    string pub = Json.GetStr(a, "publisher");
+                    string note = L.T(Json.GetStr(a, "note"));
+                    string cmd = Json.GetStr(a, "cmd");
+                    string what = (note.Length > 0 ? note : cmd);
+                    if (what.Length == 0) what = cmd;
+                    string chip = !on ? L.T("отключено")
+                                : (Json.GetBool(a, "keep") ? L.T("лучше не трогать") : (advise ? L.T("лишнее") : ""));
+                    WipeRow r = new WipeRow(Json.GetStr(a, "id"),
+                        pub.Length > 0 ? name + "   ·   " + pub : name,
+                        what + "   ·   " + L.T(Json.GetStr(a, "source")),
+                        chip, GPower, true);
+                    r.Font = Font;
+                    _startupList.Controls.Add(r);
+                }
+            }
+            _startupList.Restack();
+            int total = Json.GetInt(d, "total"), onCount = Json.GetInt(d, "on"), bad = Json.GetInt(d, "advise");
+            _startupState.Text = L.T("Записей автозапуска: ") + total + L.T(", работает: ") + onCount +
+                                 L.T(", лишних: ") + bad + ".\n" +
+                                 L.T("Отключённое возвращается кнопкой «Вернуть выбранные» или общим откатом.");
+        }
+
+        private void SelectStartupBloat()
+        {
+            // разделов может не быть вовсе, поэтому ищем по названию, а не по счёту
+            string head = L.T("Стартует без нужды — можно отключить").ToUpperInvariant();
+            bool inBloat = false;
+            foreach (Control c in _startupList.Controls)
+            {
+                SectionHeader sh = c as SectionHeader;
+                if (sh != null) { inBloat = (sh.Text == head); continue; }
+                WipeRow r = c as WipeRow;
+                if (r != null) r.Checked = inBloat;
+            }
+            _startupList.Invalidate(true);
+        }
+
+        private void SetStartupSelected(bool on)
+        {
+            List<string> ids = new List<string>();
+            foreach (Control c in _startupList.Controls)
+            {
+                WipeRow r = c as WipeRow;
+                if (r != null && r.Checked) ids.Add(r.Id);
+            }
+            if (ids.Count == 0)
+            {
+                MessageBox.Show(this, L.T("Отметьте галочками, какие записи менять."), L.T("Ничего не выбрано"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (!on && MessageBox.Show(this, L.T("Будет отключено записей автозапуска: ") + ids.Count + ".\n\n" +
+                L.T("Сами программы остаются на месте — они просто перестанут\n") +
+                L.T("запускаться при входе. Вернуть можно этой же страницей.\n\nПродолжить?"),
+                L.T("Отключение автозапуска"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            RunStreaming("-StartupSet -StartupValue " + (on ? "On" : "Off") + " -StartupItems \"" + string.Join(",", ids.ToArray()) + "\"",
+                on ? L.T("Возврат автозапуска…") : L.T("Отключение автозапуска…"),
+                delegate { Navigate("startup"); RefreshStartup(); });
+        }
+
+        // ================================================================== //
         //  Страница: Страж
         // ================================================================== //
         private Control BuildGuardPage()
@@ -2065,7 +2261,7 @@ namespace Win11Privacy
                 L.T("• Телеметрия сторонних программ и слежка производителя ноутбука.\n") +
                 L.T("• Блокировка через брандмауэр, а не только hosts; удаление накопленного буфера телеметрии.\n") +
                 L.T("• Профили и тихий запуск из командной строки для настройки нескольких ПК.\n") +
-                L.T("• Быстрые клавиши: Ctrl+1…9 — страницы, Ctrl+F — поиск по настройкам.")));
+                L.T("• Быстрые клавиши: Ctrl+1…9 и Ctrl+0 — страницы, Ctrl+F — поиск по настройкам.")));
 
             f.Controls.Add(AboutCard(L.T("Командная строка"),
                 L.T("Win11Privacy.exe --profile \"C:\\путь\\profile.json\" --silent   тихо применить профиль\n") +
@@ -2349,6 +2545,7 @@ namespace Win11Privacy
                 Keys k = keyData & Keys.KeyCode;
                 int idx = -1;
                 if (k >= Keys.D1 && k <= Keys.D9) idx = (int)(k - Keys.D1);
+                else if (k == Keys.D0) idx = 9;
                 if (idx >= 0 && idx < _nav.Count) { Navigate((string)_nav[idx].Tag); return true; }
                 if (k == Keys.F && _search != null) { Navigate("settings"); _search.Focus(); return true; }
             }
@@ -2751,6 +2948,7 @@ namespace Win11Privacy
             AddProofRow(L.T("Задач телеметрии ещё работает"), Json.GetInt(before, "tasksLive"), Json.GetInt(after, "tasksLive"), "", false);
             AddProofRow(L.T("Доменов телеметрии не отвечает"), Json.GetInt(before, "dnsBlocked"), Json.GetInt(after, "dnsBlocked"), "", true);
             AddProofRow(L.T("Правил брандмауэра против телеметрии"), Json.GetInt(before, "fwRules"), Json.GetInt(after, "fwRules"), "", true);
+            AddProofRow(L.T("Программ стартует вместе с Windows"), Json.GetInt(before, "startupOn"), Json.GetInt(after, "startupOn"), "", false);
 
             int xb = Json.GetInt(before, "xrayPerDay");
             int xa = Json.GetInt(_lastProof, "xrayNow");
@@ -3367,6 +3565,20 @@ namespace Win11Privacy
                 "{\"name\":\"Microsoft.WindowsCamera\",\"title\":\"Microsoft.WindowsCamera\",\"publisher\":\"CN=Microsoft Corporation\",\"bloat\":false}," +
                 "{\"name\":\"Microsoft.Windows.Photos\",\"title\":\"Microsoft.Windows.Photos\",\"publisher\":\"CN=Microsoft Corporation\",\"bloat\":false}]}";
             RenderApps(Json.ParseObject(appsJson));
+
+            string startJson = "{\"time\":\"2026-09-01 12:10\",\"total\":11,\"on\":8,\"advise\":5,\"items\":[" +
+                "{\"id\":\"a1\",\"name\":\"GoogleUpdate\",\"publisher\":\"Google LLC\",\"cmd\":\"C:\\\\Program Files (x86)\\\\Google\\\\Update\\\\GoogleUpdate.exe /c\",\"source\":\"реестр, все пользователи\",\"kind\":\"run\",\"enabled\":true,\"advise\":true,\"keep\":false,\"note\":\"обновлятор Google: работает постоянно и шлёт статистику\"}," +
+                "{\"id\":\"a2\",\"name\":\"OneDrive\",\"publisher\":\"Microsoft Corporation\",\"cmd\":\"C:\\\\Program Files\\\\Microsoft OneDrive\\\\OneDrive.exe /background\",\"source\":\"реестр, этот пользователь\",\"kind\":\"run\",\"enabled\":true,\"advise\":true,\"keep\":false,\"note\":\"OneDrive: синхронизация в облако\"}," +
+                "{\"id\":\"a3\",\"name\":\"NvBackend\",\"publisher\":\"NVIDIA Corporation\",\"cmd\":\"C:\\\\Program Files (x86)\\\\NVIDIA Corporation\\\\Update Core\\\\NvBackend.exe\",\"source\":\"реестр, все пользователи\",\"kind\":\"run\",\"enabled\":true,\"advise\":true,\"keep\":false,\"note\":\"спутник драйвера NVIDIA: телеметрия и вход в аккаунт\"}," +
+                "{\"id\":\"a4\",\"name\":\"HonorPCManager\",\"publisher\":\"HONOR Device Co., Ltd.\",\"cmd\":\"C:\\\\Program Files\\\\Honor\\\\PCManager\\\\PCManager.exe -autorun\",\"source\":\"планировщик задач, при входе\",\"kind\":\"task\",\"enabled\":true,\"advise\":true,\"keep\":false,\"note\":\"программа производителя: собирает сведения о ноутбуке\"}," +
+                "{\"id\":\"a5\",\"name\":\"Steam\",\"publisher\":\"Valve Corporation\",\"cmd\":\"C:\\\\Program Files (x86)\\\\Steam\\\\steam.exe -silent\",\"source\":\"реестр, этот пользователь\",\"kind\":\"run\",\"enabled\":true,\"advise\":true,\"keep\":false,\"note\":\"программа сама себя запускает при входе\"}," +
+                "{\"id\":\"a6\",\"name\":\"SecurityHealth\",\"publisher\":\"Microsoft Corporation\",\"cmd\":\"%windir%\\\\system32\\\\SecurityHealthSystray.exe\",\"source\":\"реестр, все пользователи\",\"kind\":\"run\",\"enabled\":true,\"advise\":false,\"keep\":true,\"note\":\"\"}," +
+                "{\"id\":\"a7\",\"name\":\"RtkAudUService\",\"publisher\":\"Realtek Semiconductor\",\"cmd\":\"RtkAudUService64.exe -background\",\"source\":\"реестр, все пользователи\",\"kind\":\"run\",\"enabled\":true,\"advise\":false,\"keep\":true,\"note\":\"\"}," +
+                "{\"id\":\"a8\",\"name\":\"vmware-tray\",\"publisher\":\"VMware, Inc.\",\"cmd\":\"C:\\\\Program Files (x86)\\\\VMware\\\\vmware-tray.exe\",\"source\":\"реестр, все пользователи\",\"kind\":\"run\",\"enabled\":true,\"advise\":false,\"keep\":false,\"note\":\"\"}," +
+                "{\"id\":\"a9\",\"name\":\"MicrosoftEdgeAutoLaunch\",\"publisher\":\"Microsoft Corporation\",\"cmd\":\"C:\\\\Program Files (x86)\\\\Microsoft\\\\Edge\\\\Application\\\\msedge.exe --no-startup-window\",\"source\":\"реестр, этот пользователь\",\"kind\":\"run\",\"enabled\":false,\"advise\":true,\"keep\":false,\"note\":\"автозапуск и обновлятор Edge\"}," +
+                "{\"id\":\"a10\",\"name\":\"Telegram\",\"publisher\":\"Telegram FZ-LLC\",\"cmd\":\"C:\\\\Users\\\\user\\\\AppData\\\\Roaming\\\\Telegram Desktop\\\\Telegram.exe -autostart\",\"source\":\"папка автозагрузки, этот пользователь\",\"kind\":\"folder\",\"enabled\":false,\"advise\":true,\"keep\":false,\"note\":\"программа сама себя запускает при входе\"}," +
+                "{\"id\":\"a11\",\"name\":\"AdobeAAMUpdater-1.0\",\"publisher\":\"Adobe Inc.\",\"cmd\":\"C:\\\\Program Files (x86)\\\\Common Files\\\\Adobe\\\\OOBE\\\\PDApp\\\\UWA\\\\UpdaterStartupUtility.exe\",\"source\":\"реестр, все пользователи\",\"kind\":\"run\",\"enabled\":false,\"advise\":true,\"keep\":false,\"note\":\"служба обновлений Adobe\"}]}";
+            RenderStartup(Json.ParseObject(startJson));
 
             _lastFoot = Json.ParseObject(foot);
             if (Environment.GetEnvironmentVariable("WIN11_TEST_ONLYFOOT") == "1") _lastSpy = null;

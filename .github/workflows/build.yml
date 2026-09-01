@@ -33,6 +33,14 @@ jobs:
           }
           Write-Host "Движок: синтаксис в порядке"
 
+      - name: Проверить перевод
+        shell: pwsh
+        run: |
+          python tools/gen_lang.py
+          git diff --exit-code -- Lang.cs
+          if ($LASTEXITCODE -ne 0) { throw "Lang.cs разошёлся с lang-en*.txt — перегенерируйте: python tools/gen_lang.py" }
+          Write-Host "Перевод: Lang.cs собран из словарей"
+
       - name: Проверки поведения движка
         shell: powershell
         run: |

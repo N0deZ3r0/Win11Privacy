@@ -79,7 +79,12 @@ param(
     [switch]$SpyAll,
     # --- доказательство результата ---
     [switch]$Proof,
-    [switch]$ProofSave
+    [switch]$ProofSave,
+    # --- автозагрузка ---
+    [switch]$ListStartup,
+    [switch]$StartupSet,
+    [string[]]$StartupItems = @(),
+    [string]$StartupValue = 'Off'
 )
 
 $ErrorActionPreference = 'Continue'
@@ -106,6 +111,7 @@ $Modules   = Expand-List $Modules
 $WipeItems = Expand-List $WipeItems
 $SkipItems = Expand-List $SkipItems
 $AppItems  = Expand-List $AppItems
+$StartupItems = Expand-List $StartupItems
 
 # =========================================================================== #
 #  Константы
@@ -212,6 +218,21 @@ function Split-TaskPath {
 function Ensure-DataDir { if (-not (Test-Path -LiteralPath $script:DataDir)) { New-Item -ItemType Directory -Path $script:DataDir -Force | Out-Null } }
 
 function Save-Json { param([string]$Name, $Object) Ensure-DataDir; ($Object | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $script:DataDir $Name) -Encoding UTF8 }
+# Дописывает накопленный журнал «что было до нас» к changes.json. Раньше это
+# делалось только в самом конце применения модулей — теперь любая команда,
+# меняющая систему, может сохранить свой след для отката одной кнопкой.
+function Save-JournalEntries {
+    if ($DryRun -or $script:Journal.Count -eq 0) { return }
+    try {
+        $prev = Load-Json 'changes.json'
+        $all = New-Object System.Collections.Generic.List[object]
+        if ($prev -and $prev.items) { foreach ($e in @($prev.items)) { $all.Add($e) } }
+        foreach ($e in $script:Journal) { $all.Add($e) }
+        Save-Json 'changes.json' @{ items = $all.ToArray(); updated = (Get-Date).ToString('s') }
+        Write-Log ("Записано в журнал отката: {0}" -f $script:Journal.Count)
+        $script:Journal.Clear()
+    } catch { }
+}
 function Load-Json { param([string]$Name) $p = Join-Path $script:DataDir $Name; if (Test-Path -LiteralPath $p) { try { return (Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null } } return $null }
 
 # =========================================================================== #
@@ -2222,6 +2243,296 @@ if ($RemoveApps) {
 }
 
 # =========================================================================== #
+#  АВТОЗАГРУЗКА
+#  Что стартует вместе с Windows: обновляторы, агенты телеметрии, помощники
+#  производителя. Отключение делается ровно так же, как в диспетчере задач —
+#  отметкой в StartupApproved, а не удалением записи: включить обратно можно
+#  одной кнопкой, и Windows после обновления ничего не «чинит» обратно.
+# =========================================================================== #
+$script:StartupRuns = @(
+    @{ id = 'HKLM'
+       run = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+       ok  = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
+       scope = 'реестр, все пользователи' },
+    @{ id = 'HKLM32'
+       run = 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Run'
+       ok  = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run32'
+       scope = 'реестр, все пользователи' },
+    @{ id = 'HKCU'
+       run = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+       ok  = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
+       scope = 'реестр, этот пользователь' },
+    @{ id = 'HKCU32'
+       run = 'HKCU:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Run'
+       ok  = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run32'
+       scope = 'реестр, этот пользователь' }
+)
+$script:StartupFolders = @(
+    @{ id = 'user';   folder = [Environment]::GetFolderPath('Startup')
+       ok = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder'
+       scope = 'папка автозагрузки, этот пользователь' },
+    @{ id = 'common'; folder = [Environment]::GetFolderPath('CommonStartup')
+       ok = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder'
+       scope = 'папка автозагрузки, все пользователи' }
+)
+
+# Кого узнаём в лицо: зачем эта запись здесь и стоит ли её гасить.
+$script:StartupKnown = @(
+    @{ re = 'googleupdate|google update|gupdate|chromeautolaunch'; note = 'обновлятор Google: работает постоянно и шлёт статистику' },
+    @{ re = 'edgeupdate|microsoftedgeautolaunch|msedgeautolaunch';  note = 'автозапуск и обновлятор Edge' },
+    @{ re = 'adobeaamupdater|adobegcinvoker|adobe arm|acrotray|creative cloud'; note = 'служба обновлений Adobe' },
+    @{ re = 'nvbackend|nvidia (web helper|geforce)|nvtmmon|nvnodelauncher'; note = 'спутник драйвера NVIDIA: телеметрия и вход в аккаунт' },
+    @{ re = 'onedrive'; note = 'OneDrive: синхронизация в облако' },
+    @{ re = 'teams|skype'; note = 'мессенджер Microsoft: висит в фоне ради уведомлений' },
+    @{ re = 'spotify|steam|epicgames|discord|telegram|whatsapp|viber'; note = 'программа сама себя запускает при входе' },
+    @{ re = 'dropbox|yandex\.?disk|mail\.?ru|cloud@mail|amigo|guard\.?mail'; note = 'облако или спутник, который стартует без спроса' },
+    @{ re = 'jusched|java update|itunes|applesyncnotifier|quicktime|bonjour'; note = 'проверка обновлений в фоне' },
+    @{ re = 'ccleaner|driver ?booster|advanced ?systemcare|iobit|wondershare|reimage'; note = 'фоновый «оптимизатор» с рекламой платной версии' },
+    @{ re = 'honor|huawei|pcmanager|lenovo|vantage|hpnotifications|hp support|dellsupport|asus|armoury|acer ?care|msi ?center'; note = 'программа производителя: собирает сведения о ноутбуке' },
+    @{ re = 'teamviewer|anydesk|rustdesk|radmin'; note = 'удалённый доступ: ждёт подключения при каждом входе' },
+    @{ re = 'utorrent|bittorrent|qbittorrent'; note = 'торрент-клиент стартует вместе с Windows' },
+    @{ re = 'cortana|copilot|widgets'; note = 'помощник Microsoft' }
+)
+# Эти лучше не гасить: тачпад, звук, хоткеи и защита. Пометим и не предложим.
+$script:StartupKeepRe = 'securityhealth|windowsdefender|msmpeng|syntpenh|etdctrl|elan|touchpad|hotkey|hcontrol|atkosd|onekey|smartaudio|rtkaud|rthdvcpl|realtek|waves|nahimic|igfxtray|hkcmd|iastoricon|dptf|synaptics|logi(options|tune)|kbd'
+
+# Опознавательный код записи. Имена значений в Run бывают с пробелами и
+# запятыми, поэтому в командную строку идёт base64 — но без «+», «/» и «-»,
+# чтобы PowerShell не принял код за имя параметра.
+function ConvertTo-StartupId {
+    param([string]$Raw)
+    $b = [Text.Encoding]::UTF8.GetBytes($Raw)
+    return ([Convert]::ToBase64String($b)).Replace('+', '.').Replace('/', '_').TrimEnd('=')
+}
+function ConvertFrom-StartupId {
+    param([string]$Id)
+    $s = ([string]$Id).Replace('.', '+').Replace('_', '/')
+    while (($s.Length % 4) -ne 0) { $s += '=' }
+    try { return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s)) } catch { return '' }
+}
+
+# В StartupApproved первый байт: чётный — запись работает, нечётный — погашена.
+function Test-StartupApproved {
+    param([string]$Key, [string]$Name)
+    $v = Get-RegValue $Key $Name
+    if ($null -eq $v) { return $true }
+    try {
+        $bytes = [byte[]]$v
+        if ($bytes.Length -lt 1) { return $true }
+        return (($bytes[0] -band 1) -eq 0)
+    } catch { return $true }
+}
+
+function Set-StartupApproved {
+    param([string]$Key, [string]$Name, [bool]$Enabled)
+    $bytes = New-Object byte[] 12
+    if ($Enabled) { $bytes[0] = 2 }
+    else {
+        $bytes[0] = 3
+        $ft = [BitConverter]::GetBytes((Get-Date).ToFileTime())
+        [Array]::Copy($ft, 0, $bytes, 4, 8)
+    }
+    if (-not (Test-Path -LiteralPath $Key)) { New-Item -Path $Key -Force -ErrorAction Stop | Out-Null }
+    New-ItemProperty -LiteralPath $Key -Name $Name -Value $bytes -PropertyType Binary -Force -ErrorAction Stop | Out-Null
+}
+
+function Get-StartupExe {
+    param([string]$Cmd)
+    if (-not $Cmd) { return '' }
+    $c = ([string]$Cmd).Trim()
+    if ($c.StartsWith('"')) {
+        $i = $c.IndexOf('"', 1)
+        if ($i -gt 1) { return $c.Substring(1, $i - 1) }
+        return $c.Trim('"')
+    }
+    $m = [regex]::Match($c, '^(.+?\.(exe|com|bat|cmd|scr))(\s|$)', 'IgnoreCase')
+    if ($m.Success) { return $m.Groups[1].Value }
+    $sp = $c.IndexOf(' ')
+    if ($sp -gt 0) { return $c.Substring(0, $sp) }
+    return $c
+}
+
+function Get-StartupPublisher {
+    param([string]$Exe)
+    if (-not $Exe) { return '' }
+    try {
+        $p = [Environment]::ExpandEnvironmentVariables($Exe)
+        if (-not (Test-Path -LiteralPath $p)) { return '' }
+        $vi = [Diagnostics.FileVersionInfo]::GetVersionInfo($p)
+        $c = [string]$vi.CompanyName
+        return $c.Trim()
+    } catch { return '' }
+}
+
+function Get-StartupNote {
+    param([string]$Name, [string]$Cmd)
+    $hay = ("$Name $Cmd").ToLowerInvariant()
+    foreach ($k in $script:StartupKnown) { if ($hay -match $k.re) { return $k.note } }
+    return ''
+}
+function Test-StartupKeep {
+    param([string]$Name, [string]$Cmd)
+    return (("$Name $Cmd").ToLowerInvariant() -match $script:StartupKeepRe)
+}
+
+function New-StartupItem {
+    param([string]$Raw, [string]$Name, [string]$Cmd, [string]$Scope, [string]$Kind, [bool]$Enabled)
+    $exe  = Get-StartupExe $Cmd
+    $note = Get-StartupNote $Name $Cmd
+    $keep = Test-StartupKeep $Name $Cmd
+    return @{
+        id        = (ConvertTo-StartupId $Raw)
+        name      = $Name
+        cmd       = $Cmd
+        exe       = $exe
+        source    = $Scope
+        kind      = $Kind
+        enabled   = [bool]$Enabled
+        publisher = (Get-StartupPublisher $exe)
+        note      = $note
+        keep      = [bool]$keep
+        advise    = [bool]($note -and -not $keep)
+    }
+}
+
+function Get-StartupList {
+    $list = @()
+
+    foreach ($src in $script:StartupRuns) {
+        $props = $null
+        try { $props = Get-ItemProperty -LiteralPath $src.run -ErrorAction Stop } catch { }
+        if (-not $props) { continue }
+        foreach ($p in $props.PSObject.Properties) {
+            if ($p.Name -in @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')) { continue }
+            $cmd = [string]$p.Value
+            if (-not $cmd) { continue }
+            $on = Test-StartupApproved $src.ok $p.Name
+            $list += (New-StartupItem ('run|' + $src.id + '|' + $p.Name) $p.Name $cmd $src.scope 'run' $on)
+        }
+    }
+
+    foreach ($src in $script:StartupFolders) {
+        if (-not $src.folder -or -not (Test-Path -LiteralPath $src.folder)) { continue }
+        foreach ($f in @(Get-ChildItem -LiteralPath $src.folder -File -Force -ErrorAction SilentlyContinue)) {
+            if ($f.Name -eq 'desktop.ini') { continue }
+            $target = $f.FullName
+            if ($f.Extension -eq '.lnk') {
+                try {
+                    $sh = New-Object -ComObject WScript.Shell
+                    $lnk = $sh.CreateShortcut($f.FullName)
+                    if ($lnk.TargetPath) { $target = [string]$lnk.TargetPath }
+                } catch { }
+            }
+            $on = Test-StartupApproved $src.ok $f.Name
+            $list += (New-StartupItem ('folder|' + $src.id + '|' + $f.Name) `
+                       ([IO.Path]::GetFileNameWithoutExtension($f.Name)) $target $src.scope 'folder' $on)
+        }
+    }
+
+    $tasks = @()
+    try { $tasks = @(Get-ScheduledTask -ErrorAction Stop) } catch { }
+    foreach ($t in $tasks) {
+        $full = [string]$t.TaskPath + [string]$t.TaskName
+        if ($full -like '\Microsoft\*') { continue }          # системные не показываем
+        if ($t.TaskName -like 'Win11Privacy*') { continue }   # свои задачи тоже
+        $atLogon = $false
+        try {
+            foreach ($g in @($t.Triggers)) {
+                $cn = ''
+                try { $cn = [string]$g.CimClass.CimClassName } catch { }
+                if ($cn -eq 'MSFT_TaskLogonTrigger' -or $cn -eq 'MSFT_TaskBootTrigger') { $atLogon = $true }
+            }
+        } catch { }
+        if (-not $atLogon) { continue }
+        $cmd = ''
+        try {
+            foreach ($a in @($t.Actions)) { if ($a.Execute) { $cmd = [string]$a.Execute; break } }
+        } catch { }
+        $list += (New-StartupItem ('task|' + $full) ([string]$t.TaskName) $cmd 'планировщик задач, при входе' 'task' ($t.State -ne 'Disabled'))
+    }
+
+    return @($list | Sort-Object @{ Expression = { -[int][bool]$_.advise } }, @{ Expression = { $_.name } })
+}
+
+# Возвращает @{ ok = ...; error = ... } — включает или гасит одну запись.
+function Set-StartupState {
+    param([string]$Raw, [bool]$Enabled)
+    $parts = ([string]$Raw) -split '\|', 3
+    if ($parts.Count -lt 2) { return @{ ok = $false; error = 'непонятная запись' } }
+    try {
+        if ($parts[0] -eq 'run') {
+            $src = $null
+            foreach ($s in $script:StartupRuns) { if ($s.id -eq $parts[1]) { $src = $s } }
+            if (-not $src) { return @{ ok = $false; error = 'неизвестный раздел реестра' } }
+            if ($null -eq (Get-RegValue $src.run $parts[2])) { return @{ ok = $false; error = 'записи больше нет' } }
+            Set-StartupApproved $src.ok $parts[2] $Enabled
+            return @{ ok = $true }
+        }
+        if ($parts[0] -eq 'folder') {
+            $src = $null
+            foreach ($s in $script:StartupFolders) { if ($s.id -eq $parts[1]) { $src = $s } }
+            if (-not $src) { return @{ ok = $false; error = 'неизвестная папка автозагрузки' } }
+            Set-StartupApproved $src.ok $parts[2] $Enabled
+            return @{ ok = $true }
+        }
+        if ($parts[0] -eq 'task') {
+            $full = ($Raw.Substring(5))
+            $sp = Split-TaskPath $full
+            if ($Enabled) { Enable-ScheduledTask  -TaskPath $sp[0] -TaskName $sp[1] -ErrorAction Stop | Out-Null }
+            else          { Disable-ScheduledTask -TaskPath $sp[0] -TaskName $sp[1] -ErrorAction Stop | Out-Null }
+            return @{ ok = $true }
+        }
+        return @{ ok = $false; error = 'непонятный вид записи' }
+    } catch {
+        return @{ ok = $false; error = $_.Exception.Message }
+    }
+}
+
+if ($ListStartup) {
+    $stList = @(Get-StartupList)
+    $stOn   = @($stList | Where-Object { $_.enabled })
+    Emit-Json @{ items = $stList; total = $stList.Count; on = $stOn.Count
+                 advise = @($stOn | Where-Object { $_.advise }).Count
+                 time = (Get-Date).ToString('yyyy-MM-dd HH:mm') }
+    exit 0
+}
+
+if ($StartupSet) {
+    $wantOn = ($StartupValue -eq 'On')
+    Write-Section $(if ($wantOn) { 'Автозагрузка: вернуть записи' } else { 'Автозагрузка: отключить записи' })
+    if ($StartupItems.Count -eq 0) { Write-Log '   [-] ничего не выбрано'; Emit-Json @{ changed = 0 }; Write-Log '###DONE###'; exit 0 }
+    $known = @{}
+    foreach ($it in @(Get-StartupList)) { $known[[string]$it.id] = $it }
+    $done = 0
+    foreach ($id in $StartupItems) {
+        $raw = ConvertFrom-StartupId $id
+        if (-not $raw) { Write-Log ("   [!] непонятная запись: {0}" -f $id); $script:Failures++; continue }
+        $it = $known[[string]$id]
+        $label = $(if ($it) { [string]$it.name } else { $raw })
+        if ($it -and ([bool]$it.enabled) -eq $wantOn) { Write-Log ("   [в] {0} -- уже так" -f $label); $script:Already++; continue }
+        if ($DryRun) { Write-Log ("   [тест] {0}" -f $label); continue }
+        $r = Set-StartupState $raw $wantOn
+        if ($r.ok) {
+            Write-Log ("   [+] {0} -- {1}" -f $label, $(if ($wantOn) { 'снова запускается' } else { 'больше не запускается' }))
+            $done++; $script:Changes++
+            try {
+                $script:Journal.Add(@{ kind = 'startup'; id = $raw; name = $label
+                                       old = $(if ($wantOn) { 'Off' } else { 'On' })
+                                       newValue = $(if ($wantOn) { 'On' } else { 'Off' })
+                                       time = (Get-Date).ToString('s') })
+            } catch { }
+        } else {
+            Write-Log ("   [!] {0} -- {1}" -f $label, $r.error); $script:Failures++
+        }
+    }
+    Save-JournalEntries
+    Write-Log ("   изменено записей: {0}" -f $done)
+    Emit-Json @{ changed = $done; failures = $script:Failures }
+    Write-Log '###DONE###'
+    exit 0
+}
+
+# =========================================================================== #
 #  ДОКАЗАТЕЛЬСТВО РЕЗУЛЬТАТА
 #  Индекс говорит лишь «настройки на месте». Здесь собирается то, что можно
 #  сравнить «до» и «после»: сколько событий уходило, сколько доменов молчит,
@@ -2239,6 +2550,12 @@ function Get-ProofSnapshot {
     $dns = @(Get-DnsEvidence)
     $buf = Get-BufferInfo
     $fw = @(Get-NetFirewallRule -Group $script:FwGroup -ErrorAction SilentlyContinue).Count
+    $startOn = 0; $startBad = 0
+    try {
+        $stAll = @(Get-StartupList)
+        $startOn  = @($stAll | Where-Object { $_.enabled }).Count
+        $startBad = @($stAll | Where-Object { $_.enabled -and $_.advise }).Count
+    } catch { }
     $base = Load-Json 'xray-baseline.json'
     $tasks = 0
     try {
@@ -2260,6 +2577,8 @@ function Get-ProofSnapshot {
         etwOff     = $etwOff
         etwTotal   = $etwTotal
         tasksLive  = $tasks
+        startupOn  = $startOn
+        startupBad = $startBad
         xrayPerDay = $(if ($base -and $base.perDay) { [int]$base.perDay } else { 0 })
         diagTrack  = $(try { [string](Get-Service DiagTrack -ErrorAction Stop).StartType } catch { 'нет' })
     }
@@ -2413,8 +2732,17 @@ function Restore-Journal {
     if (-not $j -or -not $j.items) { Write-Log '   [-] журнал пуст — возвращать нечего'; return @{ restored = 0; failed = 0 } }
     $items = @($j.items)
     [array]::Reverse($items)
-    $ok = 0; $bad = 0; $seen = @{}
+    $ok = 0; $bad = 0; $seen = @{}; $startBack = 0
     foreach ($e in $items) {
+        # записи автозагрузки возвращаем тем же способом, каким гасили
+        if ("$($e.kind)" -eq 'startup') {
+            $key = "startup|$($e.id)"
+            if ($seen.ContainsKey($key)) { continue }
+            $seen[$key] = $true
+            $r = Set-StartupState ([string]$e.id) ("$($e.old)" -eq 'On')
+            if ($r.ok) { $startBack++ } else { $bad++ }
+            continue
+        }
         if ("$($e.kind)" -ne 'reg') { continue }
         $key = "$($e.path)|$($e.name)"
         if ($seen.ContainsKey($key)) { continue }      # только самое раннее состояние
@@ -2430,9 +2758,10 @@ function Restore-Journal {
         } catch { $bad++ }
     }
     Write-Log ("   [+] возвращено параметров реестра: {0}" -f $ok)
+    if ($startBack -gt 0) { Write-Log ("   [+] возвращено записей автозагрузки: {0}" -f $startBack) }
     if ($bad -gt 0) { Write-Log ("   [!] не удалось вернуть: {0}" -f $bad) }
     try { Remove-Item -LiteralPath (Join-Path $script:DataDir 'changes.json') -Force -ErrorAction SilentlyContinue } catch { }
-    return @{ restored = $ok; failed = $bad }
+    return @{ restored = $ok; startup = $startBack; failed = $bad }
 }
 
 if ($ChangeLog) {
@@ -2679,27 +3008,26 @@ if (Use-Module 'cleanup') {
 # --- Автозагрузка ----------------------------------------------------------- #
 if (Use-Module 'startup') {
     Write-Section 'Автозагрузка (только отчёт, ничего не отключается)'
-    $items = @()
-    try { $items = @(Get-CimInstance Win32_StartupCommand -ErrorAction Stop) } catch { }
-    if ($items.Count -gt 0) {
-        foreach ($s in $items) { Write-Log ("   * {0}" -f $s.Name); Write-Log ("       команда : {0}" -f $s.Command); Write-Log ("       источник: {0}" -f $s.Location) }
+    $stItems = @(Get-StartupList)
+    if ($stItems.Count -gt 0) {
+        foreach ($s in $stItems) {
+            Write-Log ("   {0} {1}" -f $(if ($s.enabled) { '*' } else { '-' }), $s.name)
+            Write-Log ("       команда : {0}" -f $s.cmd)
+            Write-Log ("       источник: {0}" -f $s.source)
+            if ($s.note) { Write-Log ("       это     : {0}" -f $s.note) }
+        }
+        Write-Log ''
+        Write-Log ("   Всего записей: {0}, из них работает: {1}, лишних: {2}" -f $stItems.Count,
+                   @($stItems | Where-Object { $_.enabled }).Count,
+                   @($stItems | Where-Object { $_.enabled -and $_.advise }).Count)
     } else { Write-Log '   (записей не найдено)' }
-    Write-Log ''; Write-Log '   Отключить лишнее: Ctrl+Shift+Esc -> вкладка «Автозагрузка приложений».'
+    Write-Log ''; Write-Log '   Отключить лишнее: страница «Автозагрузка» или -StartupSet -StartupItems <id> -StartupValue Off.'
 }
 
 # --- Итог ------------------------------------------------------------------- #
 Write-Section 'Итог'
 # журнал для отката — дописываем к тому, что было раньше
-if (-not $DryRun -and $script:Journal.Count -gt 0) {
-    try {
-        $prev = Load-Json 'changes.json'
-        $all = New-Object System.Collections.Generic.List[object]
-        if ($prev -and $prev.items) { foreach ($e in @($prev.items)) { $all.Add($e) } }
-        foreach ($e in $script:Journal) { $all.Add($e) }
-        Save-Json 'changes.json' @{ items = $all.ToArray(); updated = (Get-Date).ToString('s') }
-        Write-Log ("Записано в журнал отката: {0}" -f $script:Journal.Count)
-    } catch { }
-}
+Save-JournalEntries
 
 Write-Log ("Изменений применено : {0}" -f $script:Changes)
 Write-Log ("Было уже настроено : {0}" -f $script:Already)

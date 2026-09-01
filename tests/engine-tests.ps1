@@ -113,6 +113,58 @@ Check 'журнал отката отвечает' ($null -ne $log)
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
+Write-Host 'Автозагрузка'
+$start = Get-EngineJson @('-ListStartup')
+Check 'список автозагрузки отвечает' ($null -ne $start -and $null -ne $start.items)
+if ($start) {
+    $sitems = @($start.items)
+    Check 'счётчики совпадают со списком' ([int]$start.total -eq $sitems.Count) `
+          ("total=" + $start.total + ", записей=" + $sitems.Count)
+    $noName = @($sitems | Where-Object { -not $_.name -or -not $_.id })
+    Check 'у каждой записи есть имя и код' ($noName.Count -eq 0)
+    $sids = @($sitems | ForEach-Object { $_.id })
+    Check 'коды записей уникальны' (($sids | Select-Object -Unique).Count -eq $sids.Count)
+    $badId = @($sids | Where-Object { $_ -match '[ ,]' -or $_.StartsWith('-') })
+    Check 'коды пригодны для командной строки' ($badId.Count -eq 0) ("плохие: " + ($badId -join ' '))
+    $onBefore = @($sitems | Where-Object { $_.enabled }).Count
+    if ($sids.Count -gt 0) {
+        $null = Run-Engine @('-StartupSet', '-StartupValue', 'Off', '-StartupItems', $sids[0], '-DryRun')
+        $after = Get-EngineJson @('-ListStartup')
+        Check 'тестовый прогон ничего не гасит' ([int]$after.on -eq $onBefore) `
+              ("было " + $onBefore + ", стало " + $after.on)
+    }
+}
+
+# Функции пометки берём из самого движка (разбором исходника), чтобы проверять
+# рабочий код, а не его копию. Служебный ключ создаётся и удаляется здесь же.
+$engineAst = [System.Management.Automation.Language.Parser]::ParseFile($engine, [ref]$null, [ref]$null)
+$wanted = @('Get-RegValue', 'Test-StartupApproved', 'Set-StartupApproved', 'ConvertTo-StartupId', 'ConvertFrom-StartupId')
+$found = @()
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($wanted -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $found += $fn.Name }
+}
+Check 'функции автозагрузки найдены в движке' ($found.Count -eq $wanted.Count) ("найдено: " + ($found -join ','))
+if ($found.Count -eq $wanted.Count) {
+    $raw = 'run|HKCU|Имя с пробелом, запятой и «кавычками»'
+    $code = ConvertTo-StartupId $raw
+    Check 'код записи читается обратно' ((ConvertFrom-StartupId $code) -eq $raw)
+    Check 'код записи не спутать с параметром' (-not $code.StartsWith('-') -and $code -notmatch '[ ,]')
+
+    $testKey = 'HKCU:\Software\Win11PrivacyTest'
+    try {
+        if (-not (Test-Path -LiteralPath $testKey)) { New-Item -Path $testKey -Force | Out-Null }
+        Check 'без отметки запись считается работающей' (Test-StartupApproved $testKey 'demo')
+        Set-StartupApproved $testKey 'demo' $false
+        Check 'отметка «погашено» читается' (-not (Test-StartupApproved $testKey 'demo'))
+        Set-StartupApproved $testKey 'demo' $true
+        Check 'отметка «работает» читается' (Test-StartupApproved $testKey 'demo')
+    } finally {
+        Remove-Item -LiteralPath $testKey -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
 Write-Host 'Применение (тестовый прогон, ничего не меняется)'
 if ($isAdmin) {
     $mods = 'telemetry,errors,activity,input,edge,ads,copilot'

@@ -40,7 +40,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(706, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(752, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -747,6 +747,52 @@ namespace Win11Privacy
             _map["из"] = "of";
             _map["Сессии трассировки телеметрии"] = "Telemetry trace sessions";
             _map["нет на этой системе"] = "not present on this system";
+            _map["Автозапуск"] = "Startup";
+            _map["Что стартует вместе с Windows"] = "What starts with Windows";
+            _map["Обновляторы, агенты телеметрии и помощники производителя запускаются при\n"] = "Updaters, telemetry agents and vendor helpers run at every sign-in.\n";
+            _map["каждом входе. Отключение обратимо: запись остаётся на месте, просто гасится."] = "Turning one off is reversible: the entry stays put, it is only switched off.";
+            _map["Отключить выбранные"] = "Turn off selected";
+            _map["Вернуть выбранные"] = "Turn back on";
+            _map["Чтение автозагрузки…"] = "Reading the startup list…";
+            _map["Не удалось прочитать автозагрузку"] = "Could not read the startup list";
+            _map["Стартует без нужды — можно отключить"] = "Starts for no good reason — safe to turn off";
+            _map["Остальное — отключайте, только если знаете, что это"] = "The rest — turn off only if you know what it is";
+            _map["Уже отключено"] = "Already off";
+            _map["отключено"] = "off";
+            _map["лучше не трогать"] = "better left alone";
+            _map["лишнее"] = "not needed";
+            _map["Записей автозапуска: "] = "Startup entries: ";
+            _map[", работает: "] = ", running: ";
+            _map[", лишних: "] = ", not needed: ";
+            _map["Отключённое возвращается кнопкой «Вернуть выбранные» или общим откатом."] = "Anything switched off comes back with \"Turn back on\" or the full rollback.";
+            _map["Отметьте галочками, какие записи менять."] = "Tick the entries you want to change.";
+            _map["Будет отключено записей автозапуска: "] = "Startup entries to be turned off: ";
+            _map["Сами программы остаются на месте — они просто перестанут\n"] = "The programs themselves stay installed — they will simply stop\n";
+            _map["запускаться при входе. Вернуть можно этой же страницей.\n\nПродолжить?"] = "starting at sign-in. This page brings them back.\n\nContinue?";
+            _map["Отключение автозапуска"] = "Turning off startup entries";
+            _map["Возврат автозапуска…"] = "Restoring startup entries…";
+            _map["Отключение автозапуска…"] = "Turning off startup entries…";
+            _map["Программ стартует вместе с Windows"] = "Programs starting with Windows";
+            _map["• Быстрые клавиши: Ctrl+1…9 и Ctrl+0 — страницы, Ctrl+F — поиск по настройкам."] = "• Shortcuts: Ctrl+1…9 and Ctrl+0 — pages, Ctrl+F — search the settings.";
+            _map["реестр, все пользователи"] = "registry, all users";
+            _map["реестр, этот пользователь"] = "registry, this user";
+            _map["папка автозагрузки, этот пользователь"] = "startup folder, this user";
+            _map["папка автозагрузки, все пользователи"] = "startup folder, all users";
+            _map["планировщик задач, при входе"] = "task scheduler, at sign-in";
+            _map["обновлятор Google: работает постоянно и шлёт статистику"] = "Google updater: always running, sends usage stats";
+            _map["автозапуск и обновлятор Edge"] = "Edge auto-launch and updater";
+            _map["служба обновлений Adobe"] = "Adobe update service";
+            _map["спутник драйвера NVIDIA: телеметрия и вход в аккаунт"] = "NVIDIA driver companion: telemetry and account sign-in";
+            _map["OneDrive: синхронизация в облако"] = "OneDrive: syncing to the cloud";
+            _map["мессенджер Microsoft: висит в фоне ради уведомлений"] = "Microsoft messenger: sits in the background for notifications";
+            _map["программа сама себя запускает при входе"] = "the program launches itself at sign-in";
+            _map["облако или спутник, который стартует без спроса"] = "cloud client or companion that starts unasked";
+            _map["проверка обновлений в фоне"] = "background update check";
+            _map["фоновый «оптимизатор» с рекламой платной версии"] = "background \"optimiser\" that advertises its paid version";
+            _map["программа производителя: собирает сведения о ноутбуке"] = "vendor program: collects details about the laptop";
+            _map["удалённый доступ: ждёт подключения при каждом входе"] = "remote access: waits for connections at every sign-in";
+            _map["торрент-клиент стартует вместе с Windows"] = "torrent client starts with Windows";
+            _map["помощник Microsoft"] = "Microsoft assistant";
         }
     }
 }
