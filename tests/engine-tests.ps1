@@ -363,6 +363,30 @@ if (Get-Command Test-AppxProtected -ErrorAction SilentlyContinue) {
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
+Write-Host 'Повторное применение не выдаёт себя за изменение'
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($fn.Name -eq 'Apply-Def') { Invoke-Expression $fn.Extent.Text }
+}
+if (Get-Command Apply-Def -ErrorAction SilentlyContinue) {
+    $DryRun = $false
+    $script:Changes = 0; $script:Already = 0; $script:Failures = 0
+    $envName = 'WIN11PRIVACY_TEST_VAR'
+    [Environment]::SetEnvironmentVariable($envName, $null, 'User')
+    $envDef = @{ T = 'env'; P = $envName; V = '1'; C = 'проба переменной' }
+    Apply-Def $envDef
+    Check 'первая установка считается изменением' (($script:Changes -eq 1) -and ($script:Already -eq 0)) `
+          ("изменений: " + $script:Changes + ", уже настроено: " + $script:Already)
+    Apply-Def $envDef
+    Check 'повторная установка считается уже настроенной' (($script:Changes -eq 1) -and ($script:Already -eq 1)) `
+          ("изменений: " + $script:Changes + ", уже настроено: " + $script:Already)
+    [Environment]::SetEnvironmentVariable($envName, $null, 'User')
+    Check 'проба убрана' ($null -eq [Environment]::GetEnvironmentVariable($envName, 'User'))
+} else {
+    Check 'Apply-Def найдена в движке' $false
+}
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
 Write-Host 'Применение (тестовый прогон, ничего не меняется)'
 if ($isAdmin) {
     $mods = 'telemetry,errors,activity,input,edge,ads,copilot'

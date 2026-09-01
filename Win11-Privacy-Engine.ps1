@@ -711,6 +711,11 @@ function Set-VsCodeValue {
     param([string]$Key, $Value, [string]$Comment)
     $p = Get-VsCodeSettingsPath
     if ($DryRun) { Write-Log "   [тест] $Comment"; return }
+    # файл настроек не переписываем, если там уже стоит нужное
+    $curVal = Get-VsCodeValue $Key
+    if ($null -ne $curVal -and "$curVal".ToLower() -eq "$Value".ToLower()) {
+        Write-Log "   [в] $Comment -- уже настроено"; $script:Already++; return
+    }
     try {
         $dir = Split-Path $p -Parent
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -754,6 +759,10 @@ function Set-FirefoxPolicy {
     $p = Get-FirefoxPoliciesPath
     if (-not $p) { Write-Log "   [-] Firefox не найден"; return }
     if ($DryRun) { Write-Log "   [тест] $Comment"; return }
+    $curVal = Get-FirefoxPolicy $Key
+    if ($null -ne $curVal -and "$curVal".ToLower() -eq "$Value".ToLower()) {
+        Write-Log "   [в] $Comment -- уже настроено"; $script:Already++; return
+    }
     try {
         $dir = Split-Path $p -Parent
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -841,6 +850,9 @@ function Apply-Def {
             if ($DryRun) { Write-Log "   [тест] $($d.C) -- отключить"; return }
             try {
                 $s = Get-Service -Name $d.P -ErrorAction Stop
+                if ($s.StartType -eq 'Disabled' -and $s.Status -ne 'Running') {
+                    Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
+                }
                 if ($s.Status -eq 'Running') { Stop-Service -Name $d.P -Force -ErrorAction SilentlyContinue }
                 Set-Service -Name $d.P -StartupType Disabled -ErrorAction Stop
                 Write-Log "   [+] $($d.C) -- остановлена и отключена"; $script:Changes++
@@ -851,6 +863,9 @@ function Apply-Def {
             if (-not $s) { return }
             if ($DryRun) { Write-Log "   [тест] $($d.C) -- отключить"; return }
             try {
+                if ($s.StartType -eq 'Disabled' -and $s.Status -ne 'Running') {
+                    Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
+                }
                 if ($s.Status -eq 'Running') { Stop-Service -Name $d.P -Force -ErrorAction SilentlyContinue }
                 Set-Service -Name $d.P -StartupType Disabled -ErrorAction Stop
                 Write-Log "   [+] $($d.C) -- отключена"; $script:Changes++
@@ -859,6 +874,8 @@ function Apply-Def {
         'task' {
             $pp = Split-TaskPath $d.P
             if ($DryRun) { Write-Log "   [тест] $($d.C) -- отключить"; return }
+            $st = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
+            if ($st -and $st.State -eq 'Disabled') { Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return }
             try { Disable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null; Write-Log "   [+] $($d.C) -- отключена"; $script:Changes++ }
             catch { Write-Log "   [-] $($d.C) -- не найдена" }
         }
@@ -867,12 +884,16 @@ function Apply-Def {
             if ($ts.Count -eq 0) { return }
             foreach ($t in $ts) {
                 if ($DryRun) { Write-Log "   [тест] задача $($t.TaskName) -- отключить"; continue }
+                if ($t.State -eq 'Disabled') { Write-Log "   [в] задача $($t.TaskName) -- уже отключена"; $script:Already++; continue }
                 try { Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null; Write-Log "   [+] задача $($t.TaskName) -- отключена"; $script:Changes++ }
                 catch { Write-Log "   [-] задача $($t.TaskName) -- не удалось" }
             }
         }
         'env' {
             if ($DryRun) { Write-Log "   [тест] $($d.C)"; return }
+            if ([string][Environment]::GetEnvironmentVariable($d.P, 'User') -eq [string]$d.V) {
+                Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
+            }
             try { [Environment]::SetEnvironmentVariable($d.P, [string]$d.V, 'User'); Write-Log "   [+] $($d.C)"; $script:Changes++ }
             catch { Write-Log "   [!] не удалось: $($d.C)"; $script:Failures++ }
         }
