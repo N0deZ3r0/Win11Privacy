@@ -44,7 +44,8 @@ namespace Win11Privacy
         private TileGrid _dossierTiles;
         private StackPanel _dossierList;
         private Label _dossierState;
-        private ModernButton _btnDossierRefresh, _btnDossierWipe;
+        private ModernButton _btnDossierRefresh, _btnDossierWipe, _btnDossierAll;
+        private bool _spyShowAll;
         private Dictionary<string, object> _lastSpy, _lastFoot;
         private TextBox _search;
         private NavHost _navHost;
@@ -124,6 +125,8 @@ namespace Win11Privacy
 
         public MainForm()
         {
+            LoadLangPref();
+            L.DetectFromSystem();
             Theme.Detect();
 #if LIGHTTEST
             Theme.Apply(false);
@@ -134,45 +137,46 @@ namespace Win11Privacy
 
         private void BuildModules()
         {
-            const string S1="Сбор данных Windows", S2="Реклама и подсказки", S3="ИИ Windows",
-                         S4="Жёсткие меры", S5="Программы", S6="Обслуживание";
+            string S1=L.T("Сбор данных Windows"), S2=L.T("Реклама и подсказки"), S3=L.T("ИИ Windows"),
+                         S4=L.T("Жёсткие меры"), S5=L.T("Программы"), S6=L.T("Обслуживание");
             Action<string,string,string,string,string,bool,bool,bool> A =
                 (sec,id,t,d,g,on,hard,app) => _mods.Add(new ModuleDef(sec,id,t,d,g,on,hard,app));
 
-            A(S1,"telemetry","Телеметрия и диагностика","Диагностические данные, логи и дампы памяти в Microsoft.",GDiag,true,false,false);
-            A(S1,"errors","Отчёты об ошибках","Отчёты о сбоях программ и системы.",GError,true,false,false);
-            A(S1,"activity","История активности и буфер обмена","Лента активности и синхронизация буфера через облако.",GHistory,true,false,false);
-            A(S1,"input","Персонализация ввода и речь","Сбор набранного текста, рукописного ввода, облачная речь.",GKeyboard,true,false,false);
-            A(S1,"edge","Microsoft Edge","Статистика и персонализация Edge; блокировка трекеров.",GGlobe,true,false,false);
-            A(S1,"delivery","Раздача обновлений в интернет","Отдача файлов обновлений чужим ПК.",GSync,true,false,false);
-            A(S1,"location","Геолокация и «Поиск устройства»","Служба местоположения целиком и отправка координат в Microsoft.",GPin,false,false,false);
+            A(S1,"telemetry",L.T("Телеметрия и диагностика"),L.T("Диагностические данные, логи и дампы памяти в Microsoft."),GDiag,true,false,false);
+            A(S1,"errors",L.T("Отчёты об ошибках"),L.T("Отчёты о сбоях программ и системы."),GError,true,false,false);
+            A(S1,"activity",L.T("История активности и буфер обмена"),L.T("Лента активности и синхронизация буфера через облако."),GHistory,true,false,false);
+            A(S1,"input",L.T("Персонализация ввода и речь"),L.T("Сбор набранного текста, рукописного ввода, облачная речь."),GKeyboard,true,false,false);
+            A(S1,"edge","Microsoft Edge",L.T("Статистика и персонализация Edge; блокировка трекеров."),GGlobe,true,false,false);
+            A(S1,"delivery",L.T("Раздача обновлений в интернет"),L.T("Отдача файлов обновлений чужим ПК."),GSync,true,false,false);
+            A(S1,"onedrive",L.T("OneDrive: синхронизация и реклама"),L.T("Отключает выгрузку файлов в облако и рекламу OneDrive в Проводнике. Файлы на диске остаются."),GSync,false,false,false);
+            A(S1,"location",L.T("Геолокация и «Поиск устройства»"),L.T("Служба местоположения целиком и отправка координат в Microsoft."),GPin,false,false,false);
 
-            A(S2,"ads","Рекламный ID и реклама","Реклама в Пуске, на экране блокировки и в Параметрах.",GAds,true,false,false);
-            A(S2,"widgets","Виджеты и лента новостей","Лента MSN на панели задач, которая изучает ваши интересы.",GGlobe,false,false,false);
-            A(S2,"search","Поиск: Bing и Cortana","Поиск в Пуске без обращения в интернет и к Cortana.",GSearch,true,false,false);
+            A(S2,"ads",L.T("Рекламный ID и реклама"),L.T("Реклама в Пуске, на экране блокировки и в Параметрах."),GAds,true,false,false);
+            A(S2,"widgets",L.T("Виджеты и лента новостей"),L.T("Лента MSN на панели задач, которая изучает ваши интересы."),GGlobe,false,false,false);
+            A(S2,"search",L.T("Поиск: Bing и Cortana"),L.T("Поиск в Пуске без обращения в интернет и к Cortana."),GSearch,true,false,false);
 
-            A(S3,"copilot","Copilot и Recall","ИИ-помощник и запись снимков экрана Recall.",GRobot,true,false,false);
-            A(S3,"ai","Все ИИ-функции","Click to Do, Copilot в Блокноте/Paint/Edge, ИИ в Проводнике и поиске.",GChip,true,false,false);
+            A(S3,"copilot",L.T("Copilot и Recall"),L.T("ИИ-помощник и запись снимков экрана Recall."),GRobot,true,false,false);
+            A(S3,"ai",L.T("Все ИИ-функции"),L.T("Click to Do, Copilot в Блокноте/Paint/Edge, ИИ в Проводнике и поиске."),GChip,true,false,false);
 
-            A(S4,"services","Службы и задачи телеметрии","Останавливает DiagTrack и задачи планировщика.",GShield,false,true,false);
-            A(S4,"hosts","Блокировка доменов (hosts)","25 адресов Microsoft в файл hosts.",GDoc,false,true,false);
-            A(S4,"firewall","Блокировка через брандмауэр","Исходящие соединения служб телеметрии. Надёжнее hosts.",GFire,false,true,false);
-            A(S4,"buffer","Стереть неотправленную телеметрию","Удаляет накопленный буфер C:\\ProgramData\\Microsoft\\Diagnosis.",GBroom,false,true,false);
-            A(S4,"defender","Защитник: облако и образцы","Отправка подозрительных файлов и облачная проверка MAPS. Чуть снижает защиту.",GShield,false,true,false);
-            A(S4,"fwips","Блокировка адресов телеметрии","Брандмауэр режет сами IP сбора данных — hosts телеметрия обходит. Если что-то отвалится, снимите и откатите.",GFire,false,true,false);
-            A(S4,"doh","Запретить шифрованный DNS","Через DoH браузеры и Windows обходят блокировку по доменам. Отключение вернёт видимость запросов провайдеру.",GGlobe,false,true,false);
+            A(S4,"services",L.T("Службы и задачи телеметрии"),L.T("Останавливает DiagTrack и задачи планировщика."),GShield,false,true,false);
+            A(S4,"hosts",L.T("Блокировка доменов (hosts)"),L.T("25 адресов Microsoft в файл hosts."),GDoc,false,true,false);
+            A(S4,"firewall",L.T("Блокировка через брандмауэр"),L.T("Исходящие соединения служб телеметрии. Надёжнее hosts."),GFire,false,true,false);
+            A(S4,"buffer",L.T("Стереть неотправленную телеметрию"),L.T("Удаляет накопленный буфер C:\\ProgramData\\Microsoft\\Diagnosis."),GBroom,false,true,false);
+            A(S4,"defender",L.T("Защитник: облако и образцы"),L.T("Отправка подозрительных файлов и облачная проверка MAPS. Чуть снижает защиту."),GShield,false,true,false);
+            A(S4,"fwips",L.T("Блокировка адресов телеметрии"),L.T("Брандмауэр режет сами IP сбора данных — hosts телеметрия обходит. Если что-то отвалится, снимите и откатите."),GFire,false,true,false);
+            A(S4,"doh",L.T("Запретить шифрованный DNS"),L.T("Через DoH браузеры и Windows обходят блокировку по доменам. Отключение вернёт видимость запросов провайдеру."),GGlobe,false,true,false);
 
-            A(S5,"app_nvidia","NVIDIA","Телеметрия драйвера и GeForce Experience.",GApp,true,false,true);
-            A(S5,"app_vscode","Visual Studio Code","Телеметрия и эксперименты редактора.",GApp,true,false,true);
-            A(S5,"app_chrome","Google Chrome","Статистика, Privacy Sandbox, отправка адресов.",GApp,true,false,true);
-            A(S5,"app_firefox","Mozilla Firefox","Телеметрия и исследования Firefox.",GApp,true,false,true);
-            A(S5,"app_office","Microsoft Office","Телеметрия клиента и отправка данных.",GApp,true,false,true);
-            A(S5,"app_devtools","PowerShell 7 / .NET SDK","Телеметрия средств разработки.",GApp,true,false,true);
-            A(S5,"app_vs","Visual Studio","Программа улучшения качества и телеметрия.",GApp,true,false,true);
-            A(S5,"oem","Слежка производителя ноутбука","Компоненты сбора данных Honor/HP/Lenovo/Dell/ASUS. Драйверы не трогаются.",GFactory,true,false,true);
+            A(S5,"app_nvidia","NVIDIA",L.T("Телеметрия драйвера и GeForce Experience."),GApp,true,false,true);
+            A(S5,"app_vscode","Visual Studio Code",L.T("Телеметрия и эксперименты редактора."),GApp,true,false,true);
+            A(S5,"app_chrome","Google Chrome",L.T("Статистика, Privacy Sandbox, отправка адресов."),GApp,true,false,true);
+            A(S5,"app_firefox","Mozilla Firefox",L.T("Телеметрия и исследования Firefox."),GApp,true,false,true);
+            A(S5,"app_office","Microsoft Office",L.T("Телеметрия клиента и отправка данных."),GApp,true,false,true);
+            A(S5,"app_devtools","PowerShell 7 / .NET SDK",L.T("Телеметрия средств разработки."),GApp,true,false,true);
+            A(S5,"app_vs","Visual Studio",L.T("Программа улучшения качества и телеметрия."),GApp,true,false,true);
+            A(S5,"oem",L.T("Слежка производителя ноутбука"),L.T("Компоненты сбора данных Honor/HP/Lenovo/Dell/ASUS. Драйверы не трогаются."),GFactory,true,false,true);
 
-            A(S6,"cleanup","Чистка временных файлов","Temp, кэш обновлений, эскизы, дампы, корзина.",GDelete,true,false,false);
-            A(S6,"startup","Показать автозагрузку","Отчёт по автозапуску, ничего не отключается.",GPower,true,false,false);
+            A(S6,"cleanup",L.T("Чистка временных файлов"),L.T("Temp, кэш обновлений, эскизы, дампы, корзина."),GDelete,true,false,false);
+            A(S6,"startup",L.T("Показать автозагрузку"),L.T("Отчёт по автозапуску, ничего не отключается."),GPower,true,false,false);
         }
 
         // ================================================================== //
@@ -180,7 +184,7 @@ namespace Win11Privacy
         {
             Font = Theme.PickFont(Theme.UiFonts, BaseFontSize, FontStyle.Regular);
             AutoScaleMode = AutoScaleMode.Font;
-            Text = "Приватность Windows 11";
+            Text = L.T("Приватность Windows 11");
             BackColor = Theme.WindowBg;
             ForeColor = Theme.Text;
             DoubleBuffered = true;
@@ -211,7 +215,7 @@ namespace Win11Privacy
             _titleBar.Height = (int)(u * 2.15F);
             _titleBar.Font = Font;
             _titleBar.Logo = _appImage;
-            _titleBar.Caption = "Приватность Windows 11";
+            _titleBar.Caption = L.T("Приватность Windows 11");
             _titleBar.Margin = new Padding(0);
             root.Controls.Add(_titleBar, 0, 0);
             root.SetColumnSpan(_titleBar, 2);
@@ -267,16 +271,16 @@ namespace Win11Privacy
             nav.Padding = new Padding(0, (int)(u * 0.6F), 0, 0);
             _navHost = nav;
 
-            AddNav(nav, "home", "Обзор", GHome);
-            AddNav(nav, "settings", "Настройки", GNav1);
-            AddNav(nav, "xray",     "Рентген",   GXray);
-            AddNav(nav, "dossier",  "Досье",     GFinger);
-            AddNav(nav, "audit",    "Проверка",  GNav2);
-            AddNav(nav, "monitor",  "Монитор",   GNav3);
-            AddNav(nav, "apps",     "Приложения", GApp);
-            AddNav(nav, "guard",    "Страж",     GShield);
-            AddNav(nav, "log",      "Журнал",    GNav5);
-            AddNav(nav, "about",    "О программе",GNav6);
+            AddNav(nav, "home", L.T("Обзор"), GHome);
+            AddNav(nav, "settings", L.T("Настройки"), GNav1);
+            AddNav(nav, "xray",     L.T("Рентген"),   GXray);
+            AddNav(nav, "dossier",  L.T("Досье"),     GFinger);
+            AddNav(nav, "audit",    L.T("Проверка"),  GNav2);
+            AddNav(nav, "monitor",  L.T("Монитор"),   GNav3);
+            AddNav(nav, "apps",     L.T("Приложения"), GApp);
+            AddNav(nav, "guard",    L.T("Страж"),     GShield);
+            AddNav(nav, "log",      L.T("Журнал"),    GNav5);
+            AddNav(nav, "about",    L.T("О программе"),GNav6);
             nav.Height = (int)(u * 2.7F * _nav.Count + u * 1.0F);
             side.Controls.Add(nav);
 
@@ -300,7 +304,7 @@ namespace Win11Privacy
             brand.Controls.Add(logo, 0, 0);
 
             _brandLabel = new Label();
-            _brandLabel.Text = "Приватность\nWindows 11";
+            _brandLabel.Text = L.T("Приватность\nWindows 11");
             _brandLabel.Font = new Font(Font, FontStyle.Bold);
             _brandLabel.ForeColor = Theme.Text;
             _brandLabel.AutoSize = false;
@@ -316,7 +320,7 @@ namespace Win11Privacy
             _hamburger.Dock = DockStyle.Top;
             _hamburger.Height = (int)(u * 2.3F);
             _hamburger.Click += delegate { _userCollapsed = !EffectiveCollapsed(); AnimateSidebar(); };
-            _navTip.SetToolTip(_hamburger, "Свернуть или развернуть панель");
+            _navTip.SetToolTip(_hamburger, L.T("Свернуть или развернуть панель"));
             side.Controls.Add(_hamburger);
 
             // индикатор системы внизу
@@ -327,7 +331,7 @@ namespace Win11Privacy
             sysInfo.Height = (int)(u * 3.2F);
             sysInfo.ForeColor = Theme.TextFaint;
             sysInfo.Font = new Font(Font.FontFamily, Font.Size * 0.85F);
-            sysInfo.Text = "Определение системы…";
+            sysInfo.Text = L.T("Определение системы…");
             sysInfo.TextAlign = ContentAlignment.BottomLeft;
             sysInfo.BackColor = Color.Transparent;
             side.Controls.Add(sysInfo);
@@ -519,7 +523,7 @@ namespace Win11Privacy
             head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-            Label h = PageTitle("Что отключить");
+            Label h = PageTitle(L.T("Что отключить"));
             head.Controls.Add(h, 0, 0);
 
             _search = new TextBox();
@@ -531,14 +535,14 @@ namespace Win11Privacy
             _search.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
             _search.Margin = new Padding((int)(u * 0.8F), 0, (int)(u * 0.5F), (int)(u * 0.45F));
             _search.TextChanged += delegate { ApplySettingsFilter(); };
-            Dwm.Placeholder(_search, "Поиск по настройкам…");
+            Dwm.Placeholder(_search, L.T("Поиск по настройкам…"));
             head.Controls.Add(_search, 1, 0);
 
             FlowLayoutPanel quick = new FlowLayoutPanel();
             quick.AutoSize = true; quick.WrapContents = false; quick.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
-            ModernButton a1 = Ghost("Выбрать всё"); a1.Click += delegate { SetAll(true); };
-            ModernButton a2 = Ghost("Снять всё"); a2.Click += delegate { SetAll(false); };
-            ModernButton a3 = Ghost("По умолчанию"); a3.Click += delegate { ResetDefaults(); };
+            ModernButton a1 = Ghost(L.T("Выбрать всё")); a1.Click += delegate { SetAll(true); };
+            ModernButton a2 = Ghost(L.T("Снять всё")); a2.Click += delegate { SetAll(false); };
+            ModernButton a3 = Ghost(L.T("По умолчанию")); a3.Click += delegate { ResetDefaults(); };
             quick.Controls.Add(a1); quick.Controls.Add(a2); quick.Controls.Add(a3);
             head.Controls.Add(quick, 2, 0);
             page.Controls.Add(head, 0, 0);
@@ -562,10 +566,10 @@ namespace Win11Privacy
                 r.Font = Font; m.Row = r;
                 _settingsList.Controls.Add(r);
             }
-            SectionHeader safe = new SectionHeader("Безопасность"); safe.Font = Font; _settingsList.Controls.Add(safe);
-            _optBackup  = MakeSafeRow("Резервная копия реестра", "На рабочий стол сохраняются .reg-файлы затрагиваемых веток.", GSave, true);
-            _optRestore = MakeSafeRow("Точка восстановления", "Позволяет откатить всё через «Восстановление системы».", GUndo, true);
-            _optDry     = MakeSafeRow("Тестовый прогон", "Показать список действий в журнале, ничего не меняя.", GEye, false);
+            SectionHeader safe = new SectionHeader(L.T("Безопасность")); safe.Font = Font; _settingsList.Controls.Add(safe);
+            _optBackup  = MakeSafeRow(L.T("Резервная копия реестра"), L.T("На рабочий стол сохраняются .reg-файлы затрагиваемых веток."), GSave, true);
+            _optRestore = MakeSafeRow(L.T("Точка восстановления"), L.T("Позволяет откатить всё через «Восстановление системы»."), GUndo, true);
+            _optDry     = MakeSafeRow(L.T("Тестовый прогон"), L.T("Показать список действий в журнале, ничего не меняя."), GEye, false);
             _optDry.Toggle.CheckedChanged += delegate { UpdateApplyText(); };
             _settingsList.Controls.Add(_optBackup); _settingsList.Controls.Add(_optRestore); _settingsList.Controls.Add(_optDry);
             card.Controls.Add(_settingsList);
@@ -576,13 +580,13 @@ namespace Win11Privacy
             act.Dock = DockStyle.Fill; act.AutoSize = true;
             act.FlowDirection = FlowDirection.RightToLeft;
             act.WrapContents = false;
-            _btnApply = new ModernButton("Применить", true); _btnApply.Font = new Font(Font, FontStyle.Bold);
+            _btnApply = new ModernButton(L.T("Применить"), true); _btnApply.Font = new Font(Font, FontStyle.Bold);
             _btnApply.Click += OnApply;
-            _btnRevert = new ModernButton("Откат", false); _btnRevert.Click += OnRevert;
-            _btnFolder = new ModernButton("Папка копий", false);
+            _btnRevert = new ModernButton(L.T("Откат"), false); _btnRevert.Click += OnRevert;
+            _btnFolder = new ModernButton(L.T("Папка копий"), false);
             _btnFolder.Click += delegate { try { Process.Start("explorer.exe", Environment.GetFolderPath(Environment.SpecialFolder.Desktop)); } catch { } };
-            _btnProfileSave = new ModernButton("Сохранить профиль", false); _btnProfileSave.Click += OnSaveProfile;
-            _btnProfileLoad = new ModernButton("Загрузить профиль", false); _btnProfileLoad.Click += OnLoadProfile;
+            _btnProfileSave = new ModernButton(L.T("Сохранить профиль"), false); _btnProfileSave.Click += OnSaveProfile;
+            _btnProfileLoad = new ModernButton(L.T("Загрузить профиль"), false); _btnProfileLoad.Click += OnLoadProfile;
             foreach (ModernButton b in new[] { _btnApply, _btnRevert, _btnFolder, _btnProfileSave, _btnProfileLoad })
             { b.Font = b.Primary ? new Font(Font, FontStyle.Bold) : Font; b.Margin = new Padding((int)(u * 0.5F), (int)(u * 0.3F), 0, 0); act.Controls.Add(b); }
             page.Controls.Add(act, 0, 2);
@@ -631,11 +635,11 @@ namespace Win11Privacy
             titles.FlowDirection = FlowDirection.TopDown; titles.WrapContents = false;
             titles.AutoSize = true; titles.Margin = new Padding(0);
             Label big = new Label();
-            big.Text = "Ваша приватность";
+            big.Text = L.T("Ваша приватность");
             big.Font = Theme.PickFont(new[] { "Segoe UI Variable Display", "Segoe UI", "Tahoma" }, Font.Size * 1.95F, FontStyle.Bold);
             big.ForeColor = Theme.Text; big.AutoSize = true; big.Margin = new Padding(0, 0, 0, 2);
             _homeHint = new Label();
-            _homeHint.Text = "Идёт первая проверка — страница заполнится сама.";
+            _homeHint.Text = L.T("Идёт первая проверка — страница заполнится сама.");
             _homeHint.ForeColor = Theme.TextDim; _homeHint.AutoSize = true; _homeHint.Margin = new Padding(2, 0, 0, 0);
             titles.Controls.Add(big); titles.Controls.Add(_homeHint);
             head.Controls.Add(titles, 0, 0);
@@ -644,7 +648,7 @@ namespace Win11Privacy
             _homeSysChip.Font = Font;
             _homeSysChip.Anchor = AnchorStyles.Right | AnchorStyles.Top;
             _homeSysChip.Margin = new Padding(0, (int)(u * 0.4F), 0, 0);
-            _homeSysChip.SetText("Определение системы…");
+            _homeSysChip.SetText(L.T("Определение системы…"));
             head.Controls.Add(_homeSysChip, 1, 0);
             page.Controls.Add(head, 0, 0);
 
@@ -680,21 +684,21 @@ namespace Win11Privacy
             _verdictTitle.Height = (int)(Font.Height * 1.85F); _verdictTitle.AutoEllipsis = true;
             _verdictTitle.Font = Theme.PickFont(new[] { "Segoe UI Variable Display", "Segoe UI", "Tahoma" }, Font.Size * 1.25F, FontStyle.Bold);
             _verdictTitle.ForeColor = Theme.Text;
-            _verdictTitle.Text = "Идёт проверка системы…";
+            _verdictTitle.Text = L.T("Идёт проверка системы…");
             _verdictTitle.Margin = new Padding(0, 0, 0, (int)(u * 0.15F));
             _verdictSub = new Label();
             _verdictSub.AutoSize = false; _verdictSub.Dock = DockStyle.Top;
             _verdictSub.Height = (int)(Font.Height * 1.6F); _verdictSub.AutoEllipsis = true;
             _verdictSub.ForeColor = Theme.TextDim;
-            _verdictSub.Text = "Читаю реальное состояние настроек — это займёт несколько секунд.";
+            _verdictSub.Text = L.T("Читаю реальное состояние настроек — это займёт несколько секунд.");
             _verdictSub.Margin = new Padding(2, 0, 0, (int)(u * 0.5F));
             FlowLayoutPanel minis = new FlowLayoutPanel();
             minis.AutoSize = true; minis.WrapContents = false; minis.Margin = new Padding(0);
             minis.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
             minis.Padding = new Padding(0, (int)(u * 0.15F), 0, 0);
-            _msEvents  = new MiniStat("событий в сутки", GXray, Theme.Warn);
-            _msYear    = new MiniStat("уйдёт за год", GClock, Theme.Err);
-            _msBlocked = new MiniStat("доменов молчат", GFire, Theme.Accent);
+            _msEvents  = new MiniStat(L.T("событий в сутки"), GXray, Theme.Warn);
+            _msYear    = new MiniStat(L.T("уйдёт за год"), GClock, Theme.Err);
+            _msBlocked = new MiniStat(L.T("доменов молчат"), GFire, Theme.Accent);
             foreach (MiniStat m in new[] { _msEvents, _msYear, _msBlocked })
             { m.Font = Font; m.Margin = new Padding(0, 0, (int)(u * 1.0F), 0); minis.Controls.Add(m); }
             verdict.Controls.Add(_verdictTitle, 0, 0);
@@ -709,13 +713,13 @@ namespace Win11Privacy
             actions.Anchor = AnchorStyles.Right;
             actions.Margin = new Padding((int)(u * 0.6F), 0, 0, 0);
             _homeActions = actions;
-            ModernButton bApply = new ModernButton("Настроить и применить", true);
+            ModernButton bApply = new ModernButton(L.T("Настроить и применить"), true);
             bApply.Font = new Font(Font, FontStyle.Bold);
             bApply.Click += delegate { Navigate("settings"); };
-            ModernButton bAudit = new ModernButton("Проверить", false);
+            ModernButton bAudit = new ModernButton(L.T("Проверить"), false);
             bAudit.Font = Font;
             bAudit.Click += delegate { Navigate("audit"); RunAudit(); };
-            ModernButton bDiag = new ModernButton("Диагностика", false);
+            ModernButton bDiag = new ModernButton(L.T("Диагностика"), false);
             bDiag.Font = Font;
             bDiag.Click += OnSelfTest;
             foreach (ModernButton b in new[] { bApply, bAudit, bDiag })
@@ -731,16 +735,16 @@ namespace Win11Privacy
             quick.MinTileWidthU = 13.0F; quick.TileHeightU = 4.0F; quick.MaxCols = 4;
             quick.Margin = new Padding(0, 0, 0, (int)(u * 0.7F));
             quick.Resize += delegate { FitHomeHeight(); };
-            _qcXray    = new ActionCard("Рентген", GXray, Theme.Warn);
-            _qcDossier = new ActionCard("Досье", GFinger, Theme.Err);
-            _qcMonitor = new ActionCard("Монитор", GNav3, Theme.Accent);
-            _qcGuard   = new ActionCard("Страж", GShield, Theme.Ok);
+            _qcXray    = new ActionCard(L.T("Рентген"), GXray, Theme.Warn);
+            _qcDossier = new ActionCard(L.T("Досье"), GFinger, Theme.Err);
+            _qcMonitor = new ActionCard(L.T("Монитор"), GNav3, Theme.Accent);
+            _qcGuard   = new ActionCard(L.T("Страж"), GShield, Theme.Ok);
             _qcXray.Click    += delegate { Navigate("xray"); };
             _qcDossier.Click += delegate { Navigate("dossier"); };
             _qcMonitor.Click += delegate { Navigate("monitor"); };
             _qcGuard.Click   += delegate { Navigate("guard"); };
             foreach (ActionCard c in new[] { _qcXray, _qcDossier, _qcMonitor, _qcGuard })
-            { c.Font = Font; c.SetStatus("ожидание данных…", Theme.TextFaint); quick.Controls.Add(c); }
+            { c.Font = Font; c.SetStatus(L.T("ожидание данных…"), Theme.TextFaint); quick.Controls.Add(c); }
             page.Controls.Add(quick, 0, 2);
 
             // --- диаграммы: что собирают + кто подглядывал ----------------------
@@ -752,15 +756,15 @@ namespace Win11Privacy
             mid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             mid.RowStyles.Add(new RowStyle(SizeType.Absolute, 0F));
 
-            _homeDonutCard = MakeChartCard("Что о вас собирают");
+            _homeDonutCard = MakeChartCard(L.T("Что о вас собирают"));
             _homeDonut = new DonutChart(); _homeDonut.Font = Font; _homeDonut.Dock = DockStyle.Fill;
-            _homeDonut.EmptyHint = "Данные появятся после «Рентгена»:" + "\n" + "включите запись и просканируйте.";
+            _homeDonut.EmptyHint = L.T("Данные появятся после «Рентгена»:") + "\n" + L.T("включите запись и просканируйте.");
             _homeDonutCard.Controls.Add(_homeDonut);
             _homeDonut.BringToFront();
             _homeDonutCard.Margin = new Padding(0, 0, (int)(u * 0.35F), 0);
             mid.Controls.Add(_homeDonutCard, 0, 0);
 
-            _homeChartCard = MakeChartCard("Кто подглядывал — по дням");
+            _homeChartCard = MakeChartCard(L.T("Кто подглядывал — по дням"));
             _homeSensors = new SensorChart(); _homeSensors.Font = Font; _homeSensors.Dock = DockStyle.Fill;
             _homeSensors.BackColor = Theme.CardBg;
             _homeSensors.Cursor = Cursors.Hand;
@@ -891,15 +895,15 @@ namespace Win11Privacy
                 int pct = total > 0 ? (int)Math.Round(100.0 * ok / total) : 0;
                 _homeRing.SetScore(ok, total);
                 _verdictTitle.ForeColor = pct >= 85 ? Theme.Ok : (pct >= 50 ? Theme.Warn : Theme.Err);
-                _verdictTitle.Text = pct >= 85 ? "Система хорошо закрыта"
-                    : (pct >= 50 ? "Защита настроена не полностью" : "Система почти не защищена");
+                _verdictTitle.Text = pct >= 85 ? L.T("Система хорошо закрыта")
+                    : (pct >= 50 ? L.T("Защита настроена не полностью") : L.T("Система почти не защищена"));
                 int fails = total - ok;
-                _verdictSub.Text = ok + " из " + total + " применено" +
-                    (fails > 0 ? "  ·  " + fails + " требуют внимания" : "  ·  всё на месте");
+                _verdictSub.Text = ok + L.T(" из ") + total + L.T(" применено") +
+                    (fails > 0 ? "  ·  " + fails + L.T(" требуют внимания") : L.T("  ·  всё на месте"));
                 int blocked = 0;
                 foreach (object o in Json.GetArr(_lastAudit, "dns")) if (Json.GetBool(Json.Obj(o), "blocked")) blocked++;
                 _msBlocked.SetValue(blocked.ToString());
-                _homeHint.Text = "Данные получены с этого компьютера " + Json.GetStr(_lastAudit, "time") + ".";
+                _homeHint.Text = L.T("Данные получены с этого компьютера ") + Json.GetStr(_lastAudit, "time") + ".";
             }
 
             // мини-показатели и пончик — из рентгена
@@ -913,9 +917,9 @@ namespace Win11Privacy
                 {
                     if (n++ >= 6) break;
                     Dictionary<string, object> c = Json.Obj(o);
-                    d.Add(new KeyValuePair<string, float>(Json.GetStr(c, "name"), Json.GetInt(c, "count")));
+                    d.Add(new KeyValuePair<string, float>(L.T(Json.GetStr(c, "name")), Json.GetInt(c, "count")));
                 }
-                _homeDonut.SetData(d, FormatBig(Json.GetInt(_lastXray, "total")), "событий");
+                _homeDonut.SetData(d, FormatBig(Json.GetInt(_lastXray, "total")), L.T("событий"));
             }
             else _homeDonut.SetData(null, "", "");
 
@@ -927,23 +931,23 @@ namespace Win11Privacy
             if (_qcXray != null)
             {
                 if (_lastXray != null)
-                    _qcXray.SetStatus(FormatBig(Json.GetInt(_lastXray, "perDay")) + " событий/сутки", Theme.TextDim);
+                    _qcXray.SetStatus(FormatBig(Json.GetInt(_lastXray, "perDay")) + L.T(" событий/сутки"), Theme.TextDim);
                 else
-                    _qcXray.SetStatus(_xrayRecording ? "запись включена" : "что собрано о вас", Theme.TextDim);
+                    _qcXray.SetStatus(_xrayRecording ? L.T("запись включена") : L.T("что собрано о вас"), Theme.TextDim);
 
                 int act = _lastSpy != null ? Json.GetInt(_lastSpy, "activeNow") : 0;
                 int week = _lastSpy != null ? Json.GetInt(_lastSpy, "week") : -1;
-                if (act > 0) _qcDossier.SetStatus("используются сейчас!", Theme.Err);
-                else if (week >= 0) _qcDossier.SetStatus(week + " обращений за 7 дней", Theme.TextDim);
-                else _qcDossier.SetStatus("камера, микрофон, след", Theme.TextDim);
+                if (act > 0) _qcDossier.SetStatus(L.T("используются сейчас!"), Theme.Err);
+                else if (week >= 0) _qcDossier.SetStatus(week + L.T(" обращений за 7 дней"), Theme.TextDim);
+                else _qcDossier.SetStatus(L.T("камера, микрофон, след"), Theme.TextDim);
 
                 if (_monitorEnabled)
                     _qcMonitor.SetStatus(_lastMonitor != null
-                        ? Json.GetInt(_lastMonitor, "total") + " соединений/сутки"
-                        : "включён", Theme.TextDim);
-                else _qcMonitor.SetStatus("выключен", Theme.Warn);
+                        ? Json.GetInt(_lastMonitor, "total") + L.T(" соединений/сутки")
+                        : L.T("включён"), Theme.TextDim);
+                else _qcMonitor.SetStatus(L.T("выключен"), Theme.Warn);
 
-                _qcGuard.SetStatus(_guardInstalled ? "на посту" : "выключен",
+                _qcGuard.SetStatus(_guardInstalled ? L.T("на посту") : L.T("выключен"),
                     _guardInstalled ? Theme.TextDim : Theme.Warn);
             }
         }
@@ -967,8 +971,8 @@ namespace Win11Privacy
             head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             page.RowStyles[1] = new RowStyle(SizeType.Absolute, (int)(u * 7.6F));
-            head.Controls.Add(PageTitle("Рентген телеметрии"), 0, 0);
-            _btnReport = new ModernButton("Сохранить отчёт", false);
+            head.Controls.Add(PageTitle(L.T("Рентген телеметрии")), 0, 0);
+            _btnReport = new ModernButton(L.T("Сохранить отчёт"), false);
             _btnReport.Font = Font; _btnReport.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
             _btnReport.Click += OnSaveReport;
             head.Controls.Add(_btnReport, 1, 0);
@@ -987,18 +991,18 @@ namespace Win11Privacy
             _xrayState = new Label();
             _xrayState.AutoSize = false; _xrayState.Dock = DockStyle.Fill;
             _xrayState.TextAlign = ContentAlignment.MiddleLeft; _xrayState.ForeColor = Theme.TextDim;
-            _xrayState.Text = "Показывает НАСТОЯЩИЕ события, которые Windows собрала об этом компьютере,\n" +
-                              "с расшифровкой и сырым содержимым. Включите запись, дайте системе поработать\n" +
-                              "хотя бы час — и нажмите «Сканировать».";
+            _xrayState.Text = L.T("Показывает НАСТОЯЩИЕ события, которые Windows собрала об этом компьютере,\n") +
+                              L.T("с расшифровкой и сырым содержимым. Включите запись, дайте системе поработать\n") +
+                              L.T("хотя бы час — и нажмите «Сканировать».");
             ci.Controls.Add(_xrayState, 0, 0);
             FlowLayoutPanel xb = new FlowLayoutPanel();
             AttachButtonRow(xb, ctl);
             xb.Margin = new Padding(0, (int)(u * 0.5F), 0, 0);
-            _btnXrayRec  = new ModernButton("Включить запись", true);
+            _btnXrayRec  = new ModernButton(L.T("Включить запись"), true);
             _btnXrayRec.Click += OnXrayToggleRecording;
-            _btnXrayScan = new ModernButton("Сканировать", false); _btnXrayScan.Click += delegate { RunXrayScan(false); };
-            _btnXrayBase = new ModernButton("Запомнить как «до»", false); _btnXrayBase.Click += delegate { RunXrayScan(true); };
-            _btnXrayWipe = new ModernButton("Стереть копию", false); _btnXrayWipe.Click += OnXrayWipe;
+            _btnXrayScan = new ModernButton(L.T("Сканировать"), false); _btnXrayScan.Click += delegate { RunXrayScan(false); };
+            _btnXrayBase = new ModernButton(L.T("Запомнить как «до»"), false); _btnXrayBase.Click += delegate { RunXrayScan(true); };
+            _btnXrayWipe = new ModernButton(L.T("Стереть копию"), false); _btnXrayWipe.Click += OnXrayWipe;
             foreach (ModernButton b in new[] { _btnXrayRec, _btnXrayScan, _btnXrayBase, _btnXrayWipe })
             { b.Font = b.Primary ? new Font(Font, FontStyle.Bold) : Font; b.Margin = new Padding((int)(u * 0.4F), 0, 0, (int)(u * 0.3F)); xb.Controls.Add(b); }
             ci.Controls.Add(xb, 0, 1);
@@ -1025,41 +1029,41 @@ namespace Win11Privacy
         private void OnXrayToggleRecording(object sender, EventArgs e)
         {
             if (_xrayRecording)
-            { RunStreaming("-XrayDisable", "Выключение записи…", delegate { RunXrayStatus(); }); return; }
+            { RunStreaming("-XrayDisable", L.T("Выключение записи…"), delegate { RunXrayStatus(); }); return; }
             if (MessageBox.Show(this,
-                "Windows начнёт вести ЛОКАЛЬНУЮ копию своих диагностических событий,\n" +
-                "чтобы их можно было прочитать и показать вам.\n\n" +
-                "Объём отправляемых данных при этом НЕ увеличивается — меняется только\n" +
-                "то, что копия сохраняется на диске. Стереть её можно кнопкой «Стереть копию».\n\n" +
-                "Продолжить?", "Включить запись", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            RunStreaming("-XrayEnable", "Включение записи…", delegate { RunXrayStatus(); });
+                L.T("Windows начнёт вести ЛОКАЛЬНУЮ копию своих диагностических событий,\n") +
+                L.T("чтобы их можно было прочитать и показать вам.\n\n") +
+                L.T("Объём отправляемых данных при этом НЕ увеличивается — меняется только\n") +
+                L.T("то, что копия сохраняется на диске. Стереть её можно кнопкой «Стереть копию».\n\n") +
+                L.T("Продолжить?"), L.T("Включить запись"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            RunStreaming("-XrayEnable", L.T("Включение записи…"), delegate { RunXrayStatus(); });
         }
 
         private void OnXrayWipe(object sender, EventArgs e)
         {
-            if (MessageBox.Show(this, "Локальная копия собранных событий будет удалена.\nПродолжить?",
-                "Стереть копию", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            RunStreaming("-XrayWipe", "Стирание копии…", delegate { RunXrayStatus(); });
+            if (MessageBox.Show(this, L.T("Локальная копия собранных событий будет удалена.\nПродолжить?"),
+                L.T("Стереть копию"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            RunStreaming("-XrayWipe", L.T("Стирание копии…"), delegate { RunXrayStatus(); });
         }
 
         private void RunXrayStatus()
         {
-            RunJson("-XrayStatus", "Проверка рентгена…", delegate(Dictionary<string, object> d)
+            RunJson("-XrayStatus", L.T("Проверка рентгена…"), delegate(Dictionary<string, object> d)
             {
                 if (d == null) return;
                 _xrayRecording = Json.GetBool(d, "recording");
                 bool mod = Json.GetBool(d, "moduleAvailable");
                 Dictionary<string, object> db = Json.GetObj(d, "db");
-                _btnXrayRec.Text = _xrayRecording ? "Выключить запись" : "Включить запись";
+                _btnXrayRec.Text = _xrayRecording ? L.T("Выключить запись") : L.T("Включить запись");
                 _btnXrayRec.Primary = !_xrayRecording; _btnXrayRec.Invalidate();
                 _btnXrayScan.Enabled = _xrayRecording;
                 string s = _xrayRecording
-                    ? "Запись включена. Windows ведёт локальную копию событий — можно сканировать."
-                    : "Запись выключена. Пока она выключена, прочитать собранные данные нельзя.";
-                if (!mod) s = "На этой системе нет модуля Microsoft.DiagnosticDataViewer — рентген недоступен.";
-                if (db != null && Json.GetStr(db, "mb") != "0") s += "\nЛокальная копия на диске: " + Json.GetStr(db, "mb") + " МБ.";
+                    ? L.T("Запись включена. Windows ведёт локальную копию событий — можно сканировать.")
+                    : L.T("Запись выключена. Пока она выключена, прочитать собранные данные нельзя.");
+                if (!mod) s = L.T("На этой системе нет модуля Microsoft.DiagnosticDataViewer — рентген недоступен.");
+                if (db != null && Json.GetStr(db, "mb") != "0") s += L.T("\nЛокальная копия на диске: ") + Json.GetStr(db, "mb") + L.T(" МБ.");
                 Dictionary<string, object> b = Json.GetObj(d, "baseline");
-                if (b != null) s += "\nЭталон «до» сохранён: " + Json.GetStr(b, "time") + " (" + Json.GetStr(b, "perDay") + " событий в сутки).";
+                if (b != null) s += L.T("\nЭталон «до» сохранён: ") + Json.GetStr(b, "time") + " (" + Json.GetStr(b, "perDay") + L.T(" событий в сутки).");
                 _xrayState.Text = s;
                 foreach (NavItem n in _nav) if ((string)n.Tag == "xray") { n.Badge = _xrayRecording ? "rec" : ""; n.Invalidate(); }
             });
@@ -1068,9 +1072,9 @@ namespace Win11Privacy
         private void RunXrayScan(bool asBaseline)
         {
             string extra = "-XrayScan -XrayHours 24" + (asBaseline ? " -XrayBaseline" : "");
-            RunJson(extra, asBaseline ? "Замер «до»…" : "Чтение собранных данных…", delegate(Dictionary<string, object> d)
+            RunJson(extra, asBaseline ? L.T("Замер «до»…") : L.T("Чтение собранных данных…"), delegate(Dictionary<string, object> d)
             {
-                if (d == null) { _xrayState.Text = "Не удалось получить данные."; return; }
+                if (d == null) { _xrayState.Text = L.T("Не удалось получить данные."); return; }
                 string err = Json.GetStr(d, "error");
                 if (err.Length > 0)
                 {
@@ -1082,7 +1086,7 @@ namespace Win11Privacy
                 _lastXray = d;
                 RenderXray(d);
                 RefreshHome();
-                if (asBaseline) _xrayState.Text = "Замер сохранён как «до». Примените настройки и просканируйте снова — покажу разницу.";
+                if (asBaseline) _xrayState.Text = L.T("Замер сохранён как «до». Примените настройки и просканируйте снова — покажу разницу.");
             });
         }
 
@@ -1091,9 +1095,9 @@ namespace Win11Privacy
             int total = Json.GetInt(d, "total");
             int perDay = Json.GetInt(d, "perDay");
             _xrayTiles.Controls.Clear();
-            _xrayTiles.Controls.Add(Tile("Событий собрано", total.ToString(), "за последние " + Json.GetInt(d, "hours") + " ч", Theme.Accent));
-            _xrayTiles.Controls.Add(Tile("В сутки", perDay.ToString(), Json.GetStr(d, "mbPerDay") + " МБ данных о вас", Theme.Warn));
-            _xrayTiles.Controls.Add(Tile("Прогноз за год", FormatBig(Json.GetInt(d, "perYear")), Json.GetStr(d, "mbPerYear") + " МБ в год", Theme.Err));
+            _xrayTiles.Controls.Add(Tile(L.T("Событий собрано"), total.ToString(), L.T("за последние ") + Json.GetInt(d, "hours") + L.T(" ч"), Theme.Accent));
+            _xrayTiles.Controls.Add(Tile(L.T("В сутки"), perDay.ToString(), Json.GetStr(d, "mbPerDay") + L.T(" МБ данных о вас"), Theme.Warn));
+            _xrayTiles.Controls.Add(Tile(L.T("Прогноз за год"), FormatBig(Json.GetInt(d, "perYear")), Json.GetStr(d, "mbPerYear") + L.T(" МБ в год"), Theme.Err));
 
             if (d.ContainsKey("baselinePerDay"))
             {
@@ -1103,19 +1107,19 @@ namespace Win11Privacy
                 if (dp != null) double.TryParse(dp.ToString().Replace(',', '.'), System.Globalization.NumberStyles.Any,
                     System.Globalization.CultureInfo.InvariantCulture, out delta);
                 bool better = perDay < bp;
-                _xrayTiles.Controls.Add(Tile(better ? "Стало меньше на" : "Изменение",
+                _xrayTiles.Controls.Add(Tile(better ? L.T("Стало меньше на") : L.T("Изменение"),
                     (better ? "" : "+") + Math.Abs(delta).ToString("0.#") + "%",
-                    "было " + bp + " → стало " + perDay + " в сутки", better ? Theme.Ok : Theme.Err));
+                    L.T("было ") + bp + L.T(" → стало ") + perDay + L.T(" в сутки"), better ? Theme.Ok : Theme.Err));
             }
             else
             {
-                _xrayTiles.Controls.Add(Tile("Уникальных событий", Json.GetInt(d, "distinctNames").ToString(),
-                    "разных типов данных", Theme.Accent));
+                _xrayTiles.Controls.Add(Tile(L.T("Уникальных событий"), Json.GetInt(d, "distinctNames").ToString(),
+                    L.T("разных типов данных"), Theme.Accent));
             }
 
             _xrayList.Controls.Clear();
 
-            SectionHeader s1 = new SectionHeader("Что именно собрано — нажмите, чтобы увидеть сырое событие");
+            SectionHeader s1 = new SectionHeader(L.T("Что именно собрано — нажмите, чтобы увидеть сырое событие"));
             s1.Font = Font; _xrayList.Controls.Add(s1);
             foreach (object o in Json.GetArr(d, "categories"))
             {
@@ -1126,7 +1130,7 @@ namespace Win11Privacy
                 if (sh != null) double.TryParse(sh.ToString().Replace(',', '.'), System.Globalization.NumberStyles.Any,
                     System.Globalization.CultureInfo.InvariantCulture, out share);
                 XrayCatRow row = new XrayCatRow(
-                    Json.GetStr(c, "name"), Json.GetInt(c, "count"), share, Json.GetStr(c, "what"),
+                    L.T(Json.GetStr(c, "name")), Json.GetInt(c, "count"), share, Json.GetStr(c, "what"),
                     Json.GetArr(c, "topNames"),
                     sm != null ? Json.GetStr(sm, "name") : "",
                     sm != null ? Json.GetStr(sm, "time") : "",
@@ -1138,7 +1142,7 @@ namespace Win11Privacy
             List<object> ids = Json.GetArr(d, "identifiers");
             if (ids.Count > 0)
             {
-                SectionHeader s2 = new SectionHeader("Метки, которыми помечены события (по ним вас узнают)");
+                SectionHeader s2 = new SectionHeader(L.T("Метки, которыми помечены события (по ним вас узнают)"));
                 s2.Font = Font; _xrayList.Controls.Add(s2);
                 foreach (object o in ids)
                 {
@@ -1146,14 +1150,14 @@ namespace Win11Privacy
                     List<object> vals = Json.GetArr(i, "values");
                     string v = vals.Count > 0 ? Json.GetStr(Json.Obj(vals[0]), "value") : "";
                     _xrayList.Controls.Add(new KvRow(Json.GetStr(i, "key") + "  →  " + v,
-                        Json.GetInt(i, "distinct") + " знач.", true) { Font = this.Font });
+                        Json.GetInt(i, "distinct") + L.T(" знач."), true) { Font = this.Font });
                 }
             }
 
             List<object> apps = Json.GetArr(d, "apps");
             if (apps.Count > 0)
             {
-                SectionHeader s3 = new SectionHeader("Программы, попавшие в отчёты о вас");
+                SectionHeader s3 = new SectionHeader(L.T("Программы, попавшие в отчёты о вас"));
                 s3.Font = Font; _xrayList.Controls.Add(s3);
                 foreach (object o in apps)
                 {
@@ -1162,8 +1166,8 @@ namespace Win11Privacy
                 }
             }
             _xrayList.Restack();
-            _xrayState.Text = "Прочитано " + total + " событий за " + Json.GetInt(d, "hours") + " ч. " +
-                              "Нажмите на категорию — покажу настоящий JSON, который ушёл в Microsoft.";
+            _xrayState.Text = L.T("Прочитано ") + total + L.T(" событий за ") + Json.GetInt(d, "hours") + L.T(" ч. ") +
+                              L.T("Нажмите на категорию — покажу настоящий JSON, который ушёл в Microsoft.");
         }
 
         // ================================================================== //
@@ -1185,7 +1189,7 @@ namespace Win11Privacy
             head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             page.RowStyles[1] = new RowStyle(SizeType.Absolute, (int)(u * 7.6F));
-            head.Controls.Add(PageTitle("Досье Windows на вас"), 0, 0);
+            head.Controls.Add(PageTitle(L.T("Досье Windows на вас")), 0, 0);
             page.Controls.Add(head, 0, 0);
 
             Card ctl = new Card();
@@ -1200,21 +1204,23 @@ namespace Win11Privacy
             _dossierState = new Label();
             _dossierState.AutoSize = false; _dossierState.Dock = DockStyle.Fill;
             _dossierState.TextAlign = ContentAlignment.MiddleLeft; _dossierState.ForeColor = Theme.TextDim;
-            _dossierState.Text = "Windows сама ведёт журналы: кто включал камеру и микрофон, какие сети\n" +
-                                 "и флешки видел компьютер, что вы открывали и копировали.\n" +
-                                 "Программа читает эти журналы локально — наружу ничего не отправляется.";
+            _dossierState.Text = L.T("Windows сама ведёт журналы: кто включал камеру и микрофон, какие сети\n") +
+                                 L.T("и флешки видел компьютер, что вы открывали и копировали.\n") +
+                                 L.T("Программа читает эти журналы локально — наружу ничего не отправляется.");
             ci.Controls.Add(_dossierState, 0, 0);
             FlowLayoutPanel db = new FlowLayoutPanel();
             AttachButtonRow(db, ctl);
             db.Margin = new Padding(0, (int)(u * 0.5F), 0, 0);
-            _btnDossierRefresh = new ModernButton("Собрать досье", true);
+            _btnDossierRefresh = new ModernButton(L.T("Собрать досье"), true);
             _btnDossierRefresh.Click += delegate { RefreshDossier(); };
-            _btnDossierWipe = new ModernButton("Стереть выбранное", false);
+            _btnDossierWipe = new ModernButton(L.T("Стереть выбранное"), false);
             _btnDossierWipe.Enabled = false;
             _btnDossierWipe.Click += OnDossierWipe;
-            ModernButton dossierReport = new ModernButton("Сохранить отчёт", false);
+            _btnDossierAll = new ModernButton(L.T("Показать все разрешения"), false);
+            _btnDossierAll.Click += delegate { _spyShowAll = !_spyShowAll; RefreshSpy(); };
+            ModernButton dossierReport = new ModernButton(L.T("Сохранить отчёт"), false);
             dossierReport.Click += OnSaveReport;
-            foreach (ModernButton b in new[] { _btnDossierRefresh, _btnDossierWipe, dossierReport })
+            foreach (ModernButton b in new[] { _btnDossierRefresh, _btnDossierAll, _btnDossierWipe, dossierReport })
             { b.Font = b.Primary ? new Font(Font, FontStyle.Bold) : Font; b.Margin = new Padding((int)(u * 0.4F), 0, 0, (int)(u * 0.3F)); db.Controls.Add(b); }
             ci.Controls.Add(db, 0, 1);
             ctl.Controls.Add(ci);
@@ -1237,12 +1243,21 @@ namespace Win11Privacy
             return page;
         }
 
+        // Только журнал датчиков — без повторного сканирования диска
+        private void RefreshSpy()
+        {
+            if (_btnDossierAll != null)
+                _btnDossierAll.Text = _spyShowAll ? L.T("Только использованные") : L.T("Показать все разрешения");
+            RunJson(_spyShowAll ? "-Spy -SpyAll" : "-Spy", L.T("Чтение разрешений…"),
+                delegate(Dictionary<string, object> d) { if (d != null) { _lastSpy = d; RenderDossier(); } });
+        }
+
         private void RefreshDossier()
         {
-            RunJson("-Spy", "Чтение журнала доступа к камере и микрофону…", delegate(Dictionary<string, object> d)
+            RunJson(_spyShowAll ? "-Spy -SpyAll" : "-Spy", L.T("Чтение журнала доступа к камере и микрофону…"), delegate(Dictionary<string, object> d)
             {
                 _lastSpy = d;
-                RunJson("-Footprint", "Сканирование цифрового следа…", delegate(Dictionary<string, object> f)
+                RunJson("-Footprint", L.T("Сканирование цифрового следа…"), delegate(Dictionary<string, object> f)
                 {
                     _lastFoot = f;
                     RenderDossier();
@@ -1290,21 +1305,21 @@ namespace Win11Privacy
             DateTime t;
             if (!DateTime.TryParseExact(s, "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out t)) return s;
             TimeSpan d = DateTime.Now - t;
-            if (d.TotalMinutes < 1) return "только что";
-            if (d.TotalHours < 1) return ((int)d.TotalMinutes) + " мин назад";
-            if (t.Date == DateTime.Today) return "сегодня " + t.ToString("HH:mm");
-            if (t.Date == DateTime.Today.AddDays(-1)) return "вчера " + t.ToString("HH:mm");
-            if (d.TotalDays < 7) return ((int)d.TotalDays) + " дн назад";
+            if (d.TotalMinutes < 1) return L.T("только что");
+            if (d.TotalHours < 1) return ((int)d.TotalMinutes) + L.T(" мин назад");
+            if (t.Date == DateTime.Today) return L.T("сегодня ") + t.ToString("HH:mm");
+            if (t.Date == DateTime.Today.AddDays(-1)) return L.T("вчера ") + t.ToString("HH:mm");
+            if (d.TotalDays < 7) return ((int)d.TotalDays) + L.T(" дн назад");
             return t.ToString("dd.MM.yyyy");
         }
 
         private static string Dur(double m)
         {
             if (m <= 0) return "";
-            if (m < 1) return "меньше минуты";
-            if (m < 60) return ((int)Math.Round(m)) + " мин";
+            if (m < 1) return L.T("меньше минуты");
+            if (m < 60) return ((int)Math.Round(m)) + L.T(" мин");
             int h = (int)(m / 60);
-            return h + " ч " + ((int)Math.Round(m - h * 60)) + " мин";
+            return h + L.T(" ч ") + ((int)Math.Round(m - h * 60)) + L.T(" мин");
         }
 
         private void RenderDossier()
@@ -1318,16 +1333,16 @@ namespace Win11Privacy
             {
                 activeNow = Json.GetInt(_lastSpy, "activeNow");
                 week = Json.GetInt(_lastSpy, "week");
-                _dossierTiles.Controls.Add(Tile("Сейчас используют датчики", activeNow.ToString(),
-                    activeNow > 0 ? "смотрите список ниже!" : "в данный момент никто", activeNow > 0 ? Theme.Err : Theme.Ok));
-                _dossierTiles.Controls.Add(Tile("Обращений за 7 дней", week.ToString(), "камера, микрофон, геолокация", Theme.Warn));
+                _dossierTiles.Controls.Add(Tile(L.T("Сейчас используют датчики"), activeNow.ToString(),
+                    activeNow > 0 ? L.T("смотрите список ниже!") : L.T("в данный момент никто"), activeNow > 0 ? Theme.Err : Theme.Ok));
+                _dossierTiles.Controls.Add(Tile(L.T("Обращений за 7 дней"), week.ToString(), L.T("камера, микрофон, геолокация"), Theme.Warn));
             }
             if (_lastFoot != null)
             {
-                _dossierTiles.Controls.Add(Tile("След на диске", Json.GetStr(_lastFoot, "totalMb") + " МБ",
-                    "журналов и историй о вас", Theme.Accent));
-                _dossierTiles.Controls.Add(Tile("Можно стереть", Json.GetInt(_lastFoot, "wipeable").ToString(),
-                    "пунктов — отметьте ниже", Theme.Accent));
+                _dossierTiles.Controls.Add(Tile(L.T("След на диске"), Json.GetStr(_lastFoot, "totalMb") + L.T(" МБ"),
+                    L.T("журналов и историй о вас"), Theme.Accent));
+                _dossierTiles.Controls.Add(Tile(L.T("Можно стереть"), Json.GetInt(_lastFoot, "wipeable").ToString(),
+                    L.T("пунктов — отметьте ниже"), Theme.Accent));
             }
 
             if (_lastSpy != null)
@@ -1339,10 +1354,10 @@ namespace Win11Privacy
                     List<object> items = Json.GetArr(c, "items");
                     if (items.Count == 0) continue;
                     any = true;
-                    string title = Json.GetStr(c, "title");
+                    string title = L.T(Json.GetStr(c, "title"));
                     string glob = Json.GetStr(c, "global");
-                    SectionHeader sh = new SectionHeader(title + " — доступ " + (glob == "Deny" ? "запрещён" : "разрешён") +
-                        ", программ в журнале: " + items.Count);
+                    SectionHeader sh = new SectionHeader(title + L.T(" — доступ ") + (glob == "Deny" ? L.T("запрещён") : L.T("разрешён")) +
+                        L.T(", программ в журнале: ") + items.Count);
                     sh.Font = Font; _dossierList.Controls.Add(sh);
                     string id = Json.GetStr(c, "id");
                     foreach (object io in items)
@@ -1351,9 +1366,11 @@ namespace Win11Privacy
                         double mins = 0;
                         object mv = Json.Get(it, "minutes");
                         if (mv != null) double.TryParse(mv.ToString().Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out mins);
+                        bool never = Json.GetBool(it, "never");
                         SpyRow sr = new SpyRow(
                             Json.GetStr(it, "app"), title, CapGlyph(id), CapColor(id),
-                            Ago(Json.GetStr(it, "last")), Dur(mins), Json.GetBool(it, "active"),
+                            never ? L.T("не пользовалась") : Ago(Json.GetStr(it, "last")),
+                            Dur(mins), Json.GetBool(it, "active"),
                             Json.GetStr(it, "key"), Json.GetStr(it, "value") == "Deny");
                         sr.Font = this.Font;
                         sr.ToggleAccess += OnSensorToggleAccess;
@@ -1362,19 +1379,19 @@ namespace Win11Privacy
                 }
                 if (!any)
                 {
-                    SectionHeader sh = new SectionHeader("Журнал доступа к датчикам пуст"); sh.Font = Font; _dossierList.Controls.Add(sh);
+                    SectionHeader sh = new SectionHeader(L.T("Журнал доступа к датчикам пуст")); sh.Font = Font; _dossierList.Controls.Add(sh);
                 }
             }
 
             if (_lastFoot != null)
             {
-                SectionHeader sh2 = new SectionHeader("Цифровой след — отметьте, что стереть, и нажмите «Стереть выбранное»");
+                SectionHeader sh2 = new SectionHeader(L.T("Цифровой след — отметьте, что стереть, и нажмите «Стереть выбранное»"));
                 sh2.Font = Font; _dossierList.Controls.Add(sh2);
                 foreach (object o in Json.GetArr(_lastFoot, "items"))
                 {
                     Dictionary<string, object> it = Json.Obj(o);
                     string id = Json.GetStr(it, "id");
-                    _dossierList.Controls.Add(new WipeRow(id, Json.GetStr(it, "title"), Json.GetStr(it, "what"),
+                    _dossierList.Controls.Add(new WipeRow(id, L.T(Json.GetStr(it, "title")), Json.GetStr(it, "what"),
                         Json.GetStr(it, "value"), FootGlyph(id), Json.GetBool(it, "canWipe")) { Font = this.Font });
                 }
                 _btnDossierWipe.Enabled = Json.GetInt(_lastFoot, "wipeable") > 0;
@@ -1383,12 +1400,12 @@ namespace Win11Privacy
             try { _dossierList.AutoScrollPosition = Point.Empty; } catch { }
             _dossierList.Restack();
             if (_lastFoot != null)
-                _dossierState.Text = "Досье собрано " + Json.GetStr(_lastFoot, "time") +
-                    ". Всё прочитано с этого компьютера, наружу ничего не отправляется.\n" +
-                    "Красная метка «СЕЙЧАС» — программа использует датчик прямо в эту минуту.";
+                _dossierState.Text = L.T("Досье собрано ") + Json.GetStr(_lastFoot, "time") +
+                    L.T(". Всё прочитано с этого компьютера, наружу ничего не отправляется.\n") +
+                    L.T("Красная метка «СЕЙЧАС» — программа использует датчик прямо в эту минуту.");
             else
-                _dossierState.Text = "Журнал датчиков прочитан. Нажмите «Собрать досье» — программа просканирует\n" +
-                    "ещё и цифровой след на диске (рекламный ID, сети, флешки, истории).";
+                _dossierState.Text = L.T("Журнал датчиков прочитан. Нажмите «Собрать досье» — программа просканирует\n") +
+                    L.T("ещё и цифровой след на диске (рекламный ID, сети, флешки, истории).");
 
             foreach (NavItem n in _nav)
                 if ((string)n.Tag == "dossier") { n.Badge = activeNow > 0 ? "!" : ""; n.Invalidate(); }
@@ -1402,21 +1419,21 @@ namespace Win11Privacy
             if (r == null || r.Key.Length == 0) return;
             string want = r.Denied ? "Allow" : "Deny";
             RunJson("-SensorSet -SensorKey \"" + r.Key + "\" -SensorValue " + want,
-                r.Denied ? "Возврат доступа…" : "Запрет доступа…",
+                r.Denied ? L.T("Возврат доступа…") : L.T("Запрет доступа…"),
                 delegate(Dictionary<string, object> d)
                 {
                     if (d != null && Json.GetBool(d, "ok"))
                     {
                         r.Denied = (want == "Deny");
                         r.Invalidate();
-                        _status.Text = r.Denied ? "Доступ запрещён. Программе может потребоваться перезапуск."
-                                                : "Доступ возвращён.";
+                        _status.Text = r.Denied ? L.T("Доступ запрещён. Программе может потребоваться перезапуск.")
+                                                : L.T("Доступ возвращён.");
                     }
                     else
                     {
                         string err = d != null ? Json.GetStr(d, "error") : "";
-                        MessageBox.Show(this, "Не удалось изменить доступ." + (err.Length > 0 ? "\n\n" + err : ""),
-                            "Доступ к датчику", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        MessageBox.Show(this, L.T("Не удалось изменить доступ.") + (err.Length > 0 ? "\n\n" + err : ""),
+                            L.T("Доступ к датчику"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     }
                 });
         }
@@ -1431,13 +1448,13 @@ namespace Win11Privacy
                 if (w != null && w.CanWipe && w.Checked) { ids.Add(w.Id); names.Add(w.Id); }
             }
             if (ids.Count == 0)
-            { MessageBox.Show(this, "Отметьте галочками, какие следы стереть.", "Ничего не выбрано", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-            if (MessageBox.Show(this, "Выбранные следы (" + ids.Count + " шт.) будут удалены безвозвратно.\n" +
-                "Пароли Wi-Fi и системные данные не затрагиваются.\n\nПродолжить?",
-                "Стереть цифровой след", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            RunStreaming("-FootprintWipe -WipeItems " + string.Join(",", ids.ToArray()), "Стирание следов…", delegate
+            { MessageBox.Show(this, L.T("Отметьте галочками, какие следы стереть."), L.T("Ничего не выбрано"), MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            if (MessageBox.Show(this, L.T("Выбранные следы (") + ids.Count + L.T(" шт.) будут удалены безвозвратно.\n") +
+                L.T("Пароли Wi-Fi и системные данные не затрагиваются.\n\nПродолжить?"),
+                L.T("Стереть цифровой след"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            RunStreaming("-FootprintWipe -WipeItems " + string.Join(",", ids.ToArray()), L.T("Стирание следов…"), delegate
             {
-                RunJson("-Footprint", "Повторное сканирование…", delegate(Dictionary<string, object> f)
+                RunJson("-Footprint", L.T("Повторное сканирование…"), delegate(Dictionary<string, object> f)
                 { _lastFoot = f; Navigate("dossier"); RenderDossier(); });
             });
         }
@@ -1448,22 +1465,22 @@ namespace Win11Privacy
         // Самопроверка: показывает, может ли программа реально менять настройки
         private void OnSelfTest(object sender, EventArgs e)
         {
-            RunStreaming("-SelfTest", "Самопроверка…", delegate { });
+            RunStreaming("-SelfTest", L.T("Самопроверка…"), delegate { });
         }
 
         private void OnSaveReport(object sender, EventArgs e)
         {
             SaveFileDialog sd = new SaveFileDialog();
-            sd.Filter = "HTML-отчёт (*.html)|*.html";
+            sd.Filter = L.T("HTML-отчёт (*.html)|*.html");
             sd.FileName = "otchet-privatnost-" + DateTime.Now.ToString("yyyy-MM-dd") + ".html";
             if (sd.ShowDialog(this) != DialogResult.OK) return;
             try
             {
                 File.WriteAllText(sd.FileName, BuildReportHtml(), new UTF8Encoding(true));
-                _status.Text = "Отчёт сохранён: " + Path.GetFileName(sd.FileName);
+                _status.Text = L.T("Отчёт сохранён: ") + Path.GetFileName(sd.FileName);
                 try { Process.Start(sd.FileName); } catch { }
             }
-            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, L.T("Ошибка"), MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
 
         private static string Esc(string s)
@@ -1476,7 +1493,7 @@ namespace Win11Privacy
         {
             StringBuilder h = new StringBuilder();
             h.Append("<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\">");
-            h.Append("<title>Отчёт о приватности Windows 11</title><style>");
+            h.Append(L.T("<title>Отчёт о приватности Windows 11</title><style>"));
             h.Append("body{font-family:'Segoe UI',system-ui,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;background:#fafafa;color:#1b1b1b;line-height:1.55}");
             h.Append("h1{font-size:28px;margin:0 0 4px}h2{font-size:19px;margin:32px 0 10px;border-bottom:2px solid #e3e3e3;padding-bottom:6px}");
             h.Append(".sub{color:#666;margin-bottom:28px}.grid{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}");
@@ -1490,22 +1507,22 @@ namespace Win11Privacy
             h.Append(".note{background:#fff8e6;border-left:4px solid #b45309;padding:12px 16px;border-radius:6px;margin:20px 0;font-size:14px}");
             h.Append("footer{margin-top:40px;color:#888;font-size:12px;border-top:1px solid #e3e3e3;padding-top:14px}");
             h.Append("</style></head><body>");
-            h.Append("<h1>Отчёт о приватности Windows 11</h1>");
-            h.Append("<div class=\"sub\">Составлен ").Append(DateTime.Now.ToString("dd.MM.yyyy HH:mm"));
-            if (_detect != null) h.Append(" · ").Append(Esc(Json.GetStr(_detect, "os"))).Append(" · сборка ").Append(Esc(Json.GetStr(_detect, "build")));
+            h.Append(L.T("<h1>Отчёт о приватности Windows 11</h1>"));
+            h.Append(L.T("<div class=\"sub\">Составлен ")).Append(DateTime.Now.ToString("dd.MM.yyyy HH:mm"));
+            if (_detect != null) h.Append(" · ").Append(Esc(Json.GetStr(_detect, "os"))).Append(L.T(" · сборка ")).Append(Esc(Json.GetStr(_detect, "build")));
             h.Append("</div>");
 
             // Проверка
             if (_lastAudit != null)
             {
                 int ok = Json.GetInt(_lastAudit, "ok"), total = Json.GetInt(_lastAudit, "total");
-                h.Append("<h2>Проверка настроек</h2><div class=\"grid\">");
-                h.Append("<div class=\"tile\"><div class=\"c\">Индекс приватности</div><div class=\"v\">")
+                h.Append(L.T("<h2>Проверка настроек</h2><div class=\"grid\">"));
+                h.Append(L.T("<div class=\"tile\"><div class=\"c\">Индекс приватности</div><div class=\"v\">"))
                  .Append(total > 0 ? (int)Math.Round(100.0 * ok / total) : 0).Append("%</div><div class=\"s\">")
-                 .Append(ok).Append(" из ").Append(total).Append(" настроек подтверждено</div></div>");
-                h.Append("<div class=\"tile\"><div class=\"c\">Не применено</div><div class=\"v\">").Append(total - ok)
-                 .Append("</div><div class=\"s\">требуют внимания</div></div></div>");
-                h.Append("<table><tr><th>Раздел</th><th>Применено</th></tr>");
+                 .Append(ok).Append(L.T(" из ")).Append(total).Append(L.T(" настроек подтверждено</div></div>"));
+                h.Append(L.T("<div class=\"tile\"><div class=\"c\">Не применено</div><div class=\"v\">")).Append(total - ok)
+                 .Append(L.T("</div><div class=\"s\">требуют внимания</div></div></div>"));
+                h.Append(L.T("<table><tr><th>Раздел</th><th>Применено</th></tr>"));
                 foreach (object o in Json.GetArr(_lastAudit, "groups"))
                 {
                     Dictionary<string, object> g = Json.Obj(o);
@@ -1517,13 +1534,13 @@ namespace Win11Privacy
                 List<object> dns = Json.GetArr(_lastAudit, "dns");
                 if (dns.Count > 0)
                 {
-                    h.Append("<h2>Обращения к доменам телеметрии (кэш DNS)</h2><table><tr><th>Домен</th><th>Состояние</th></tr>");
+                    h.Append(L.T("<h2>Обращения к доменам телеметрии (кэш DNS)</h2><table><tr><th>Домен</th><th>Состояние</th></tr>"));
                     foreach (object o in dns)
                     {
                         Dictionary<string, object> dn = Json.Obj(o);
                         bool bl = Json.GetBool(dn, "blocked");
                         h.Append("<tr><td>").Append(Esc(Json.GetStr(dn, "name"))).Append("</td><td class=\"")
-                         .Append(bl ? "ok" : "bad").Append("\">").Append(bl ? "заблокировано" : "проходит").Append("</td></tr>");
+                         .Append(bl ? "ok" : "bad").Append("\">").Append(bl ? L.T("заблокировано") : L.T("проходит")).Append("</td></tr>");
                     }
                     h.Append("</table>");
                 }
@@ -1532,18 +1549,18 @@ namespace Win11Privacy
             // Рентген
             if (_lastXray != null)
             {
-                h.Append("<h2>Рентген телеметрии — что было собрано</h2><div class=\"grid\">");
-                h.Append("<div class=\"tile\"><div class=\"c\">Событий в сутки</div><div class=\"v\">")
+                h.Append(L.T("<h2>Рентген телеметрии — что было собрано</h2><div class=\"grid\">"));
+                h.Append(L.T("<div class=\"tile\"><div class=\"c\">Событий в сутки</div><div class=\"v\">"))
                  .Append(Json.GetInt(_lastXray, "perDay")).Append("</div><div class=\"s\">")
-                 .Append(Esc(Json.GetStr(_lastXray, "mbPerDay"))).Append(" МБ данных</div></div>");
-                h.Append("<div class=\"tile\"><div class=\"c\">Прогноз за год</div><div class=\"v\">")
+                 .Append(Esc(Json.GetStr(_lastXray, "mbPerDay"))).Append(L.T(" МБ данных</div></div>"));
+                h.Append(L.T("<div class=\"tile\"><div class=\"c\">Прогноз за год</div><div class=\"v\">"))
                  .Append(Esc(FormatBig(Json.GetInt(_lastXray, "perYear")))).Append("</div><div class=\"s\">")
-                 .Append(Esc(Json.GetStr(_lastXray, "mbPerYear"))).Append(" МБ в год</div></div>");
+                 .Append(Esc(Json.GetStr(_lastXray, "mbPerYear"))).Append(L.T(" МБ в год</div></div>"));
                 if (_lastXray.ContainsKey("baselinePerDay"))
-                    h.Append("<div class=\"tile\"><div class=\"c\">Было до настройки</div><div class=\"v\">")
-                     .Append(Json.GetInt(_lastXray, "baselinePerDay")).Append("</div><div class=\"s\">событий в сутки</div></div>");
+                    h.Append(L.T("<div class=\"tile\"><div class=\"c\">Было до настройки</div><div class=\"v\">"))
+                     .Append(Json.GetInt(_lastXray, "baselinePerDay")).Append(L.T("</div><div class=\"s\">событий в сутки</div></div>"));
                 h.Append("</div>");
-                h.Append("<table><tr><th>Категория данных</th><th>Событий</th><th>Доля</th><th>Что это</th></tr>");
+                h.Append(L.T("<table><tr><th>Категория данных</th><th>Событий</th><th>Доля</th><th>Что это</th></tr>"));
                 foreach (object o in Json.GetArr(_lastXray, "categories"))
                 {
                     Dictionary<string, object> c = Json.Obj(o);
@@ -1557,7 +1574,7 @@ namespace Win11Privacy
                     Dictionary<string, object> c = Json.Obj(o);
                     Dictionary<string, object> sm = Json.GetObj(c, "sample");
                     if (sm == null) continue;
-                    h.Append("<h2>Пример настоящего события: ").Append(Esc(Json.GetStr(c, "name"))).Append("</h2>");
+                    h.Append(L.T("<h2>Пример настоящего события: ")).Append(Esc(Json.GetStr(c, "name"))).Append("</h2>");
                     h.Append("<div class=\"sub\">").Append(Esc(Json.GetStr(sm, "name"))).Append(" · ").Append(Esc(Json.GetStr(sm, "time"))).Append("</div>");
                     h.Append("<pre>").Append(Esc(Json.GetStr(sm, "payload"))).Append("</pre>");
                     break;   // одного примера в отчёте достаточно
@@ -1567,18 +1584,18 @@ namespace Win11Privacy
             // Монитор
             if (_lastMonitor != null)
             {
-                h.Append("<h2>Монитор исходящих соединений</h2><div class=\"grid\">");
-                h.Append("<div class=\"tile\"><div class=\"c\">Соединений</div><div class=\"v\">")
-                 .Append(Json.GetInt(_lastMonitor, "total")).Append("</div><div class=\"s\">за 24 часа</div></div>");
-                h.Append("<div class=\"tile\"><div class=\"c\">К телеметрии</div><div class=\"v\">")
-                 .Append(Json.GetInt(_lastMonitor, "telemetryHits")).Append("</div><div class=\"s\">распознано по домену</div></div></div>");
+                h.Append(L.T("<h2>Монитор исходящих соединений</h2><div class=\"grid\">"));
+                h.Append(L.T("<div class=\"tile\"><div class=\"c\">Соединений</div><div class=\"v\">"))
+                 .Append(Json.GetInt(_lastMonitor, "total")).Append(L.T("</div><div class=\"s\">за 24 часа</div></div>"));
+                h.Append(L.T("<div class=\"tile\"><div class=\"c\">К телеметрии</div><div class=\"v\">"))
+                 .Append(Json.GetInt(_lastMonitor, "telemetryHits")).Append(L.T("</div><div class=\"s\">распознано по домену</div></div></div>"));
             }
 
             // Досье
             if (_lastSpy != null)
             {
-                h.Append("<h2>Досье: кто включал камеру, микрофон и геолокацию</h2>");
-                h.Append("<table><tr><th>Программа</th><th>Датчик</th><th>Когда</th><th>Длительность</th></tr>");
+                h.Append(L.T("<h2>Досье: кто включал камеру, микрофон и геолокацию</h2>"));
+                h.Append(L.T("<table><tr><th>Программа</th><th>Датчик</th><th>Когда</th><th>Длительность</th></tr>"));
                 foreach (object co in Json.GetArr(_lastSpy, "caps"))
                 {
                     Dictionary<string, object> c = Json.Obj(co);
@@ -1593,7 +1610,7 @@ namespace Win11Privacy
                         if (mv != null) double.TryParse(mv.ToString().Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out mins);
                         h.Append("<tr><td>").Append(Esc(Json.GetStr(it, "app"))).Append("</td><td>").Append(Esc(capTitle))
                          .Append("</td><td>").Append(Esc(Json.GetStr(it, "last"))).Append("</td><td>")
-                         .Append(Json.GetBool(it, "active") ? "<span class=\"bad\">прямо сейчас</span>" : Esc(Dur(mins)))
+                         .Append(Json.GetBool(it, "active") ? L.T("<span class=\"bad\">прямо сейчас</span>") : Esc(Dur(mins)))
                          .Append("</td></tr>");
                     }
                 }
@@ -1601,8 +1618,8 @@ namespace Win11Privacy
             }
             if (_lastFoot != null)
             {
-                h.Append("<h2>Цифровой след на диске</h2>");
-                h.Append("<table><tr><th>Что хранится</th><th>Сколько</th></tr>");
+                h.Append(L.T("<h2>Цифровой след на диске</h2>"));
+                h.Append(L.T("<table><tr><th>Что хранится</th><th>Сколько</th></tr>"));
                 foreach (object o in Json.GetArr(_lastFoot, "items"))
                 {
                     Dictionary<string, object> it = Json.Obj(o);
@@ -1612,20 +1629,20 @@ namespace Win11Privacy
                 h.Append("</table>");
             }
 
-            h.Append("<div class=\"note\"><b>Честно о пределах.</b> Полностью прекратить обмен данными с Microsoft ");
-            h.Append("на Windows нельзя: остаются проверка обновлений, активация лицензии и проверка сертификатов. ");
-            h.Append("На редакциях Home и Pro минимальный уровень телеметрии система трактует как «Обязательные данные» — ");
-            h.Append("это ограничение редакции, а не программы.</div>");
-            h.Append("<footer>Отчёт сформирован программой «Приватность Windows 11». ");
-            h.Append("Данные получены из реестра, служб, планировщика, кэша DNS, журнала брандмауэра ");
-            h.Append("и встроенного механизма диагностики Windows.</footer></body></html>");
+            h.Append(L.T("<div class=\"note\"><b>Честно о пределах.</b> Полностью прекратить обмен данными с Microsoft "));
+            h.Append(L.T("на Windows нельзя: остаются проверка обновлений, активация лицензии и проверка сертификатов. "));
+            h.Append(L.T("На редакциях Home и Pro минимальный уровень телеметрии система трактует как «Обязательные данные» — "));
+            h.Append(L.T("это ограничение редакции, а не программы.</div>"));
+            h.Append(L.T("<footer>Отчёт сформирован программой «Приватность Windows 11». "));
+            h.Append(L.T("Данные получены из реестра, служб, планировщика, кэша DNS, журнала брандмауэра "));
+            h.Append(L.T("и встроенного механизма диагностики Windows.</footer></body></html>"));
             return h.ToString();
         }
 
         private static string FormatBig(int n)
         {
-            if (n >= 1000000) return (n / 1000000.0).ToString("0.#") + " млн";
-            if (n >= 1000) return (n / 1000.0).ToString("0.#") + " тыс";
+            if (n >= 1000000) return (n / 1000000.0).ToString("0.#") + L.T(" млн");
+            if (n >= 1000) return (n / 1000.0).ToString("0.#") + L.T(" тыс");
             return n.ToString();
         }
 
@@ -1646,8 +1663,8 @@ namespace Win11Privacy
             head.ColumnCount = 2; head.Dock = DockStyle.Fill; head.AutoSize = true;
             head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            head.Controls.Add(PageTitle("Проверка на деле"), 0, 0);
-            ModernButton rerun = new ModernButton("Проверить сейчас", true); rerun.Font = new Font(Font, FontStyle.Bold);
+            head.Controls.Add(PageTitle(L.T("Проверка на деле")), 0, 0);
+            ModernButton rerun = new ModernButton(L.T("Проверить сейчас"), true); rerun.Font = new Font(Font, FontStyle.Bold);
             rerun.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
             rerun.Click += delegate { RunAudit(); };
             head.Controls.Add(rerun, 1, 0);
@@ -1671,7 +1688,7 @@ namespace Win11Privacy
             _auditHint = new Label();
             _auditHint.Dock = DockStyle.Bottom; _auditHint.AutoSize = false; _auditHint.Height = (int)(u * 3F);
             _auditHint.ForeColor = Theme.TextDim;
-            _auditHint.Text = "Нажмите «Проверить сейчас» — программа прочитает реальное состояние системы\nи покажет, что сработало, а что нет.";
+            _auditHint.Text = L.T("Нажмите «Проверить сейчас» — программа прочитает реальное состояние системы\nи покажет, что сработало, а что нет.");
             rightTop.Controls.Add(_auditHint);
             _auditTiles = new TileGrid();
             _auditTiles.Dock = DockStyle.Fill; _auditTiles.Font = Font; _auditTiles.MaxCols = 4;
@@ -1714,7 +1731,7 @@ namespace Win11Privacy
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            page.Controls.Add(PageTitle("Монитор утечек"), 0, 0);
+            page.Controls.Add(PageTitle(L.T("Монитор утечек")), 0, 0);
 
             Card ctl = new Card();
             ctl.Dock = DockStyle.Fill; ctl.Margin = new Padding(0, (int)(u*0.5F), 0, (int)(u*0.5F));
@@ -1726,12 +1743,12 @@ namespace Win11Privacy
             _monitorState = new Label();
             _monitorState.AutoSize = false; _monitorState.Dock = DockStyle.Fill;
             _monitorState.TextAlign = ContentAlignment.MiddleLeft; _monitorState.ForeColor = Theme.TextDim;
-            _monitorState.Text = "Монитор фиксирует попытки программ отправить данные наружу и показывает,\nкто и куда стучится. Использует брандмауэр и журнал безопасности Windows.";
+            _monitorState.Text = L.T("Монитор фиксирует попытки программ отправить данные наружу и показывает,\nкто и куда стучится. Использует брандмауэр и журнал безопасности Windows.");
             ctlIn.Controls.Add(_monitorState, 0, 0);
             FlowLayoutPanel mb = new FlowLayoutPanel(); mb.AutoSize = true; mb.WrapContents = false; mb.Anchor = AnchorStyles.Right;
-            _monitorToggle = new ModernButton("Включить монитор", true); _monitorToggle.Font = new Font(Font, FontStyle.Bold);
+            _monitorToggle = new ModernButton(L.T("Включить монитор"), true); _monitorToggle.Font = new Font(Font, FontStyle.Bold);
             _monitorToggle.Click += OnMonitorToggle;
-            ModernButton refresh = new ModernButton("Обновить", false); refresh.Click += delegate { RefreshMonitor(); };
+            ModernButton refresh = new ModernButton(L.T("Обновить"), false); refresh.Click += delegate { RefreshMonitor(); };
             refresh.Margin = new Padding((int)(u*0.5F),0,0,0);
             mb.Controls.Add(_monitorToggle); mb.Controls.Add(refresh);
             ctlIn.Controls.Add(mb, 1, 0);
@@ -1766,7 +1783,7 @@ namespace Win11Privacy
             page.RowStyles.Add(new RowStyle(SizeType.Absolute, (int)(u * 7.6F)));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            page.Controls.Add(PageTitle("Предустановленные приложения"), 0, 0);
+            page.Controls.Add(PageTitle(L.T("Предустановленные приложения")), 0, 0);
 
             Card ctl = new Card();
             ctl.Dock = DockStyle.Fill;
@@ -1780,17 +1797,17 @@ namespace Win11Privacy
             _appsState = new Label();
             _appsState.AutoSize = false; _appsState.Dock = DockStyle.Fill;
             _appsState.TextAlign = ContentAlignment.MiddleLeft; _appsState.ForeColor = Theme.TextDim;
-            _appsState.Text = "Приложения, которые Windows ставит без спроса. Отмеченные «можно убрать» —\n" +
-                              "проверенный список; системные компоненты в перечень не попадают вовсе.";
+            _appsState.Text = L.T("Приложения, которые Windows ставит без спроса. Отмеченные «можно убрать» —\n") +
+                              L.T("проверенный список; системные компоненты в перечень не попадают вовсе.");
             ci.Controls.Add(_appsState, 0, 0);
             FlowLayoutPanel ab = new FlowLayoutPanel();
             AttachButtonRow(ab, ctl);
             ab.Margin = new Padding(0, (int)(u * 0.5F), 0, 0);
-            _btnAppsRefresh = new ModernButton("Обновить список", false);
+            _btnAppsRefresh = new ModernButton(L.T("Обновить список"), false);
             _btnAppsRefresh.Click += delegate { RefreshApps(); };
-            ModernButton pickBloat = new ModernButton("Отметить лишнее", false);
+            ModernButton pickBloat = new ModernButton(L.T("Отметить лишнее"), false);
             pickBloat.Click += delegate { SelectBloat(); };
-            _btnAppsRemove = new ModernButton("Удалить выбранные", true);
+            _btnAppsRemove = new ModernButton(L.T("Удалить выбранные"), true);
             _btnAppsRemove.Click += OnRemoveApps;
             foreach (ModernButton b in new[] { _btnAppsRefresh, pickBloat, _btnAppsRemove })
             { b.Font = b.Primary ? new Font(Font, FontStyle.Bold) : Font; b.Margin = new Padding((int)(u * 0.4F), 0, 0, (int)(u * 0.3F)); ab.Controls.Add(b); }
@@ -1812,7 +1829,7 @@ namespace Win11Privacy
 
         private void RefreshApps()
         {
-            RunJson("-ListApps", "Чтение списка приложений…", delegate(Dictionary<string, object> d)
+            RunJson("-ListApps", L.T("Чтение списка приложений…"), delegate(Dictionary<string, object> d)
             {
                 RenderApps(d);
             });
@@ -1824,7 +1841,7 @@ namespace Win11Privacy
                 _appsList.Controls.Clear();
                 if (d == null)
                 {
-                    SectionHeader sh = new SectionHeader("Не удалось получить список"); sh.Font = Font;
+                    SectionHeader sh = new SectionHeader(L.T("Не удалось получить список")); sh.Font = Font;
                     _appsList.Controls.Add(sh); _appsList.Restack(); return;
                 }
                 List<object> apps = Json.GetArr(d, "apps");
@@ -1836,24 +1853,24 @@ namespace Win11Privacy
                     bool isBloat = Json.GetBool(a, "bloat");
                     if (isBloat && !headBloat)
                     {
-                        SectionHeader sh = new SectionHeader("Можно убрать — ставится без спроса");
+                        SectionHeader sh = new SectionHeader(L.T("Можно убрать — ставится без спроса"));
                         sh.Font = Font; _appsList.Controls.Add(sh); headBloat = true;
                     }
                     if (!isBloat && !headRest)
                     {
-                        SectionHeader sh = new SectionHeader("Остальное — удаляйте, только если знаете, что это");
+                        SectionHeader sh = new SectionHeader(L.T("Остальное — удаляйте, только если знаете, что это"));
                         sh.Font = Font; _appsList.Controls.Add(sh); headRest = true;
                     }
                     if (isBloat) bloat++;
-                    WipeRow r = new WipeRow(Json.GetStr(a, "name"), Json.GetStr(a, "title"),
+                    WipeRow r = new WipeRow(Json.GetStr(a, "name"), L.T(Json.GetStr(a, "title")),
                         Json.GetStr(a, "name") + "   ·   " + Json.GetStr(a, "publisher"),
-                        isBloat ? "можно убрать" : "", GApp, true);
+                        isBloat ? L.T("можно убрать") : "", GApp, true);
                     r.Font = Font;
                     _appsList.Controls.Add(r);
                 }
                 _appsList.Restack();
-                _appsState.Text = "Найдено приложений: " + apps.Count + ", из них лишних: " + bloat + ".\n" +
-                                  "Любое удалённое можно вернуть из Microsoft Store.";
+                _appsState.Text = L.T("Найдено приложений: ") + apps.Count + L.T(", из них лишних: ") + bloat + ".\n" +
+                                  L.T("Любое удалённое можно вернуть из Microsoft Store.");
             }
         }
 
@@ -1863,7 +1880,7 @@ namespace Win11Privacy
             foreach (Control c in _appsList.Controls)
             {
                 SectionHeader sh = c as SectionHeader;
-                if (sh != null) { inBloat = sh.Text.StartsWith("МОЖНО"); continue; }
+                if (sh != null) { inBloat = sh.Text.StartsWith(L.T("МОЖНО")); continue; }
                 WipeRow r = c as WipeRow;
                 if (r != null) r.Checked = inBloat;
             }
@@ -1879,13 +1896,13 @@ namespace Win11Privacy
                 if (r != null && r.Checked) ids.Add(r.Id);
             }
             if (ids.Count == 0)
-            { MessageBox.Show(this, "Отметьте галочками, какие приложения удалить.", "Ничего не выбрано", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-            if (MessageBox.Show(this, "Будет удалено приложений: " + ids.Count + ".\n\n" +
-                "Любое из них можно вернуть из Microsoft Store. Системные компоненты\n" +
-                "программа не трогает.\n\nПродолжить?",
-                "Удаление приложений", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            { MessageBox.Show(this, L.T("Отметьте галочками, какие приложения удалить."), L.T("Ничего не выбрано"), MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            if (MessageBox.Show(this, L.T("Будет удалено приложений: ") + ids.Count + ".\n\n" +
+                L.T("Любое из них можно вернуть из Microsoft Store. Системные компоненты\n") +
+                L.T("программа не трогает.\n\nПродолжить?"),
+                L.T("Удаление приложений"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
             RunStreaming("-RemoveApps -AppItems " + string.Join(",", ids.ToArray()) + " -AllUsers",
-                "Удаление приложений…", delegate { Navigate("apps"); RefreshApps(); });
+                L.T("Удаление приложений…"), delegate { Navigate("apps"); RefreshApps(); });
         }
 
         // ================================================================== //
@@ -1902,7 +1919,7 @@ namespace Win11Privacy
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
             page.RowStyles[1] = new RowStyle(SizeType.Absolute, (int)(u * 7.6F));
-            page.Controls.Add(PageTitle("Страж приватности"), 0, 0);
+            page.Controls.Add(PageTitle(L.T("Страж приватности")), 0, 0);
 
             Card intro = new Card();
             intro.Dock = DockStyle.Fill; intro.Margin = new Padding(0,(int)(u*0.5F),0,(int)(u*0.5F));
@@ -1914,19 +1931,19 @@ namespace Win11Privacy
             ii.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             _guardState = new Label(); _guardState.AutoSize = false; _guardState.Dock = DockStyle.Fill;
             _guardState.TextAlign = ContentAlignment.MiddleLeft; _guardState.ForeColor = Theme.TextDim;
-            _guardState.Text = "Крупные обновления Windows тихо возвращают часть настроек назад.\n" +
-                              "Страж проверяет систему по расписанию, возвращает сбитое и предупреждает.";
+            _guardState.Text = L.T("Крупные обновления Windows тихо возвращают часть настроек назад.\n") +
+                              L.T("Страж проверяет систему по расписанию, возвращает сбитое и предупреждает.");
             ii.Controls.Add(_guardState, 0, 0);
             FlowLayoutPanel gb = new FlowLayoutPanel(); gb.AutoSize = true; gb.FlowDirection = FlowDirection.LeftToRight;
             AttachButtonRow(gb, intro);
             gb.Margin = new Padding(0, (int)(u * 0.5F), 0, 0);
-            _btnGuardInstall = new ModernButton("Включить стража", true); _btnGuardInstall.Font = new Font(Font, FontStyle.Bold);
+            _btnGuardInstall = new ModernButton(L.T("Включить стража"), true); _btnGuardInstall.Font = new Font(Font, FontStyle.Bold);
             _btnGuardInstall.Click += OnGuardInstall;
-            _btnGuardNow = new ModernButton("Проверить", false); _btnGuardNow.Click += OnGuardNow;
-            _btnGuardRemove = new ModernButton("Отключить", false); _btnGuardRemove.Click += OnGuardRemove;
-            _btnWatcher = new ModernButton("Уведомления", false); _btnWatcher.Click += OnWatcherToggle;
-            _btnSensorGuard = new ModernButton("Датчики", false); _btnSensorGuard.Click += OnSensorToggle;
-            _btnSnapshot = new ModernButton("Снимок", false); _btnSnapshot.Click += OnSnapshot;
+            _btnGuardNow = new ModernButton(L.T("Проверить"), false); _btnGuardNow.Click += OnGuardNow;
+            _btnGuardRemove = new ModernButton(L.T("Отключить"), false); _btnGuardRemove.Click += OnGuardRemove;
+            _btnWatcher = new ModernButton(L.T("Уведомления"), false); _btnWatcher.Click += OnWatcherToggle;
+            _btnSensorGuard = new ModernButton(L.T("Датчики"), false); _btnSensorGuard.Click += OnSensorToggle;
+            _btnSnapshot = new ModernButton(L.T("Снимок"), false); _btnSnapshot.Click += OnSnapshot;
             foreach (ModernButton b in new[] { _btnGuardInstall, _btnGuardNow, _btnGuardRemove, _btnWatcher, _btnSensorGuard, _btnSnapshot })
             { b.Font = b.Primary ? new Font(Font, FontStyle.Bold) : Font; b.Margin = new Padding((int)(u*0.4F),0,0,(int)(u*0.3F)); gb.Controls.Add(b); }
             ii.Controls.Add(gb, 0, 1);
@@ -1956,7 +1973,7 @@ namespace Win11Privacy
             page.BackColor = Theme.WindowBg;
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            page.Controls.Add(PageTitle("Журнал выполнения"), 0, 0);
+            page.Controls.Add(PageTitle(L.T("Журнал выполнения")), 0, 0);
 
             Card card = new Card(); card.Dock = DockStyle.Fill; card.Padding = new Padding((int)(u*0.6F));
             card.Margin = new Padding(0,(int)(u*0.5F),0,(int)(u*0.3F));
@@ -1968,8 +1985,8 @@ namespace Win11Privacy
             Dwm.DarkScrollbars(_log);
             card.Controls.Add(_log);
             page.Controls.Add(card, 0, 1);
-            LogLine("Здесь появляется подробный вывод при применении настроек, откате,", Theme.TextDim);
-            LogLine("работе стража и монитора.", Theme.TextDim);
+            LogLine(L.T("Здесь появляется подробный вывод при применении настроек, откате,"), Theme.TextDim);
+            LogLine(L.T("работе стража и монитора."), Theme.TextDim);
             return page;
         }
 
@@ -1983,39 +2000,60 @@ namespace Win11Privacy
             FlowLayoutPanel f = new FlowLayoutPanel();
             f.FlowDirection = FlowDirection.TopDown; f.WrapContents = false; f.AutoSize = true;
             f.Dock = DockStyle.Top; f.Padding = new Padding(0);
-            f.Controls.Add(PageTitle("О программе"));
+            TableLayoutPanel aboutHead = new TableLayoutPanel();
+            aboutHead.ColumnCount = 2; aboutHead.RowCount = 1; aboutHead.AutoSize = true;
+            aboutHead.BackColor = Theme.WindowBg;
+            aboutHead.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            aboutHead.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            aboutHead.Controls.Add(PageTitle(L.T("О программе")), 0, 0);
+            ModernButton bLang = new ModernButton(L.English ? "Русский" : "English", false);
+            bLang.Font = Font;
+            bLang.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
+            bLang.Margin = new Padding((int)(u * 1.2F), 0, 0, (int)(u * 0.5F));
+            bLang.Click += delegate
+            {
+                L.English = !L.English;
+                SaveUiState();
+                MessageBox.Show(this,
+                    L.English ? "The language will change after restarting the program."
+                              : "Язык интерфейса сменится после перезапуска программы.",
+                    L.T("Приватность Windows 11"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+                bLang.Text = L.English ? "Русский" : "English";
+            };
+            aboutHead.Controls.Add(bLang, 1, 0);
+            f.Controls.Add(aboutHead);
 
-            _aboutEdition = AboutCard("Ваша система", "Определение…");
+            _aboutEdition = AboutCard(L.T("Ваша система"), L.T("Определение…"));
             f.Controls.Add(_aboutEdition);
 
-            f.Controls.Add(AboutCard("Что умеет эта программа, чего нет у других",
-                "• Досье: кто и когда реально включал камеру, микрофон и геолокацию — с длительностью и меткой «сейчас».\n" +
-                "• Слежение за датчиками: уведомление в момент, когда НОВАЯ программа впервые получила доступ; график по дням.\n" +
-                "• Цифровой след: рекламный ID, история сетей и флешек, всё, что Windows помнит о вас — с выборочным стиранием.\n" +
-                "• Рентген телеметрии: настоящие события, собранные о компьютере, с сырым содержимым.\n" +
-                "• Проверка на деле: читает реальное состояние системы и показывает индекс, а не «галочки».\n" +
-                "• Монитор утечек: показывает, кто и куда реально отправляет данные.\n" +
-                "• Страж: возвращает настройки, сбитые обновлениями Windows; машина времени со снимками состояния.\n" +
-                "• Телеметрия сторонних программ и слежка производителя ноутбука.\n" +
-                "• Блокировка через брандмауэр, а не только hosts; удаление накопленного буфера телеметрии.\n" +
-                "• Профили и тихий запуск из командной строки для настройки нескольких ПК.\n" +
-                "• Быстрые клавиши: Ctrl+1…9 — страницы, Ctrl+F — поиск по настройкам."));
+            f.Controls.Add(AboutCard(L.T("Что умеет эта программа, чего нет у других"),
+                L.T("• Досье: кто и когда реально включал камеру, микрофон и геолокацию — с длительностью и меткой «сейчас».\n") +
+                L.T("• Слежение за датчиками: уведомление в момент, когда НОВАЯ программа впервые получила доступ; график по дням.\n") +
+                L.T("• Цифровой след: рекламный ID, история сетей и флешек, всё, что Windows помнит о вас — с выборочным стиранием.\n") +
+                L.T("• Рентген телеметрии: настоящие события, собранные о компьютере, с сырым содержимым.\n") +
+                L.T("• Проверка на деле: читает реальное состояние системы и показывает индекс, а не «галочки».\n") +
+                L.T("• Монитор утечек: показывает, кто и куда реально отправляет данные.\n") +
+                L.T("• Страж: возвращает настройки, сбитые обновлениями Windows; машина времени со снимками состояния.\n") +
+                L.T("• Телеметрия сторонних программ и слежка производителя ноутбука.\n") +
+                L.T("• Блокировка через брандмауэр, а не только hosts; удаление накопленного буфера телеметрии.\n") +
+                L.T("• Профили и тихий запуск из командной строки для настройки нескольких ПК.\n") +
+                L.T("• Быстрые клавиши: Ctrl+1…9 — страницы, Ctrl+F — поиск по настройкам.")));
 
-            f.Controls.Add(AboutCard("Командная строка",
-                "Win11Privacy.exe --profile \"C:\\путь\\profile.json\" --silent   тихо применить профиль\n" +
-                "Win11Privacy.exe --audit                                        проверка (код возврата = число несоответствий)\n" +
-                "Профиль сохраняется кнопкой «Сохранить профиль» на странице «Настройки»."));
+            f.Controls.Add(AboutCard(L.T("Командная строка"),
+                L.T("Win11Privacy.exe --profile \"C:\\путь\\profile.json\" --silent   тихо применить профиль\n") +
+                L.T("Win11Privacy.exe --audit                                        проверка (код возврата = число несоответствий)\n") +
+                L.T("Профиль сохраняется кнопкой «Сохранить профиль» на странице «Настройки».")));
 
-            f.Controls.Add(AboutCard("Честно о пределах",
-                "Полностью прекратить обмен данными с Microsoft на Windows нельзя: остаются проверка обновлений,\n" +
-                "активация лицензии и проверка сертификатов. На редакциях Home и Pro минимальный уровень телеметрии\n" +
-                "система трактует как «Обязательные данные» — это ограничение редакции, а не программы. Всё, что можно\n" +
-                "отключить без поломки системы, эта программа отключает, а Страж не даёт вернуть обратно."));
+            f.Controls.Add(AboutCard(L.T("Честно о пределах"),
+                L.T("Полностью прекратить обмен данными с Microsoft на Windows нельзя: остаются проверка обновлений,\n") +
+                L.T("активация лицензии и проверка сертификатов. На редакциях Home и Pro минимальный уровень телеметрии\n") +
+                L.T("система трактует как «Обязательные данные» — это ограничение редакции, а не программы. Всё, что можно\n") +
+                L.T("отключить без поломки системы, эта программа отключает, а Страж не даёт вернуть обратно.")));
 
-            f.Controls.Add(AboutCard("Запуск без предупреждения SmartScreen",
-                "Синее окно показывается любому неподписанному приложению из интернета. Убрать его можно так:\n" +
-                "правый клик по файлу → Свойства → внизу галочка «Разблокировать» → ОК. Запрос прав администратора\n" +
-                "(UAC) остаётся — он нужен, потому что программа меняет системные настройки."));
+            f.Controls.Add(AboutCard(L.T("Запуск без предупреждения SmartScreen"),
+                L.T("Синее окно показывается любому неподписанному приложению из интернета. Убрать его можно так:\n") +
+                L.T("правый клик по файлу → Свойства → внизу галочка «Разблокировать» → ОК. Запрос прав администратора\n") +
+                L.T("(UAC) остаётся — он нужен, потому что программа меняет системные настройки.")));
             page.Controls.Add(f);
             return page;
         }
@@ -2086,7 +2124,7 @@ namespace Win11Privacy
             _progress.Visible = false; bar.Controls.Add(_progress);
 
             _status = new Label();
-            _status.Text = "Готово к работе."; _status.ForeColor = Theme.TextDim; _status.AutoSize = true;
+            _status.Text = L.T("Готово к работе."); _status.ForeColor = Theme.TextDim; _status.AutoSize = true;
             _status.Location = new Point((int)(u * 1.2F), (int)(u * 0.75F)); bar.Controls.Add(_status);
             bar.Resize += delegate {
                 _progress.Location = new Point((int)(u * 1.2F), (bar.Height - _progress.Height)/2 + 1);
@@ -2172,6 +2210,22 @@ namespace Win11Privacy
                                 "Win11Privacy", "ui.json");
         }
 
+        // Язык нужен раньше всего: с ним создаются подписи модулей и страниц
+        private void LoadLangPref()
+        {
+#if UITEST
+            if (true) return;
+#endif
+            try
+            {
+                string p = UiStatePath();
+                if (!File.Exists(p)) return;
+                Dictionary<string, object> d = Json.ParseObject(File.ReadAllText(p));
+                if (d != null && d.ContainsKey("en")) L.English = Json.GetBool(d, "en");
+            }
+            catch { }
+        }
+
         private void LoadUiState()
         {
 #if UITEST
@@ -2187,6 +2241,7 @@ namespace Win11Privacy
                 Rectangle wa = Screen.PrimaryScreen.WorkingArea;
                 if (w >= 600 && h >= 420) ClientSize = new Size(Math.Min(w, wa.Width), Math.Min(h, wa.Height));
                 _userCollapsed = Json.GetBool(d, "side");
+                if (d.ContainsKey("en")) L.English = Json.GetBool(d, "en");
                 if (Json.GetBool(d, "max")) WindowState = FormWindowState.Maximized;
             }
             catch { }
@@ -2204,7 +2259,8 @@ namespace Win11Privacy
                 Size s = (WindowState == FormWindowState.Normal) ? ClientSize : RestoreBounds.Size;
                 string txt = "{ \"w\": " + s.Width + ", \"h\": " + s.Height +
                              ", \"max\": " + (WindowState == FormWindowState.Maximized ? "true" : "false") +
-                             ", \"side\": " + (_userCollapsed ? "true" : "false") + " }";
+                             ", \"side\": " + (_userCollapsed ? "true" : "false") +
+                             ", \"en\": " + (L.English ? "true" : "false") + " }";
                 File.WriteAllText(p, txt);
             }
             catch { }
@@ -2221,7 +2277,7 @@ namespace Win11Privacy
         // ================================================================== //
         private void SetAll(bool on) { foreach (ModuleDef m in _mods) if (m.Row != null && (m.Installed || !m.App)) m.Row.Checked = on; }
         private void ResetDefaults() { foreach (ModuleDef m in _mods) if (m.Row != null) m.Row.Checked = m.DefaultOn && (m.Installed || !m.App); }
-        private void UpdateApplyText() { if (_btnApply != null && _optDry != null) _btnApply.Text = _optDry.Checked ? "Проверить" : "Применить"; }
+        private void UpdateApplyText() { if (_btnApply != null && _optDry != null) _btnApply.Text = _optDry.Checked ? L.T("Проверить") : L.T("Применить"); }
 
         // Фильтр поиска по странице «Настройки»
         private void ApplySettingsFilter()
@@ -2296,7 +2352,7 @@ namespace Win11Privacy
             else if (t.StartsWith("[!]")) c = Theme.Err;
             else if (t.StartsWith("[-]")) c = Theme.TextFaint;
             else if (t.StartsWith("---")) c = Theme.Accent;
-            else if (t.StartsWith("Система") || t.StartsWith("ИТОГО") || t.StartsWith("Изменений") || t.StartsWith("Ошибок") || t.StartsWith("Модули")) c = Theme.Text;
+            else if (t.StartsWith(L.T("Система")) || t.StartsWith(L.T("ИТОГО")) || t.StartsWith(L.T("Изменений")) || t.StartsWith(L.T("Ошибок")) || t.StartsWith(L.T("Модули"))) c = Theme.Text;
             LogLine(s, c);
             _log.SelectionStart = _log.TextLength; _log.ScrollToCaret();
         }
@@ -2319,15 +2375,15 @@ namespace Win11Privacy
             Assembly asm = Assembly.GetExecutingAssembly();
             using (Stream src = asm.GetManifestResourceStream("engine.ps1"))
             {
-                if (src == null) throw new InvalidOperationException("встроенный скрипт движка не найден в программе");
+                if (src == null) throw new InvalidOperationException(L.T("встроенный скрипт движка не найден в программе"));
                 using (FileStream dst = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read))
                 { byte[] buf = new byte[8192]; int n; while ((n = src.Read(buf, 0, buf.Length)) > 0) dst.Write(buf, 0, n); }
             }
             long len = 0;
             try { len = new FileInfo(path).Length; } catch { }
             if (len < 1000)
-                throw new InvalidOperationException("не удалось распаковать движок во временную папку:\n" + path +
-                                                    "\n\nВозможно, мешает антивирус.");
+                throw new InvalidOperationException(L.T("не удалось распаковать движок во временную папку:\n") + path +
+                                                    L.T("\n\nВозможно, мешает антивирус."));
             _enginePath = path;
             return path;
         }
@@ -2365,8 +2421,8 @@ namespace Win11Privacy
         {
             if (_streamRunning)
             {
-                MessageBox.Show(this, "Программа ещё выполняет предыдущую команду.\nДождитесь её завершения.",
-                    "Подождите", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, L.T("Программа ещё выполняет предыдущую команду.\nДождитесь её завершения."),
+                    L.T("Подождите"), MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -2380,15 +2436,15 @@ namespace Win11Privacy
             try { p.StartInfo = EnginePsi(extra); }
             catch (Exception ex)
             {
-                SetBusy(false, "Ошибка.");
-                LogLine("Не удалось подготовить движок: " + ex.Message, Theme.Err);
-                MessageBox.Show(this, ex.Message, "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                SetBusy(false, L.T("Ошибка."));
+                LogLine(L.T("Не удалось подготовить движок: ") + ex.Message, Theme.Err);
+                MessageBox.Show(this, ex.Message, L.T("Ошибка"), MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
-            LogLine("Запуск: powershell " + extra, Theme.TextFaint);
+            LogLine(L.T("Запуск: powershell ") + extra, Theme.TextFaint);
             if (_detect != null && !Json.GetBool(_detect, "admin"))
-                LogLine("ВНИМАНИЕ: программа запущена без прав администратора — изменения применить нельзя.", Theme.Err);
+                LogLine(L.T("ВНИМАНИЕ: программа запущена без прав администратора — изменения применить нельзя."), Theme.Err);
 
             _streamRunning = true;
             p.EnableRaisingEvents = true;
@@ -2409,13 +2465,13 @@ namespace Win11Privacy
                     BeginInvoke((MethodInvoker)delegate
                     {
                         _streamRunning = false;
-                        SetBusy(false, code == 0 ? "Готово." : "Завершено с ошибкой.");
+                        SetBusy(false, code == 0 ? L.T("Готово.") : L.T("Завершено с ошибкой."));
                         LogLine(new string('─', 58), Theme.TextFaint);
-                        if (code == 0) LogLine("Готово.", Theme.Text);
+                        if (code == 0) LogLine(L.T("Готово."), Theme.Text);
                         else
                         {
-                            LogLine("PowerShell завершился с кодом " + code + ".", Theme.Err);
-                            LogLine("Если выше нет строк движка — его блокирует антивирус или не хватает прав.", Theme.TextDim);
+                            LogLine(L.T("PowerShell завершился с кодом ") + code + ".", Theme.Err);
+                            LogLine(L.T("Если выше нет строк движка — его блокирует антивирус или не хватает прав."), Theme.TextDim);
                         }
                         if (onDone != null) onDone();
                     });
@@ -2427,11 +2483,11 @@ namespace Win11Privacy
             catch (Exception ex)
             {
                 _streamRunning = false;
-                SetBusy(false, "Не удалось запустить PowerShell.");
-                LogLine("Не удалось запустить PowerShell: " + ex.Message, Theme.Err);
-                LogLine("Путь: " + PowerShellExe(), Theme.TextDim);
-                MessageBox.Show(this, "Не удалось запустить PowerShell:\n" + ex.Message,
-                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                SetBusy(false, L.T("Не удалось запустить PowerShell."));
+                LogLine(L.T("Не удалось запустить PowerShell: ") + ex.Message, Theme.Err);
+                LogLine(L.T("Путь: ") + PowerShellExe(), Theme.TextDim);
+                MessageBox.Show(this, L.T("Не удалось запустить PowerShell:\n") + ex.Message,
+                    L.T("Ошибка"), MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -2443,8 +2499,8 @@ namespace Win11Privacy
             try { p.StartInfo = EnginePsi(extra); }
             catch (Exception ex)
             {
-                SetBusy(false, "Ошибка.");
-                LogLine("Не удалось подготовить движок: " + ex.Message, Theme.Err);
+                SetBusy(false, L.T("Ошибка."));
+                LogLine(L.T("Не удалось подготовить движок: ") + ex.Message, Theme.Err);
                 if (onResult != null) onResult(null);
                 return;
             }
@@ -2467,11 +2523,11 @@ namespace Win11Privacy
                 {
                     BeginInvoke((MethodInvoker)delegate
                     {
-                        SetBusy(false, "Готово.");
+                        SetBusy(false, L.T("Готово."));
                         Dictionary<string, object> d = null;
                         if (jsonLine != null) { try { d = Json.ParseObject(jsonLine); } catch { } }
                         if (d == null && errBuf.Length > 0)
-                            LogLine("Движок (" + extra + ") не вернул данные, код " + code + ":\n" + errBuf, Theme.Err);
+                            LogLine(L.T("Движок (") + extra + L.T(") не вернул данные, код ") + code + ":\n" + errBuf, Theme.Err);
                         if (onResult != null) onResult(d);
                     });
                 }
@@ -2481,8 +2537,8 @@ namespace Win11Privacy
             try { p.Start(); p.BeginOutputReadLine(); p.BeginErrorReadLine(); }
             catch (Exception ex)
             {
-                SetBusy(false, "PowerShell недоступен.");
-                LogLine("Не удалось запустить PowerShell: " + ex.Message, Theme.Err);
+                SetBusy(false, L.T("PowerShell недоступен."));
+                LogLine(L.T("Не удалось запустить PowerShell: ") + ex.Message, Theme.Err);
                 if (onResult != null) onResult(null);
             }
         }
@@ -2504,17 +2560,17 @@ namespace Win11Privacy
         private void OnApply(object sender, EventArgs e)
         {
             List<string> mods = SelectedModules();
-            if (mods.Count == 0) { MessageBox.Show(this, "Не выбран ни один пункт.", "Нечего применять", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            if (mods.Count == 0) { MessageBox.Show(this, L.T("Не выбран ни один пункт."), L.T("Нечего применять"), MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
             bool dry = _optDry.Checked;
             if (!dry)
             {
-                string warn = "Будут изменены настройки системы (разделов: " + mods.Count + ").";
-                if (_optBackup.Checked) warn += "\n\nПеред изменениями на рабочий стол будет сохранена резервная копия реестра.";
-                if (_optRestore.Checked) warn += "\nТакже будет создана точка восстановления (может занять минуту).";
+                string warn = L.T("Будут изменены настройки системы (разделов: ") + mods.Count + ").";
+                if (_optBackup.Checked) warn += L.T("\n\nПеред изменениями на рабочий стол будет сохранена резервная копия реестра.");
+                if (_optRestore.Checked) warn += L.T("\nТакже будет создана точка восстановления (может занять минуту).");
                 bool hard = false; foreach (ModuleDef m in _mods) if (m.Row.Checked && m.Hard) hard = true;
-                if (hard) warn += "\n\nВыбраны жёсткие меры (службы / hosts / брандмауэр / буфер).";
-                warn += "\n\nПродолжить?";
-                if (MessageBox.Show(this, warn, "Подтверждение", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                if (hard) warn += L.T("\n\nВыбраны жёсткие меры (службы / hosts / брандмауэр / буфер).");
+                warn += L.T("\n\nПродолжить?");
+                if (MessageBox.Show(this, warn, L.T("Подтверждение"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             }
             string extra = "-Modules " + string.Join(",", mods.ToArray());
             List<string> skip = SkippedItems();
@@ -2522,21 +2578,26 @@ namespace Win11Privacy
             if (dry) extra += " -DryRun";
             if (!_optBackup.Checked) extra += " -NoBackup";
             if (!_optRestore.Checked) extra += " -NoRestorePoint";
-            RunStreaming(extra, dry ? "Тестовый прогон…" : "Применение настроек…", delegate { });
+            RunStreaming(extra, dry ? L.T("Тестовый прогон…") : L.T("Применение настроек…"), delegate { });
         }
 
         private void OnRevert(object sender, EventArgs e)
         {
-            if (MessageBox.Show(this, "Откат вернёт службы, задачи планировщика, файл hosts, правила брандмауэра,\nкомпоненты производителя, настройки программ и удалит стража.\n\nНастройки реестра Windows откатываются .reg-файлами из папки на рабочем столе\nили точкой восстановления.\n\nПродолжить?",
-                "Откат изменений", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            RunStreaming("-Revert", "Откат изменений…", delegate { RunDetect(); });
+            if (MessageBox.Show(this, L.T("Программа вернёт всё, что меняла:\n\n") +
+                L.T("• настройки реестра — по журналу изменений, в те значения, что были до неё;\n") +
+                L.T("• службы, задачи планировщика, файл hosts, правила брандмауэра;\n") +
+                L.T("• компоненты производителя и настройки сторонних программ;\n") +
+                L.T("• стража, слежение за датчиками и живые уведомления.\n\n") +
+                L.T("Удалённые приложения не возвращаются — их можно поставить из Microsoft Store.\n\nПродолжить?"),
+                L.T("Откат изменений"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            RunStreaming("-Revert", L.T("Откат изменений…"), delegate { RunDetect(); });
         }
 
         private void OnSaveProfile(object sender, EventArgs e)
         {
             List<string> mods = SelectedModules();
             SaveFileDialog d = new SaveFileDialog();
-            d.Filter = "Профиль Win11Privacy (*.json)|*.json"; d.FileName = "win11privacy-profile.json";
+            d.Filter = L.T("Профиль Win11Privacy (*.json)|*.json"); d.FileName = "win11privacy-profile.json";
             if (d.ShowDialog(this) != DialogResult.OK) return;
             try
             {
@@ -2547,18 +2608,18 @@ namespace Win11Privacy
                 sb.Append("  \"backup\": ").Append(_optBackup.Checked ? "true" : "false").Append(",\n");
                 sb.Append("  \"restorePoint\": ").Append(_optRestore.Checked ? "true" : "false").Append("\n}\n");
                 File.WriteAllText(d.FileName, sb.ToString(), new UTF8Encoding(false));
-                _status.Text = "Профиль сохранён: " + Path.GetFileName(d.FileName);
+                _status.Text = L.T("Профиль сохранён: ") + Path.GetFileName(d.FileName);
             }
-            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, L.T("Ошибка"), MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
 
         private void OnLoadProfile(object sender, EventArgs e)
         {
             OpenFileDialog d = new OpenFileDialog();
-            d.Filter = "Профиль Win11Privacy (*.json)|*.json|Все файлы|*.*";
+            d.Filter = L.T("Профиль Win11Privacy (*.json)|*.json|Все файлы|*.*");
             if (d.ShowDialog(this) != DialogResult.OK) return;
-            try { ApplyProfileFile(d.FileName); _status.Text = "Профиль загружен: " + Path.GetFileName(d.FileName); }
-            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            try { ApplyProfileFile(d.FileName); _status.Text = L.T("Профиль загружен: ") + Path.GetFileName(d.FileName); }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, L.T("Ошибка"), MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
 
         private void ApplyProfileFile(string path)
@@ -2581,9 +2642,9 @@ namespace Win11Privacy
             List<string> skipAudit = SkippedItems();
             string auditArgs = "-Audit";
             if (skipAudit.Count > 0) auditArgs += " -SkipItems " + string.Join(",", skipAudit.ToArray());
-            RunJson(auditArgs, "Проверка состояния системы…", delegate(Dictionary<string, object> d)
+            RunJson(auditArgs, L.T("Проверка состояния системы…"), delegate(Dictionary<string, object> d)
             {
-                if (d == null) { _auditWhen.Text = "Не удалось получить данные."; return; }
+                if (d == null) { _auditWhen.Text = L.T("Не удалось получить данные."); return; }
                 _lastAudit = d;
                 RenderAudit(d);
                 RefreshHome();
@@ -2595,27 +2656,27 @@ namespace Win11Privacy
             int ok = Json.GetInt(d, "ok"), total = Json.GetInt(d, "total");
             _ring.SetScore(ok, total);
             _auditHint.Visible = false;
-            _auditWhen.Text = "Проверено: " + Json.GetStr(d, "time");
+            _auditWhen.Text = L.T("Проверено: ") + Json.GetStr(d, "time");
 
             _auditTiles.Controls.Clear();
             int fails = total - ok;
-            _auditTiles.Controls.Add(Tile("Применено", ok + " / " + total, "настроек подтверждено", fails == 0 ? Theme.Ok : Theme.Accent));
-            _auditTiles.Controls.Add(Tile("Не применено", fails.ToString(), fails == 0 ? "всё на месте" : "требуют внимания", fails == 0 ? Theme.Ok : Theme.Warn));
+            _auditTiles.Controls.Add(Tile(L.T("Применено"), ok + " / " + total, L.T("настроек подтверждено"), fails == 0 ? Theme.Ok : Theme.Accent));
+            _auditTiles.Controls.Add(Tile(L.T("Не применено"), fails.ToString(), fails == 0 ? L.T("всё на месте") : L.T("требуют внимания"), fails == 0 ? Theme.Ok : Theme.Warn));
             Dictionary<string, object> buf = Json.GetObj(d, "buffer");
-            if (buf != null) { string mb = Json.GetStr(buf, "mb"); _auditTiles.Controls.Add(Tile("Буфер телеметрии", (mb == "-1" ? "нет" : mb + " МБ"), Json.GetInt(buf, "files") + " файлов ждут отправки", Theme.Accent)); }
+            if (buf != null) { string mb = Json.GetStr(buf, "mb"); _auditTiles.Controls.Add(Tile(L.T("Буфер телеметрии"), (mb == "-1" ? L.T("нет") : mb + L.T(" МБ")), Json.GetInt(buf, "files") + L.T(" файлов ждут отправки"), Theme.Accent)); }
             List<object> dns = Json.GetArr(d, "dns");
             int leaked = 0; foreach (object o in dns) if (!Json.GetBool(Json.Obj(o), "blocked")) leaked++;
-            _auditTiles.Controls.Add(Tile("Обращения к телеметрии", dns.Count.ToString(), leaked + " не заблокировано (из кэша DNS)", leaked == 0 ? Theme.Ok : Theme.Err));
+            _auditTiles.Controls.Add(Tile(L.T("Обращения к телеметрии"), dns.Count.ToString(), leaked + L.T(" не заблокировано (из кэша DNS)"), leaked == 0 ? Theme.Ok : Theme.Err));
 
             _auditGroups.Controls.Clear();
             foreach (object go in Json.GetArr(d, "groups"))
             {
                 Dictionary<string, object> g = Json.Obj(go);
-                _auditGroups.Controls.Add(new AuditGroupRow(Json.GetStr(g, "title"), Json.GetInt(g, "ok"), Json.GetInt(g, "total"), Json.GetArr(g, "items")) { Font = this.Font });
+                _auditGroups.Controls.Add(new AuditGroupRow(L.T(Json.GetStr(g, "title")), Json.GetInt(g, "ok"), Json.GetInt(g, "total"), Json.GetArr(g, "items")) { Font = this.Font });
             }
             if (dns.Count > 0)
             {
-                SectionHeader sh = new SectionHeader("Обращения к доменам телеметрии (из кэша DNS)"); sh.Font = Font; _auditGroups.Controls.Add(sh);
+                SectionHeader sh = new SectionHeader(L.T("Обращения к доменам телеметрии (из кэша DNS)")); sh.Font = Font; _auditGroups.Controls.Add(sh);
                 foreach (object o in dns)
                 {
                     Dictionary<string, object> dn = Json.Obj(o);
@@ -2638,45 +2699,45 @@ namespace Win11Privacy
         private void OnMonitorToggle(object sender, EventArgs e)
         {
             if (_monitorEnabled)
-                RunStreaming("-DisableMonitor", "Выключение монитора…", delegate { _monitorEnabled = false; UpdateMonitorButton(); });
+                RunStreaming("-DisableMonitor", L.T("Выключение монитора…"), delegate { _monitorEnabled = false; UpdateMonitorButton(); });
             else
             {
-                if (MessageBox.Show(this, "Монитор включит правила брандмауэра для служб телеметрии и начнёт\nвести журнал заблокированных исходящих соединений.\n\nПродолжить?",
-                    "Включить монитор", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-                RunStreaming("-EnableMonitor", "Включение монитора…", delegate { _monitorEnabled = true; UpdateMonitorButton(); });
+                if (MessageBox.Show(this, L.T("Монитор включит правила брандмауэра для служб телеметрии и начнёт\nвести журнал заблокированных исходящих соединений.\n\nПродолжить?"),
+                    L.T("Включить монитор"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                RunStreaming("-EnableMonitor", L.T("Включение монитора…"), delegate { _monitorEnabled = true; UpdateMonitorButton(); });
             }
         }
         private void UpdateMonitorButton()
-        { if (_monitorToggle != null) { _monitorToggle.Text = _monitorEnabled ? "Выключить монитор" : "Включить монитор"; _monitorToggle.Primary = !_monitorEnabled; _monitorToggle.Invalidate(); } }
+        { if (_monitorToggle != null) { _monitorToggle.Text = _monitorEnabled ? L.T("Выключить монитор") : L.T("Включить монитор"); _monitorToggle.Primary = !_monitorEnabled; _monitorToggle.Invalidate(); } }
 
         private void RefreshMonitor()
         {
-            RunJson("-Monitor -MonitorHours 24", "Сбор статистики соединений…", delegate(Dictionary<string, object> d) { RenderMonitor(d); });
+            RunJson("-Monitor -MonitorHours 24", L.T("Сбор статистики соединений…"), delegate(Dictionary<string, object> d) { RenderMonitor(d); });
         }
 
         private void RenderMonitor(Dictionary<string, object> d)
         {
             {
-                if (d == null || d.ContainsKey("error")) { _monitorList.Controls.Clear(); SectionHeader sh = new SectionHeader(d != null ? Json.GetStr(d, "error") : "Нет данных — PowerShell недоступен"); sh.Font = Font; _monitorList.Controls.Add(sh); _monitorList.Restack(); return; }
+                if (d == null || d.ContainsKey("error")) { _monitorList.Controls.Clear(); SectionHeader sh = new SectionHeader(d != null ? Json.GetStr(d, "error") : L.T("Нет данных — PowerShell недоступен")); sh.Font = Font; _monitorList.Controls.Add(sh); _monitorList.Restack(); return; }
                 _lastMonitor = d;
                 _monitorEnabled = Json.GetBool(d, "enabled"); UpdateMonitorButton();
                 int total = Json.GetInt(d, "total"), tele = Json.GetInt(d, "telemetryHits");
                 _monitorTiles.Controls.Clear();
-                _monitorTiles.Controls.Add(Tile("Исходящих соединений", total.ToString(), "за 24 часа", Theme.Accent));
-                _monitorTiles.Controls.Add(Tile("К телеметрии", tele.ToString(), "распознано по имени домена", tele == 0 ? Theme.Ok : Theme.Warn));
-                _monitorTiles.Controls.Add(Tile("Правил брандмауэра", Json.GetInt(d, "firewallRules").ToString(), _monitorEnabled ? "монитор включён" : "монитор выключен", _monitorEnabled ? Theme.Ok : Theme.TextFaint));
+                _monitorTiles.Controls.Add(Tile(L.T("Исходящих соединений"), total.ToString(), L.T("за 24 часа"), Theme.Accent));
+                _monitorTiles.Controls.Add(Tile(L.T("К телеметрии"), tele.ToString(), L.T("распознано по имени домена"), tele == 0 ? Theme.Ok : Theme.Warn));
+                _monitorTiles.Controls.Add(Tile(L.T("Правил брандмауэра"), Json.GetInt(d, "firewallRules").ToString(), _monitorEnabled ? L.T("монитор включён") : L.T("монитор выключен"), _monitorEnabled ? Theme.Ok : Theme.TextFaint));
 
                 _monitorList.Controls.Clear();
                 List<object> procs = Json.GetArr(d, "byProcess");
                 if (procs.Count > 0)
                 {
-                    SectionHeader sh = new SectionHeader("Кто отправляет (программы)"); sh.Font = Font; _monitorList.Controls.Add(sh);
-                    foreach (object o in procs) { Dictionary<string, object> pr = Json.Obj(o); _monitorList.Controls.Add(new KvRow(Json.GetStr(pr, "name"), Json.GetInt(pr, "count") + " соед.", false) { Font = this.Font }); }
+                    SectionHeader sh = new SectionHeader(L.T("Кто отправляет (программы)")); sh.Font = Font; _monitorList.Controls.Add(sh);
+                    foreach (object o in procs) { Dictionary<string, object> pr = Json.Obj(o); _monitorList.Controls.Add(new KvRow(Json.GetStr(pr, "name"), Json.GetInt(pr, "count") + L.T(" соед."), false) { Font = this.Font }); }
                 }
                 List<object> dests = Json.GetArr(d, "byDest");
                 if (dests.Count > 0)
                 {
-                    SectionHeader sh = new SectionHeader("Куда (адреса назначения)"); sh.Font = Font; _monitorList.Controls.Add(sh);
+                    SectionHeader sh = new SectionHeader(L.T("Куда (адреса назначения)")); sh.Font = Font; _monitorList.Controls.Add(sh);
                     foreach (object o in dests)
                     {
                         Dictionary<string, object> ds = Json.Obj(o);
@@ -2687,7 +2748,7 @@ namespace Win11Privacy
                     }
                 }
                 if (procs.Count == 0 && dests.Count == 0)
-                { SectionHeader sh = new SectionHeader(_monitorEnabled ? "Пока ничего не зафиксировано — данные появятся по мере работы" : "Включите монитор, чтобы начать сбор"); sh.Font = Font; _monitorList.Controls.Add(sh); }
+                { SectionHeader sh = new SectionHeader(_monitorEnabled ? L.T("Пока ничего не зафиксировано — данные появятся по мере работы") : L.T("Включите монитор, чтобы начать сбор")); sh.Font = Font; _monitorList.Controls.Add(sh); }
                 try { _monitorList.AutoScrollPosition = Point.Empty; } catch { }
             _monitorList.Restack();
             }
@@ -2699,45 +2760,45 @@ namespace Win11Privacy
         private void OnGuardInstall(object sender, EventArgs e)
         {
             List<string> mods = SelectedModules();
-            if (mods.Count == 0) { MessageBox.Show(this, "Сначала выберите на странице «Настройки», что отслеживать.", "Страж", MessageBoxButtons.OK, MessageBoxIcon.Information); Navigate("settings"); return; }
-            RunStreaming("-InstallGuard -Modules " + string.Join(",", mods.ToArray()), "Установка стража…", delegate { RunDetect(); });
+            if (mods.Count == 0) { MessageBox.Show(this, L.T("Сначала выберите на странице «Настройки», что отслеживать."), L.T("Страж"), MessageBoxButtons.OK, MessageBoxIcon.Information); Navigate("settings"); return; }
+            RunStreaming("-InstallGuard -Modules " + string.Join(",", mods.ToArray()), L.T("Установка стража…"), delegate { RunDetect(); });
         }
         private void OnGuardRemove(object sender, EventArgs e)
-        { RunStreaming("-RemoveGuard", "Удаление стража…", delegate { RunDetect(); }); }
+        { RunStreaming("-RemoveGuard", L.T("Удаление стража…"), delegate { RunDetect(); }); }
         private void OnGuardNow(object sender, EventArgs e)
-        { RunStreaming("-GuardNow", "Проверка стражем…", delegate { RunDetect(); }); }
+        { RunStreaming("-GuardNow", L.T("Проверка стражем…"), delegate { RunDetect(); }); }
 
         private void OnSensorToggle(object sender, EventArgs e)
         {
             if (_sensorOn)
-            { RunStreaming("-RemoveSensorGuard", "Отключение слежения за датчиками…", delegate { RunDetect(); }); return; }
+            { RunStreaming("-RemoveSensorGuard", L.T("Отключение слежения за датчиками…"), delegate { RunDetect(); }); return; }
             if (MessageBox.Show(this,
-                "Каждые 30 минут программа будет тихо сверять журнал доступа к камере,\n" +
-                "микрофону и геолокации. Если доступ впервые получит НОВАЯ программа —\n" +
-                "вы сразу увидите уведомление.\n\n" +
-                "Заодно накапливается история для графика «Кто подглядывал» на «Обзоре».\n\nПродолжить?",
-                "Слежение за датчиками", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            RunStreaming("-InstallSensorGuard", "Включение слежения за датчиками…", delegate { RunDetect(); });
+                L.T("Каждые 30 минут программа будет тихо сверять журнал доступа к камере,\n") +
+                L.T("микрофону и геолокации. Если доступ впервые получит НОВАЯ программа —\n") +
+                L.T("вы сразу увидите уведомление.\n\n") +
+                L.T("Заодно накапливается история для графика «Кто подглядывал» на «Обзоре».\n\nПродолжить?"),
+                L.T("Слежение за датчиками"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            RunStreaming("-InstallSensorGuard", L.T("Включение слежения за датчиками…"), delegate { RunDetect(); });
         }
 
         private void OnWatcherToggle(object sender, EventArgs e)
         {
-            if (_watcherOn) { RunStreaming("-RemoveWatcher", "Выключение уведомлений…", delegate { RunDetect(); }); return; }
+            if (_watcherOn) { RunStreaming("-RemoveWatcher", L.T("Выключение уведомлений…"), delegate { RunDetect(); }); return; }
             if (MessageBox.Show(this,
-                "Программа будет показывать всплывающее уведомление в момент, когда\n" +
-                "перехвачена попытка отправить телеметрию наружу.\n\n" +
-                "Включатся правила брандмауэра и журнал безопасности. Уведомления\n" +
-                "приходят не чаще одного раза в 10 минут, чтобы не мешать.\n\nПродолжить?",
-                "Живые уведомления", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            RunStreaming("-InstallWatcher", "Включение уведомлений…", delegate { RunDetect(); });
+                L.T("Программа будет показывать всплывающее уведомление в момент, когда\n") +
+                L.T("перехвачена попытка отправить телеметрию наружу.\n\n") +
+                L.T("Включатся правила брандмауэра и журнал безопасности. Уведомления\n") +
+                L.T("приходят не чаще одного раза в 10 минут, чтобы не мешать.\n\nПродолжить?"),
+                L.T("Живые уведомления"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            RunStreaming("-InstallWatcher", L.T("Включение уведомлений…"), delegate { RunDetect(); });
         }
 
         private void OnSnapshot(object sender, EventArgs e)
-        { RunStreaming("-Snapshot", "Снимок состояния…", delegate { RefreshSnapshots(); }); }
+        { RunStreaming("-Snapshot", L.T("Снимок состояния…"), delegate { RefreshSnapshots(); }); }
 
         private void RefreshSnapshots()
         {
-            RunJson("-SnapshotList", "Чтение снимков…", delegate(Dictionary<string, object> d)
+            RunJson("-SnapshotList", L.T("Чтение снимков…"), delegate(Dictionary<string, object> d)
             {
                 _snapshots = d != null ? Json.GetArr(d, "snapshots") : new List<object>();
                 RenderGuard();
@@ -2745,7 +2806,7 @@ namespace Win11Privacy
                 {
                     string a = Json.GetStr(Json.Obj(_snapshots[1]), "file");
                     string b = Json.GetStr(Json.Obj(_snapshots[0]), "file");
-                    RunJson("-SnapshotDiff \"" + a + "|" + b + "\"", "Сравнение снимков…", delegate(Dictionary<string, object> df)
+                    RunJson("-SnapshotDiff \"" + a + "|" + b + "\"", L.T("Сравнение снимков…"), delegate(Dictionary<string, object> df)
                     { _lastDiff = df; RenderGuard(); });
                 }
             });
@@ -2755,52 +2816,52 @@ namespace Win11Privacy
         {
             if (_guardBody == null) return;
             _guardBody.Controls.Clear();
-            _btnGuardInstall.Text = _guardInstalled ? "Переустановить" : "Включить стража";
+            _btnGuardInstall.Text = _guardInstalled ? L.T("Переустановить") : L.T("Включить стража");
             _btnGuardRemove.Enabled = _guardInstalled; _btnGuardNow.Enabled = _guardInstalled;
 
-            SectionHeader sh = new SectionHeader("Состояние"); sh.Font = Font; _guardBody.Controls.Add(sh);
-            _guardBody.Controls.Add(new KvRow("Страж", _guardInstalled ? "включён" : "выключен", false) { Font = this.Font });
-            _guardBody.Controls.Add(new KvRow("Слежение за датчиками (камера, микрофон, гео)", _sensorOn ? "включено" : "выключено", false) { Font = this.Font });
-            _guardBody.Controls.Add(new KvRow("Живые уведомления о перехвате отправки", _watcherOn ? "включены" : "выключены", false) { Font = this.Font });
+            SectionHeader sh = new SectionHeader(L.T("Состояние")); sh.Font = Font; _guardBody.Controls.Add(sh);
+            _guardBody.Controls.Add(new KvRow(L.T("Страж"), _guardInstalled ? L.T("включён") : L.T("выключен"), false) { Font = this.Font });
+            _guardBody.Controls.Add(new KvRow(L.T("Слежение за датчиками (камера, микрофон, гео)"), _sensorOn ? L.T("включено") : L.T("выключено"), false) { Font = this.Font });
+            _guardBody.Controls.Add(new KvRow(L.T("Живые уведомления о перехвате отправки"), _watcherOn ? L.T("включены") : L.T("выключены"), false) { Font = this.Font });
             if (_detect != null)
             {
                 List<object> gm = Json.GetArr(_detect, "guardModules");
-                if (gm.Count > 0) _guardBody.Controls.Add(new KvRow("Отслеживается модулей", gm.Count.ToString(), false) { Font = this.Font });
+                if (gm.Count > 0) _guardBody.Controls.Add(new KvRow(L.T("Отслеживается модулей"), gm.Count.ToString(), false) { Font = this.Font });
                 Dictionary<string, object> last = Json.GetObj(_detect, "guardLast");
                 if (last != null)
                 {
-                    SectionHeader sh2 = new SectionHeader("Последняя проверка"); sh2.Font = Font; _guardBody.Controls.Add(sh2);
-                    _guardBody.Controls.Add(new KvRow("Время", Json.GetStr(last, "time"), false) { Font = this.Font });
-                    _guardBody.Controls.Add(new KvRow("Сбито обновлениями", Json.GetArr(last, "drifted").Count.ToString(), false) { Font = this.Font });
-                    _guardBody.Controls.Add(new KvRow("Исправлено", Json.GetInt(last, "fixed").ToString(), false) { Font = this.Font });
+                    SectionHeader sh2 = new SectionHeader(L.T("Последняя проверка")); sh2.Font = Font; _guardBody.Controls.Add(sh2);
+                    _guardBody.Controls.Add(new KvRow(L.T("Время"), Json.GetStr(last, "time"), false) { Font = this.Font });
+                    _guardBody.Controls.Add(new KvRow(L.T("Сбито обновлениями"), Json.GetArr(last, "drifted").Count.ToString(), false) { Font = this.Font });
+                    _guardBody.Controls.Add(new KvRow(L.T("Исправлено"), Json.GetInt(last, "fixed").ToString(), false) { Font = this.Font });
                     List<object> kb = Json.GetArr(last, "hotfixes");
-                    if (kb.Count > 0) { StringBuilder sb = new StringBuilder(); foreach (object o in kb) { if (sb.Length > 0) sb.Append(", "); sb.Append(Json.Str(o)); } _guardBody.Controls.Add(new KvRow("Обновления Windows", sb.ToString(), false) { Font = this.Font }); }
+                    if (kb.Count > 0) { StringBuilder sb = new StringBuilder(); foreach (object o in kb) { if (sb.Length > 0) sb.Append(", "); sb.Append(Json.Str(o)); } _guardBody.Controls.Add(new KvRow(L.T("Обновления Windows"), sb.ToString(), false) { Font = this.Font }); }
                 }
             }
 
             // машина времени
-            SectionHeader sh3 = new SectionHeader("Машина времени — снимки состояния"); sh3.Font = Font; _guardBody.Controls.Add(sh3);
+            SectionHeader sh3 = new SectionHeader(L.T("Машина времени — снимки состояния")); sh3.Font = Font; _guardBody.Controls.Add(sh3);
             if (_snapshots.Count == 0)
-                _guardBody.Controls.Add(new KvRow("Снимков пока нет — нажмите «Снимок состояния»", "", false) { Font = this.Font });
+                _guardBody.Controls.Add(new KvRow(L.T("Снимков пока нет — нажмите «Снимок состояния»"), "", false) { Font = this.Font });
             else
                 foreach (object o in _snapshots)
                 {
                     Dictionary<string, object> sn = Json.Obj(o);
-                    _guardBody.Controls.Add(new KvRow(Json.GetStr(sn, "time") + "   (сборка " + Json.GetStr(sn, "build") + ")",
+                    _guardBody.Controls.Add(new KvRow(Json.GetStr(sn, "time") + L.T("   (сборка ") + Json.GetStr(sn, "build") + ")",
                         Json.GetInt(sn, "ok") + " / " + Json.GetInt(sn, "total"), false) { Font = this.Font });
                 }
 
             if (_lastDiff != null && Json.GetArr(_lastDiff, "changes").Count > 0)
             {
                 int broke = Json.GetInt(_lastDiff, "broke");
-                SectionHeader sh4 = new SectionHeader("Что изменилось между двумя последними снимками");
+                SectionHeader sh4 = new SectionHeader(L.T("Что изменилось между двумя последними снимками"));
                 sh4.Font = Font; _guardBody.Controls.Add(sh4);
                 List<object> kb2 = Json.GetArr(_lastDiff, "hotfixes");
                 if (kb2.Count > 0)
                 {
                     StringBuilder sb = new StringBuilder();
                     foreach (object o in kb2) { if (sb.Length > 0) sb.Append(", "); sb.Append(Json.Str(o)); }
-                    _guardBody.Controls.Add(new KvRow("За этот период установлены обновления", sb.ToString(), broke > 0) { Font = this.Font });
+                    _guardBody.Controls.Add(new KvRow(L.T("За этот период установлены обновления"), sb.ToString(), broke > 0) { Font = this.Font });
                 }
                 foreach (object o in Json.GetArr(_lastDiff, "changes"))
                 {
@@ -2823,7 +2884,7 @@ namespace Win11Privacy
         {
             if (_defsLoaded) return;
             _defsLoaded = true;
-            RunJson("-ListDefs", "Чтение списка настроек…", delegate(Dictionary<string, object> d)
+            RunJson("-ListDefs", L.T("Чтение списка настроек…"), delegate(Dictionary<string, object> d)
             {
                 if (d == null || _settingsList == null) return;
                 foreach (object go in Json.GetArr(d, "groups"))
@@ -2884,10 +2945,10 @@ namespace Win11Privacy
         }
         private void RunDetect()
         {
-            RunJson("-Detect", "Определение системы…", delegate(Dictionary<string, object> d)
+            RunJson("-Detect", L.T("Определение системы…"), delegate(Dictionary<string, object> d)
             {
                 _detect = d;
-                if (d == null) { if (_sysInfoLabel != null) _sysInfoLabel.Text = "Система не определена\n(PowerShell недоступен)"; return; }
+                if (d == null) { if (_sysInfoLabel != null) _sysInfoLabel.Text = L.T("Система не определена\n(PowerShell недоступен)"); return; }
                 ApplyDetect(d);
                 // журнал датчиков — сразу при старте: бейдж «!» и график на «Обзоре»
                 LoadDefs();
@@ -2895,7 +2956,7 @@ namespace Win11Privacy
                 {
                     _spyAutoRan = true;
                     LoadDefs();
-                    RunJson("-Spy", "Чтение журнала датчиков…", delegate(Dictionary<string, object> s)
+                    RunJson("-Spy", L.T("Чтение журнала датчиков…"), delegate(Dictionary<string, object> s)
                     {
                         if (s == null) return;
                         _lastSpy = s;
@@ -2912,14 +2973,14 @@ namespace Win11Privacy
                 _guardInstalled = Json.GetBool(d, "guardInstalled");
                 _monitorEnabled = Json.GetBool(d, "monitorEnabled");
                 _watcherOn = Json.GetBool(d, "watcherInstalled");
-                if (_btnWatcher != null) _btnWatcher.Text = _watcherOn ? "Уведомления: вкл" : "Уведомления";
+                if (_btnWatcher != null) _btnWatcher.Text = _watcherOn ? L.T("Уведомления: вкл") : L.T("Уведомления");
                 _sensorOn = Json.GetBool(d, "sensorGuardInstalled");
-                if (_btnSensorGuard != null) _btnSensorGuard.Text = _sensorOn ? "Датчики: вкл" : "Датчики";
+                if (_btnSensorGuard != null) _btnSensorGuard.Text = _sensorOn ? L.T("Датчики: вкл") : L.T("Датчики");
 
                 // sysinfo
                 string os = Json.GetStr(d, "os"); string ed = Json.GetStr(d, "edition");
-                if (_sysInfoLabel != null) _sysInfoLabel.Text = os.Replace("Microsoft ", "") + "\n" + ed + "  •  сборка " + Json.GetStr(d, "build");
-                if (_homeSysChip != null) _homeSysChip.SetText(os.Replace("Microsoft ", "") + "  •  сборка " + Json.GetStr(d, "build"));
+                if (_sysInfoLabel != null) _sysInfoLabel.Text = os.Replace("Microsoft ", "") + "\n" + ed + L.T("  •  сборка ") + Json.GetStr(d, "build");
+                if (_homeSysChip != null) _homeSysChip.SetText(os.Replace("Microsoft ", "") + L.T("  •  сборка ") + Json.GetStr(d, "build"));
 
                 // доступность программных модулей
                 Dictionary<string, bool> appFound = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
@@ -2936,24 +2997,24 @@ namespace Win11Privacy
                     m.Installed = found;
                     m.Row.Enabled = found;
                     if (!found) m.Row.Checked = false;
-                    if (m.Id == "oem" && found) m.Row.Description = "Найдено компонентов: " + oemCount + " (" + Json.GetStr(oem, "manufacturer") + "). Драйверы не трогаются.";
-                    else if (!found) m.Row.Description = "Не установлено на этом компьютере.";
+                    if (m.Id == "oem" && found) m.Row.Description = L.T("Найдено компонентов: ") + oemCount + " (" + Json.GetStr(oem, "manufacturer") + L.T("). Драйверы не трогаются.");
+                    else if (!found) m.Row.Description = L.T("Не установлено на этом компьютере.");
                 }
                 if (_settingsList != null) _settingsList.Restack();
 
                 // about
                 if (_aboutEdition != null)
                 {
-                    string kindText = _editionKind == "enterprise" ? "Enterprise/Education — доступно полное отключение телеметрии."
-                        : (_editionKind == "pro" ? "Pro — уровень телеметрии ограничен «Обязательными данными»."
-                        : (_editionKind == "home" ? "Home — уровень телеметрии ограничен «Обязательными данными»." : "—"));
+                    string kindText = _editionKind == "enterprise" ? L.T("Enterprise/Education — доступно полное отключение телеметрии.")
+                        : (_editionKind == "pro" ? L.T("Pro — уровень телеметрии ограничен «Обязательными данными».")
+                        : (_editionKind == "home" ? L.T("Home — уровень телеметрии ограничен «Обязательными данными».") : "—"));
                     Dictionary<string, object> buf = Json.GetObj(d, "buffer");
-                    string bufText = buf != null ? (Json.GetStr(buf, "mb") + " МБ в буфере") : "";
-                    SetAboutBody(_aboutEdition, os + "\n" + ed + " (сборка " + Json.GetStr(d, "build") + ")\n" + kindText +
-                        "\nСлужба DiagTrack: " + Json.GetStr(d, "diagTrack") +
-                        "\nБрандмауэр (правил): " + Json.GetInt(d, "firewallRules") +
-                        "\nБлок hosts: " + (Json.GetBool(d, "hostsBlocked") ? "установлен" : "нет") +
-                        "\nНеотправленная телеметрия: " + bufText);
+                    string bufText = buf != null ? (Json.GetStr(buf, "mb") + L.T(" МБ в буфере")) : "";
+                    SetAboutBody(_aboutEdition, os + "\n" + ed + L.T(" (сборка ") + Json.GetStr(d, "build") + ")\n" + kindText +
+                        L.T("\nСлужба DiagTrack: ") + Json.GetStr(d, "diagTrack") +
+                        L.T("\nБрандмауэр (правил): ") + Json.GetInt(d, "firewallRules") +
+                        L.T("\nБлок hosts: ") + (Json.GetBool(d, "hostsBlocked") ? L.T("установлен") : L.T("нет")) +
+                        L.T("\nНеотправленная телеметрия: ") + bufText);
                 }
 
                 UpdateMonitorButton();
@@ -2961,8 +3022,8 @@ namespace Win11Privacy
                 // бейджи навигации
                 foreach (NavItem n in _nav)
                 {
-                    if ((string)n.Tag == "guard") { n.Badge = _guardInstalled ? "вкл" : ""; n.Invalidate(); }
-                    if ((string)n.Tag == "monitor") { n.Badge = _monitorEnabled ? "вкл" : ""; n.Invalidate(); }
+                    if ((string)n.Tag == "guard") { n.Badge = _guardInstalled ? L.T("вкл") : ""; n.Invalidate(); }
+                    if ((string)n.Tag == "monitor") { n.Badge = _monitorEnabled ? L.T("вкл") : ""; n.Invalidate(); }
                 }
             }
         }
@@ -2975,6 +3036,7 @@ namespace Win11Privacy
             Application.SetCompatibleTextRenderingDefault(false);
 
 #if UITEST
+            if (Environment.GetEnvironmentVariable("WIN11_TEST_EN") == "1") L.English = true;
             MainForm f = new MainForm();
             string page = Environment.GetEnvironmentVariable("WIN11_TEST_PAGE"); if (string.IsNullOrEmpty(page)) page = "settings";
             bool mock = Environment.GetEnvironmentVariable("WIN11_TEST_MOCK") == "1";
@@ -3040,8 +3102,8 @@ namespace Win11Privacy
                 }
                 catch
                 {
-                    if (!silent) MessageBox.Show("Программа изменяет системные настройки и требует прав администратора.",
-                        "Нужны права администратора", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    if (!silent) MessageBox.Show(L.T("Программа изменяет системные настройки и требует прав администратора."),
+                        L.T("Нужны права администратора"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
                 return;
             }
@@ -3083,7 +3145,7 @@ namespace Win11Privacy
             if (json == null) return -1;
             Dictionary<string, object> d = Json.ParseObject(json);
             int ok = Json.GetInt(d, "ok"), total = Json.GetInt(d, "total");
-            Console.WriteLine("Применено " + ok + " из " + total + "; несоответствий: " + (total - ok));
+            Console.WriteLine(L.T("Применено ") + ok + L.T(" из ") + total + L.T("; несоответствий: ") + (total - ok));
             return total - ok;
         }
 

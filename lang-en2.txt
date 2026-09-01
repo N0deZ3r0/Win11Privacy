@@ -1,0 +1,291 @@
+# Продолжение перевода: длинные строки, диалоги и HTML-отчёт
+) не вернул данные, код 	) returned no data, code
+\nЭталон «до» сохранён: 	\nBaseline saved:
+Виджеты и лента новостей	Widgets and news feed
+Куда (адреса назначения)	Where to (destinations)
+Не выбран ни один пункт.	No items selected.
+Телеметрия и диагностика	Telemetry and diagnostics
+Чтение журнала датчиков…	Reading sensor log…
+Чтение собранных данных…	Reading collected data…
+журналов и историй о вас	of logs and histories about you
+). Драйверы не трогаются.	). Drivers are left alone.
+Запретить шифрованный DNS	Block encrypted DNS
+Кто подглядывал — по дням	Who was watching — by day
+Сейчас используют датчики	Sensors in use right now
+Система почти не защищена	System is barely protected
+Чтение списка приложений…	Reading app list…
+работе стража и монитора.	Guard and monitor activity.
+HTML-отчёт (*.html)|*.html	HTML report (*.html)|*.html
+Блокировка доменов (hosts)	Domain blocking (hosts)
+Будет удалено приложений: 	Apps to be removed:
+Защитник: облако и образцы	Defender: cloud and samples
+Кто отправляет (программы)	Who sends (programs)
+Не удалось получить список	Could not get the list
+Нужны права администратора	Administrator rights required
+Службы и задачи телеметрии	Telemetry services and tasks
+распознано по имени домена	recognised by domain name
+Блокировка через брандмауэр	Firewall blocking
+Не удалось изменить доступ.	Could not change access.
+Не удалось получить данные.	Could not get the data.
+Персонализация ввода и речь	Typing personalisation and speech
+Проверка состояния системы…	Checking system state…
+Сбор статистики соединений…	Collecting connection stats…
+она будет пополняться сама.	it will fill up on its own.
+\nЛокальная копия на диске: 	\nLocal copy on disk:
+Предустановленные приложения	Preinstalled apps
+камера, микрофон, геолокация	camera, microphone, location
+\nНеотправленная телеметрия: 	\nUnsent telemetry:
+Блокировка адресов телеметрии	Telemetry address blocking
+Защита настроена не полностью	Protection is incomplete
+Раздача обновлений в интернет	Update sharing to the internet
+Сканирование цифрового следа…	Scanning digital trace…
+Слежка производителя ноутбука	Laptop maker's tracking
+PowerShell завершился с кодом 	PowerShell exited with code
+Журнал доступа к датчикам пуст	The sensor access log is empty
+Свернуть или развернуть панель	Collapse or expand the panel
+Телеметрия средств разработки.	Developer tooling telemetry.
+ не заблокировано (из кэша DNS)	 not blocked (from DNS cache)
+\n\nВозможно, мешает антивирус.	\n\nAn antivirus may be blocking it.
+Геолокация и «Поиск устройства»	Location and Find My Device
+Не удалось подготовить движок: 	Could not prepare the engine:
+Включение слежения за датчиками…	Turning sensor watch on…
+Не удалось запустить PowerShell.	Could not start PowerShell.
+включите запись и просканируйте.	turn recording on and scan.
+OneDrive: синхронизация и реклама	OneDrive: sync and ads
+Данные появятся после «Рентгена»:	Data appears after an X-ray scan:
+Здесь появится история по дням.\n	Day-by-day history will appear here.\n
+История активности и буфер обмена	Activity history and clipboard
+Машина времени — снимки состояния	Time machine — state snapshots
+Не удалось запустить PowerShell: 	Could not start PowerShell:
+Отключение слежения за датчиками…	Turning sensor watch off…
+Стереть неотправленную телеметрию	Wipe unsent telemetry
+вы сразу увидите уведомление.\n\n	you will see an alert at once.\n\n
+25 адресов Microsoft в файл hosts.	25 Microsoft addresses into hosts.
+Можно убрать — ставится без спроса	Can be removed — installed unasked
+Не удалось запустить PowerShell:\n	Could not start PowerShell:\n
+Не установлено на этом компьютере.	Not installed on this computer.
+Нет данных — PowerShell недоступен	No data — PowerShell is unavailable
+Отдача файлов обновлений чужим ПК.	Serving update files to other PCs.
+Отчёты о сбоях программ и системы.	Crash reports for apps and Windows.
+Программы, попавшие в отчёты о вас	Programs that appear in reports about you
+Телеметрия и исследования Firefox.	Firefox telemetry and studies.
+ шт.) будут удалены безвозвратно.\n	 items) will be deleted permanently.\n
+Включите монитор, чтобы начать сбор	Turn the monitor on to start collecting
+Данные получены с этого компьютера 	Data read from this computer
+Профиль Win11Privacy (*.json)|*.json	Win11Privacy profile (*.json)|*.json
+Телеметрия и эксперименты редактора.	Editor telemetry and experiments.
+программа не трогает.\n\nПродолжить?	are left untouched.\n\nContinue?
+За этот период установлены обновления	Updates installed in this period
+Запуск без предупреждения SmartScreen	Running without the SmartScreen warning
+Программа вернёт всё, что меняла:\n\n	The program will undo everything it changed:\n\n
+Телеметрия клиента и отправка данных.	Client telemetry and data sending.
+Живые уведомления о перехвате отправки	Live alerts when a send is blocked
+хотя бы час — и нажмите «Сканировать».	for at least an hour, then press Scan.
+Отметьте галочками, какие следы стереть.	Tick the traces you want wiped.
+Телеметрия драйвера и GeForce Experience.	Driver and GeForce Experience telemetry.
+Программа улучшения качества и телеметрия.	Customer Experience Program and telemetry.
+Что умеет эта программа, чего нет у других	What this program does that others do not
+ИИ-помощник и запись снимков экрана Recall.	AI assistant and Recall screen snapshots.
+Будут изменены настройки системы (разделов: 	System settings will be changed (sections:
+Обращения к доменам телеметрии (из кэша DNS)	Telemetry domain lookups (from DNS cache)
+Отчёт по автозапуску, ничего не отключается.	Startup report only, nothing is disabled.
+Чтение журнала доступа к камере и микрофону…	Reading camera and microphone access log…
+Temp, кэш обновлений, эскизы, дампы, корзина.	Temp, update cache, thumbnails, dumps, bin.
+Отметьте галочками, какие приложения удалить.	Tick the apps you want removed.
+Слежение за датчиками (камера, микрофон, гео)	Sensor watch (camera, microphone, location)
+Снимков пока нет — нажмите «Снимок состояния»	No snapshots yet — press Snapshot
+Настоящее событие, отправленное в Microsoft — 	A real event sent to Microsoft —
+Останавливает DiagTrack и задачи планировщика.	Stops DiagTrack and scheduled tasks.
+Система не определена\n(PowerShell недоступен)	System not detected\n(PowerShell unavailable)
+Статистика, Privacy Sandbox, отправка адресов.	Usage stats, Privacy Sandbox, URL sending.
+Что изменилось между двумя последними снимками	What changed between the last two snapshots
+встроенный скрипт движка не найден в программе	the embedded engine script was not found
+Идёт первая проверка — страница заполнится сама.	First check is running — the page will fill in.
+Любое удалённое можно вернуть из Microsoft Store.	Anything removed can be reinstalled from the Store.
+Остальное — удаляйте, только если знаете, что это	The rest — remove only if you know what it is
+чтобы их можно было прочитать и показать вам.\n\n	so they can be read and shown to you.\n\n
+Профиль Win11Privacy (*.json)|*.json|Все файлы|*.*	Win11Privacy profile (*.json)|*.json|All files|*.*
+Поиск в Пуске без обращения в интернет и к Cortana.	Start menu search without the web or Cortana.
+не удалось распаковать движок во временную папку:\n	could not unpack the engine into the temp folder:\n
+Метки, которыми помечены события (по ним вас узнают)	Identifiers stamped on events (they recognise you by these)
+Показать список действий в журнале, ничего не меняя.	Show the planned actions in the log, change nothing.
+перехвачена попытка отправить телеметрию наружу.\n\n	an attempt to send telemetry out has been blocked.\n\n
+Лента активности и синхронизация буфера через облако.	Activity feed and clipboard sync through the cloud.
+Реклама в Пуске, на экране блокировки и в Параметрах.	Ads in Start, on the lock screen and in Settings.
+Исходящие соединения служб телеметрии. Надёжнее hosts.	Outbound connections of telemetry services. Stronger than hosts.
+Позволяет откатить всё через «Восстановление системы».	Lets you roll everything back via System Restore.
+Статистика и персонализация Edge; блокировка трекеров.	Edge statistics and personalisation; tracker blocking.
+Включите «Следить за датчиками» на странице «Страж» —\n	Turn on Sensor watch on the Guard page —\n
+Диагностические данные, логи и дампы памяти в Microsoft.	Diagnostic data, logs and memory dumps to Microsoft.
+• стража, слежение за датчиками и живые уведомления.\n\n	• the Guard, sensor watch and live alerts.\n\n
+Лента MSN на панели задач, которая изучает ваши интересы.	The MSN feed on the taskbar that studies your interests.
+Сбор набранного текста, рукописного ввода, облачная речь.	Collection of typing, handwriting and cloud speech.
+Что именно собрано — нажмите, чтобы увидеть сырое событие	What exactly was collected — click to see the raw event
+Доступ запрещён. Программе может потребоваться перезапуск.	Access denied. The program may need a restart.
+Сначала выберите на странице «Настройки», что отслеживать.	First choose on the Settings page what to watch.
+и флешки видел компьютер, что вы открывали и копировали.\n	and drives the computer saw, what you opened and copied.\n
+Pro — уровень телеметрии ограничен «Обязательными данными».	Pro — telemetry level is capped at Required data.
+На рабочий стол сохраняются .reg-файлы затрагиваемых веток.	.reg files of the affected keys are saved to the desktop.
+Home — уровень телеметрии ограничен «Обязательными данными».	Home — telemetry level is capped at Required data.
+• компоненты производителя и настройки сторонних программ;\n	• vendor components and third-party program settings;\n
+Enterprise/Education — доступно полное отключение телеметрии.	Enterprise/Education — telemetry can be turned off completely.
+Локальная копия собранных событий будет удалена.\nПродолжить?	The local copy of collected events will be deleted.\nContinue?
+Пока ничего не зафиксировано — данные появятся по мере работы	Nothing recorded yet — data will appear as you work
+\n\nВыбраны жёсткие меры (службы / hosts / брандмауэр / буфер).	\n\nHard measures selected (services / hosts / firewall / queue).
+Служба местоположения целиком и отправка координат в Microsoft.	The whole location service and sending coordinates to Microsoft.
+Пароли Wi-Fi и системные данные не затрагиваются.\n\nПродолжить?	Wi-Fi passwords and system data are not touched.\n\nContinue?
+Удаляет накопленный буфер C:\\ProgramData\\Microsoft\\Diagnosis.	Deletes the queue in C:\\ProgramData\\Microsoft\\Diagnosis.
+Читаю реальное состояние настроек — это займёт несколько секунд.	Reading the real state of the settings — this takes a few seconds.
+\nТакже будет создана точка восстановления (может занять минуту).	\nA restore point will also be created (may take a minute).
+Здесь появляется подробный вывод при применении настроек, откате,	Detailed output appears here when applying settings, undoing,
+• службы, задачи планировщика, файл hosts, правила брандмауэра;\n	• services, scheduled tasks, the hosts file, firewall rules;\n
+Включатся правила брандмауэра и журнал безопасности. Уведомления\n	Firewall rules and the security log will be enabled. Alerts\n
+Крупные обновления Windows тихо возвращают часть настроек назад.\n	Major Windows updates quietly restore some settings.\n
+• Телеметрия сторонних программ и слежка производителя ноутбука.\n	• Telemetry of third-party programs and the laptop maker.\n
+ещё и цифровой след на диске (рекламный ID, сети, флешки, истории).	the digital trace on disk too (ad ID, networks, drives, histories).
+. Всё прочитано с этого компьютера, наружу ничего не отправляется.\n	. Everything was read from this computer, nothing is sent out.\n
+Программа будет показывать всплывающее уведомление в момент, когда\n	The program will show a pop-up alert the moment\n
+Цифровой след — отметьте, что стереть, и нажмите «Стереть выбранное»	Digital trace — tick what to wipe and press Wipe selected
+Click to Do, Copilot в Блокноте/Paint/Edge, ИИ в Проводнике и поиске.	Click to Do, Copilot in Notepad/Paint/Edge, AI in Explorer and search.
+Windows начнёт вести ЛОКАЛЬНУЮ копию своих диагностических событий,\n	Windows will keep a LOCAL copy of its diagnostic events\n
+Любое из них можно вернуть из Microsoft Store. Системные компоненты\n	Any of them can be reinstalled from the Store. System components\n
+Программа ещё выполняет предыдущую команду.\nДождитесь её завершения.	The program is still running the previous command.\nPlease wait.
+Программа изменяет системные настройки и требует прав администратора.	The program changes system settings and needs administrator rights.
+• Быстрые клавиши: Ctrl+1…9 — страницы, Ctrl+F — поиск по настройкам.	• Shortcuts: Ctrl+1…9 for pages, Ctrl+F for settings search.
+• Монитор утечек: показывает, кто и куда реально отправляет данные.\n	• Leak monitor: shows who really sends data and where.\n
+Программа читает эти журналы локально — наружу ничего не отправляется.	The program reads these logs locally — nothing is sent out.
+проверенный список; системные компоненты в перечень не попадают вовсе.	a vetted list; system components never appear here at all.
+Windows сама ведёт журналы: кто включал камеру и микрофон, какие сети\n	Windows itself keeps logs: who turned on the camera and mic, which networks\n
+Каждые 30 минут программа будет тихо сверять журнал доступа к камере,\n	Every 30 minutes the program will quietly check the access log for camera,\n
+Нажмите на категорию — покажу настоящий JSON, который ушёл в Microsoft.	Click a category to see the real JSON that went to Microsoft.
+Объём отправляемых данных при этом НЕ увеличивается — меняется только\n	The amount of data sent does NOT increase — the only change is\n
+микрофону и геолокации. Если доступ впервые получит НОВАЯ программа —\n	microphone and location. If a NEW program gets access for the first time —\n
+Запись выключена. Пока она выключена, прочитать собранные данные нельзя.	Recording is off. While it is off, the collected data cannot be read.
+Красная метка «СЕЙЧАС» — программа использует датчик прямо в эту минуту.	A red NOW badge means the program is using the sensor this very minute.
+Профиль сохраняется кнопкой «Сохранить профиль» на странице «Настройки».	A profile is saved with Save profile on the Settings page.
+приходят не чаще одного раза в 10 минут, чтобы не мешать.\n\nПродолжить?	arrive at most once every 10 minutes so they do not get in the way.\n\nContinue?
+Если выше нет строк движка — его блокирует антивирус или не хватает прав.	If there are no engine lines above, an antivirus blocks it or rights are missing.
+Компоненты сбора данных Honor/HP/Lenovo/Dell/ASUS. Драйверы не трогаются.	Data collection components of Honor/HP/Lenovo/Dell/ASUS. Drivers untouched.
+Страж проверяет систему по расписанию, возвращает сбитое и предупреждает.	The Guard checks on a schedule, restores what was reverted and warns you.
+(UAC) остаётся — он нужен, потому что программа меняет системные настройки.	(UAC) stays — it is needed because the program changes system settings.
+Запись включена. Windows ведёт локальную копию событий — можно сканировать.	Recording is on. Windows keeps a local copy of events — you can scan.
+Показывает НАСТОЯЩИЕ события, которые Windows собрала об этом компьютере,\n	Shows the REAL events Windows collected about this computer,\n
+• Профили и тихий запуск из командной строки для настройки нескольких ПК.\n	• Profiles and silent command-line runs for setting up several PCs.\n
+Журнал датчиков прочитан. Нажмите «Собрать досье» — программа просканирует\n	Sensor log read. Press Collect dossier and the program will also scan\n
+Приложения, которые Windows ставит без спроса. Отмеченные «можно убрать» —\n	Apps Windows installs unasked. The ones marked "can be removed" are\n
+Отправка подозрительных файлов и облачная проверка MAPS. Чуть снижает защиту.	Sending suspicious files and MAPS cloud checks. Slightly lowers protection.
+• настройки реестра — по журналу изменений, в те значения, что были до неё;\n	• registry settings — from the change journal, back to their previous values;\n
+\n\nПеред изменениями на рабочий стол будет сохранена резервная копия реестра.	\n\nA registry backup will be saved to the desktop before any changes.
+с расшифровкой и сырым содержимым. Включите запись, дайте системе поработать\n	with plain-language decoding and raw content. Turn recording on, let it run\n
+Данные получены из реестра, служб, планировщика, кэша DNS, журнала брандмауэра 	Data taken from the registry, services, scheduler, DNS cache, firewall log
+На этой системе нет модуля Microsoft.DiagnosticDataViewer — рентген недоступен.	This system has no Microsoft.DiagnosticDataViewer module — X-ray unavailable.
+то, что копия сохраняется на диске. Стереть её можно кнопкой «Стереть копию».\n\n	that a copy is stored on disk. You can erase it with Wipe local copy.\n\n
+ВНИМАНИЕ: программа запущена без прав администратора — изменения применить нельзя.	WARNING: the program runs without administrator rights — changes cannot be applied.
+Замер сохранён как «до». Примените настройки и просканируйте снова — покажу разницу.	Baseline saved. Apply the settings and scan again to see the difference.
+Заодно накапливается история для графика «Кто подглядывал» на «Обзоре».\n\nПродолжить?	It also builds the history for the "Who was watching" chart on Overview.\n\nContinue?
+• Рентген телеметрии: настоящие события, собранные о компьютере, с сырым содержимым.\n	• Telemetry X-ray: the real events collected about the computer, with raw content.\n
+отключить без поломки системы, эта программа отключает, а Страж не даёт вернуть обратно.	can be turned off without breaking Windows, and the Guard keeps it that way.
+Отключает выгрузку файлов в облако и рекламу OneDrive в Проводнике. Файлы на диске остаются.	Stops uploading files to the cloud and OneDrive ads in Explorer. Local files stay.
+Удалённые приложения не возвращаются — их можно поставить из Microsoft Store.\n\nПродолжить?	Removed apps do not come back — you can reinstall them from the Store.\n\nContinue?
+• Блокировка через брандмауэр, а не только hosts; удаление накопленного буфера телеметрии.\n	• Firewall blocking, not just hosts; wiping the accumulated telemetry queue.\n
+• Проверка на деле: читает реальное состояние системы и показывает индекс, а не «галочки».\n	• Verified for real: reads the actual system state and shows an index, not checkmarks.\n
+на Windows нельзя: остаются проверка обновлений, активация лицензии и проверка сертификатов. 	on Windows: update checks, licence activation and certificate checks remain.
+Синее окно показывается любому неподписанному приложению из интернета. Убрать его можно так:\n	The blue window appears for any unsigned app from the internet. To remove it:\n
+Полностью прекратить обмен данными с Microsoft на Windows нельзя: остаются проверка обновлений,\n	Data exchange with Microsoft cannot be stopped completely: update checks,\n
+правый клик по файлу → Свойства → внизу галочка «Разблокировать» → ОК. Запрос прав администратора\n	right-click the file → Properties → tick Unblock at the bottom → OK. The admin prompt\n
+• Страж: возвращает настройки, сбитые обновлениями Windows; машина времени со снимками состояния.\n	• Guard: restores settings reverted by Windows updates; time machine with state snapshots.\n
+На редакциях Home и Pro минимальный уровень телеметрии система трактует как «Обязательные данные» — 	On Home and Pro the minimum telemetry level is treated as Required data —
+активация лицензии и проверка сертификатов. На редакциях Home и Pro минимальный уровень телеметрии\n	licence activation and certificate checks remain. On Home and Pro the minimum level\n
+система трактует как «Обязательные данные» — это ограничение редакции, а не программы. Всё, что можно\n	is treated as Required data — an edition limit, not a program limit. Everything that\n
+• Досье: кто и когда реально включал камеру, микрофон и геолокацию — с длительностью и меткой «сейчас».\n	• Dossier: who really turned on the camera, mic and location, with duration and a "now" badge.\n
+Брандмауэр режет сами IP сбора данных — hosts телеметрия обходит. Если что-то отвалится, снимите и откатите.	The firewall cuts the collection IPs themselves — telemetry bypasses hosts. If something breaks, untick and undo.
+Через DoH браузеры и Windows обходят блокировку по доменам. Отключение вернёт видимость запросов провайдеру.	Via DoH browsers and Windows bypass domain blocking. Turning it off makes queries visible to your ISP again.
+• Слежение за датчиками: уведомление в момент, когда НОВАЯ программа впервые получила доступ; график по дням.\n	• Sensor watch: an alert the moment a NEW program first gets access; a day-by-day chart.\n
+• Цифровой след: рекламный ID, история сетей и флешек, всё, что Windows помнит о вас — с выборочным стиранием.\n	• Digital trace: ad ID, network and drive history, everything Windows remembers — wiped selectively.\n
+Нажмите «Проверить сейчас» — программа прочитает реальное состояние системы\nи покажет, что сработало, а что нет.	Press Verify now and the program will read the real system state\nand show what worked and what did not.
+Монитор включит правила брандмауэра для служб телеметрии и начнёт\nвести журнал заблокированных исходящих соединений.\n\nПродолжить?	The monitor will enable firewall rules for telemetry services and start\nlogging blocked outbound connections.\n\nContinue?
+Монитор фиксирует попытки программ отправить данные наружу и показывает,\nкто и куда стучится. Использует брандмауэр и журнал безопасности Windows.	The monitor records attempts to send data out and shows who knocks where.\nIt uses the firewall and the Windows security log.
+# --- строки, приходящие из движка ---
+Телеметрия и диагностика	Telemetry and diagnostics
+Отчёты об ошибках	Error reports
+История активности и буфер обмена	Activity history and clipboard
+Персонализация ввода, рукописный ввод, речь	Typing, handwriting and speech personalisation
+Microsoft Edge	Microsoft Edge
+Раздача обновлений другим ПК	Update sharing to other PCs
+Геолокация и поиск устройства	Location and Find My Device
+Рекламный ID и реклама в интерфейсе	Advertising ID and in-system ads
+Виджеты и лента новостей	Widgets and news feed
+Поиск: Bing, Cortana, облако	Search: Bing, Cortana, cloud
+ИИ-функции Windows	Windows AI features
+Защитник: облако и образцы	Defender: cloud and samples
+OneDrive: синхронизация и реклама	OneDrive: sync and ads
+Службы и задачи телеметрии	Telemetry services and tasks
+Блокировка телеметрийных доменов (hosts)	Telemetry domain blocking (hosts)
+Брандмауэр: блокировка служб телеметрии	Firewall: blocking telemetry services
+Брандмауэр: адреса сбора телеметрии	Firewall: telemetry collection addresses
+Шифрованный DNS (обход блокировки)	Encrypted DNS (blocking bypass)
+Неотправленная телеметрия	Unsent telemetry
+Компоненты сбора данных производителя	Vendor's data collection components
+Чистка временных файлов	Temporary files cleanup
+Автозагрузка (отчёт)	Startup items (report)
+Visual Studio Code	Visual Studio Code
+Google Chrome	Google Chrome
+Mozilla Firefox	Mozilla Firefox
+Microsoft Office	Microsoft Office
+PowerShell 7 / .NET SDK	PowerShell 7 / .NET SDK
+Visual Studio	Visual Studio
+NVIDIA	NVIDIA
+Список установленных программ	List of installed programs
+Инвентаризация железа	Hardware inventory
+Какие программы ты запускал	Which programs you ran
+Подключённые устройства	Connected devices
+Сбои и падения программ	Crashes and app failures
+Браузер	Browser
+Поиск	Search
+Магазин, игры и лицензии	Store, games and licences
+Безопасность	Security
+Обновления	Updates
+Местоположение и датчики	Location and sensors
+Учётная запись	User account
+Сеть	Network
+Питание и загрузка	Power and boot
+Office и OneDrive	Office and OneDrive
+Служебное телеметрии	Telemetry internals
+Прочее	Other
+Камера	Camera
+Микрофон	Microphone
+Местоположение	Location
+Снимки экрана	Screen captures
+Захват экрана без рамки	Borderless screen capture
+Чтение уведомлений	Reading notifications
+Документы	Documents
+Изображения	Pictures
+Видео	Videos
+Весь диск	Whole disk
+Контакты	Contacts
+Календарь	Calendar
+Почта	Email
+Сообщения	Messages
+Звонки	Phone calls
+Журнал звонков	Call history
+Задачи и планы	Tasks and plans
+Данные учётной записи	Account information
+Сведения об активности	Activity information
+Обмен с устройствами	Device sync
+Управление радиомодулями	Radio control
+Датчики устройства	Device sensors
+Устройства ввода	Input devices
+Сотовая связь	Cellular data
+Диагностика других программ	App diagnostics
+Рекламный идентификатор	Advertising identifier
+Постоянные метки компьютера	Permanent machine identifiers
+История сетей Wi-Fi и Ethernet	Wi-Fi and Ethernet history
+История подключённых флешек	Removable drive history
+База истории активности	Activity history database
+Недавние документы и папки	Recent documents and folders
+Что вы искали в Проводнике	What you searched in Explorer
+Введённые пути и адреса	Typed paths and addresses
+История буфера обмена	Clipboard history
+Архив отчётов об ошибках	Error report archive
+Личный словарь набора текста	Personal typing dictionary
+Кэш DNS (следы сайтов)	DNS cache (site traces)

@@ -404,8 +404,8 @@ namespace Win11Privacy
         {
             if (!_numeric) return _rawText;
             float v = _v.Value;
-            if (_final >= 1000000) return (v / 1000000F).ToString("0.#") + " млн";
-            if (_final >= 10000) return (v / 1000F).ToString("0.#") + " тыс";
+            if (_final >= 1000000) return (v / 1000000F).ToString("0.#") + L.T(" млн");
+            if (_final >= 10000) return (v / 1000F).ToString("0.#") + L.T(" тыс");
             if (_final != Math.Floor(_final)) return v.ToString("0.#");
             return ((int)Math.Round(v)).ToString();
         }

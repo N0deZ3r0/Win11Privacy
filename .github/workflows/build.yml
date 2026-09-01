@@ -33,6 +33,12 @@ jobs:
           }
           Write-Host "Движок: синтаксис в порядке"
 
+      - name: Проверки поведения движка
+        shell: powershell
+        run: |
+          .\tests\engine-tests.ps1
+          if ($LASTEXITCODE -ne 0) { throw "проверки поведения не прошли" }
+
       - name: Собрать Win11Privacy.exe
         shell: pwsh
         run: |
@@ -44,7 +50,7 @@ jobs:
               /win32res:app.res `
               /resource:Win11-Privacy-Engine.ps1,engine.ps1 `
               /resource:app.ico,app.ico /resource:app.png,app.png `
-              MainForm.cs Ui.cs Ui2.cs Ui3.cs Ui4.cs Json.cs
+              MainForm.cs Ui.cs Ui2.cs Ui3.cs Ui4.cs Lang.cs Json.cs
           if ($LASTEXITCODE -ne 0) { throw "сборка не удалась" }
 
       - name: Проверить готовый файл
@@ -71,6 +77,17 @@ jobs:
           if (-not $manifest) { throw "в манифесте нет requireAdministrator" }
           Write-Host "Манифест: права администратора запрашиваются"
 
+      - name: Посчитать контрольные суммы
+        shell: pwsh
+        run: |
+          $lines = @()
+          foreach ($f in @('Win11Privacy.exe','Win11-Privacy-Engine.ps1')) {
+              $h = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
+              $lines += "$h  $f"
+              Write-Host "$h  $f"
+          }
+          $lines | Set-Content -Path SHA256SUMS.txt -Encoding ascii
+
       - name: Сохранить сборку
         uses: actions/upload-artifact@v7
         with:
@@ -88,6 +105,7 @@ jobs:
           files: |
             Win11Privacy.exe
             Win11-Privacy-Engine.ps1
+            SHA256SUMS.txt
           generate_release_notes: true
           body: |
             ## Приватность Windows 11 — ${{ github.ref_name }}
@@ -104,3 +122,9 @@ jobs:
             |---|---|
             | `Win11Privacy.exe` | Само приложение |
             | `Win11-Privacy-Engine.ps1` | Движок отдельно — можно изучить и запустить без интерфейса |
+            | `SHA256SUMS.txt` | Контрольные суммы — можно проверить, что файл не подменён |
+
+            Проверить скачанный файл:
+            ```
+            Get-FileHash Win11Privacy.exe -Algorithm SHA256
+            ```

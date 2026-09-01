@@ -631,7 +631,7 @@ namespace Win11Privacy
             // чип с числом настроек внутри модуля
             if (SubCount > 0)
             {
-                string chip = (Expanded ? "\u25B4 " : "\u25BE ") + SubCount + " настроек";
+                string chip = (Expanded ? "\u25B4 " : "\u25BE ") + SubCount + L.T(" настроек");
                 using (Font cf = new Font(Font.FontFamily, Font.Size * 0.85F))
                 {
                     Size cs = TextRenderer.MeasureText(g, chip, cf, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
@@ -781,7 +781,7 @@ namespace Win11Privacy
                 psz = g.MeasureString(pct, bf);
             }
 
-            string sub = _total > 0 ? (_ok + " из " + _total) : "нет данных";
+            string sub = _total > 0 ? (_ok + L.T(" из ") + _total) : L.T("нет данных");
             float ss = side * 0.065F;
             Font sf2 = new Font(Font.FontFamily, ss, FontStyle.Regular);
             SizeF ssz = g.MeasureString(sub, sf2);
@@ -995,7 +995,7 @@ namespace Win11Privacy
             Color dot = _blocked ? Theme.Ok : Theme.Err;
             using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, u * 0.4F, (Height - u * 0.55F) / 2F, u * 0.55F, u * 0.55F);
             int lx = (int)(u * 1.5F);
-            string tag = _blocked ? "заблокировано" : "проходит";
+            string tag = _blocked ? L.T("заблокировано") : L.T("проходит");
             Size ts = TextRenderer.MeasureText(tag, Font);
             TextRenderer.DrawText(g, _name, Font, new Rectangle(lx, 0, Width - lx - ts.Width - (int)(u * 0.8F), Height),
                 Theme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
@@ -1129,7 +1129,7 @@ namespace Win11Privacy
             if (_samplePayload.Length > 0)
             {
                 y += (int)(u * 0.4F);
-                TextRenderer.DrawText(g, "Настоящее событие, отправленное в Microsoft — " + _sampleTime, Font,
+                TextRenderer.DrawText(g, L.T("Настоящее событие, отправленное в Microsoft — ") + _sampleTime, Font,
                     new Rectangle(tx, y, Width - tx, (int)(u * 1.5F)), Theme.Warn,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
                 y += (int)(u * 1.6F);

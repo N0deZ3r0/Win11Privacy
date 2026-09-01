@@ -92,7 +92,7 @@ namespace Win11Privacy
             int rightEdge = Width - (int)(u * 0.5F);
             if (_active)
             {
-                string chip = "СЕЙЧАС";
+                string chip = L.T("СЕЙЧАС");
                 using (Font cf = new Font(Font.FontFamily, Font.Size * 0.85F, FontStyle.Bold))
                 {
                     Size cs = TextRenderer.MeasureText(chip, cf);
@@ -116,7 +116,7 @@ namespace Win11Privacy
             // кнопка «Запретить» / «Запрещено»
             if (HasButton)
             {
-                string cap = Denied ? "Запрещено" : "Запретить";
+                string cap = Denied ? L.T("Запрещено") : L.T("Запретить");
                 using (Font bf = new Font(Font.FontFamily, Font.Size * 0.9F, FontStyle.Regular))
                 {
                     Size cs = TextRenderer.MeasureText(g, cap, bf, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
@@ -201,9 +201,9 @@ namespace Win11Privacy
             if (_days.Count == 0 || max == 0)
             {
                 TextRenderer.DrawText(g,
-                    "Здесь появится история по дням.\n" +
-                    "Включите «Следить за датчиками» на странице «Страж» —\n" +
-                    "она будет пополняться сама.",
+                    L.T("Здесь появится история по дням.\n") +
+                    L.T("Включите «Следить за датчиками» на странице «Страж» —\n") +
+                    L.T("она будет пополняться сама."),
                     Font, ClientRectangle, Theme.TextDim,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                 return;
@@ -211,7 +211,7 @@ namespace Win11Privacy
 
             // легенда
             int lx = Width - (int)(u * 0.3F);
-            string[] names = { "Другое", "Гео", "Микрофон", "Камера" };
+            string[] names = { L.T("Другое"), L.T("Гео"), L.T("Микрофон"), L.T("Камера") };
             Color[] cols = { Theme.TextFaint, Theme.Accent, Theme.Warn, Theme.Err };
             using (Font lf = new Font(Font.FontFamily, Font.Size * 0.85F))
             {

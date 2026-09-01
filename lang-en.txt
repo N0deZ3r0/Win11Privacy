@@ -1,0 +1,265 @@
+# Английский перевод интерфейса. Формат: русский<TAB>английский
+# Строки без перевода остаются как есть.
+ ч	 h
+ МБ	 MB
+ ч 	 h 
+Гео	Geo
+вкл	on
+нет	no
+ МБ.	 MB.
+ из 	 of 
+ мин	 min
+ млн	 M
+ тыс	 k
+ ч. 	 h. 
+Время	Time
+Досье	Dossier
+ИТОГО	TOTAL
+МОЖНО	CAN
+Обзор	Overview
+Откат	Undo
+Страж	Guard
+было 	was 
+ знач.	 values
+ соед.	 conn.
+Другое	Other
+Журнал	Log
+Камера	Camera
+Модули	Modules
+Ошибка	Error
+Ошибок	Errors
+Путь: 	Path: 
+СЕЙЧАС	NOW
+Снимок	Snapshot
+вчера 	yesterday 
+В сутки	Per day
+Готово.	Done.
+Датчики	Sensors
+Монитор	Monitor
+Ошибка.	Error.
+Рентген	X-ray
+Система	System
+включён	on
+событий	events
+ в сутки	 per day
+Движок (	Engine (
+Микрофон	Microphone
+Обновить	Refresh
+Проверка	Verify
+включено	on
+включены	on
+выключен	off
+запрещён	denied
+на посту	on duty
+проходит	passes
+разрешён	allowed
+сегодня 	today 
+ (сборка 	 (build 
+ МБ в год	 MB per year
+ дн назад	 d ago
+ настроек	 settings
+ → стало 	 → now 
+Запретить	Deny
+Запрещено	Denied
+Изменение	Change
+Изменений	Changes
+Настройки	Settings
+Отключить	Turn off
+Подождите	Please wait
+Применено	Applied
+Применить	Apply
+Проверить	Verify
+Программы	Programs
+Снять всё	Clear all
+Состояние	Status
+выключено	off
+выключены	off
+ · сборка 	 · build 
+ мин назад	 min ago
+ применено	 applied
+ — доступ 	 — access 
+ИИ Windows	Windows AI
+Исправлено	Fixed
+Приложения	Apps
+Применено 	Applied 
+Прочитано 	Read 
+за 24 часа	last 24 hours
+нет данных	no data
+только что	just now
+установлен	installed
+   (сборка 	   (build 
+Выбрать всё	Select all
+Диагностика	Diagnostics
+Замер «до»…	Baseline…
+О программе	About
+Папка копий	Backup folder
+Проверено: 	Checked: 
+Продолжить?	Continue?
+Сканировать	Scan
+Уведомления	Alerts
+  •  сборка 	  •  build 
+ МБ в буфере	 MB queued
+ событий за 	 events over 
+Безопасность	Safety
+Ваша система	Your system
+Датчики: вкл	Sensors: on
+Жёсткие меры	Hard measures
+К телеметрии	To telemetry
+Не применено	Not applied
+Обслуживание	Maintenance
+Определение…	Detecting…
+По умолчанию	Defaults
+всё на месте	all in place
+можно убрать	can be removed
+уйдёт за год	per year
+Можно стереть	Can be wiped
+Подтверждение	Confirmation
+Самопроверка…	Self-test…
+След на диске	Trace on disk
+Собрать досье	Collect dossier
+Стереть копию	Wipe local copy
+Что отключить	What to turn off
+за последние 	over the last 
+заблокировано	blocked
+меньше минуты	under a minute
+ событий/сутки	 events/day
+Все ИИ-функции	All AI features
+Досье собрано 	Dossier collected 
+Монитор утечек	Leak monitor
+Переустановить	Reinstall
+Прогноз за год	Yearly forecast
+доменов молчат	domains silent
+Включить запись	Turn recording on
+Включить стража	Turn Guard on
+Запрет доступа…	Denying access…
+Обновить список	Refresh list
+Откат изменений	Undo changes
+Отметить лишнее	Select bloat
+Событий собрано	Events collected
+Сохранить отчёт	Save report
+Стало меньше на	Reduced by
+Стирание копии…	Wiping local copy…
+Тестовый прогон	Dry run
+Чтение снимков…	Reading snapshots…
+запись включена	recording is on
+монитор включён	monitor is on
+не пользовалась	never used
+событий в сутки	events per day
+ МБ данных о вас	 MB of data about you
+Copilot и Recall	Copilot and Recall
+Буфер телеметрии	Telemetry queue
+Ваша приватность	Your privacy
+Включить монитор	Turn monitor on
+Возврат доступа…	Restoring access…
+Выключить запись	Turn recording off
+Готово к работе.	Ready.
+Доступ к датчику	Sensor access
+Командная строка	Command line
+Нечего применять	Nothing to apply
+Откат изменений…	Undoing changes…
+Отчёт сохранён: 	Report saved: 
+Проверить сейчас	Verify now
+Проверка на деле	Verified for real
+Стирание следов…	Wiping traces…
+Тестовый прогон…	Dry run…
+Уведомления: вкл	Alerts: on
+Удаление стража…	Removing Guard…
+монитор выключен	monitor is off
+ожидание данных…	waiting for data…
+требуют внимания	need attention
+  ·  всё на месте	  ·  all in place
+ соединений/сутки	 connections/day
+ требуют внимания	 need attention
+, из них лишних: 	, bloat among them: 
+Включение записи…	Turning recording on…
+Выбранные следы (	Selected traces (
+Выключить монитор	Turn monitor off
+Доступ возвращён.	Access restored.
+Живые уведомления	Live alerts
+Журнал выполнения	Execution log
+Загрузить профиль	Load profile
+Ничего не выбрано	Nothing selected
+Отчёты об ошибках	Error reports
+Проверка стражем…	Guard check…
+Снимок состояния…	Taking snapshot…
+Сохранить профиль	Save profile
+Стереть выбранное	Wipe selected
+Страж приватности	Privacy Guard
+Удалить выбранные	Remove selected
+Установка стража…	Installing Guard…
+Честно о пределах	Honest about limits
+что собрано о вас	what was collected
+ событий в сутки).	 events per day).
+; несоответствий: 	; mismatches: 
+Выключение записи…	Turning recording off…
+Запомнить как «до»	Save as "before"
+Обновления Windows	Windows updates
+Последняя проверка	Last check
+Правил брандмауэра	Firewall rules
+Проверка рентгена…	Checking X-ray…
+Профиль загружен: 	Profile loaded: 
+Профиль сохранён: 	Profile saved: 
+Рентген телеметрии	Telemetry X-ray
+Сбито обновлениями	Reverted by updates
+Сравнение снимков…	Comparing snapshots…
+Уникальных событий	Unique events
+Чтение разрешений…	Reading permissions…
+Что о вас собирают	What they collect
+Включение монитора…	Turning monitor on…
+Запуск: powershell 	Running: powershell 
+Обращений за 7 дней	Accesses in 7 days
+Реклама и подсказки	Ads and suggestions
+Сбор данных Windows	Windows data collection
+Удаление приложений	Removing apps
+разных типов данных	distinct data types
+ обращений за 7 дней	 accesses in 7 days
+Выключение монитора…	Turning monitor off…
+Досье Windows на вас	Windows dossier on you
+Завершено с ошибкой.	Finished with an error.
+Исходящих соединений	Outbound connections
+Найдено приложений: 	Apps found: 
+Определение системы…	Detecting system…
+Поиск по настройкам…	Search settings…
+Применение настроек…	Applying settings…
+Точка восстановления	Restore point
+Удаление приложений…	Removing apps…
+используются сейчас!	in use right now!
+ файлов ждут отправки	 files waiting to be sent
+Найдено компонентов: 	Components found: 
+Настроить и применить	Configure and apply
+Отслеживается модулей	Modules watched
+Поиск: Bing и Cortana	Search: Bing and Cortana
+Показать автозагрузку	Show startup items
+Слежение за датчиками	Sensor watch
+Стереть цифровой след	Wipe digital trace
+Только использованные	Only used
+в данный момент никто	nobody right now
+настроек подтверждено	settings confirmed
+смотрите список ниже!	see the list below!
+, программ в журнале: 	, apps in the log: 
+PowerShell недоступен.	PowerShell is unavailable.
+Включение уведомлений…	Turning alerts on…
+Идёт проверка системы…	Checking the system…
+Обращения к телеметрии	Telemetry lookups
+Приватность Windows 11	Windows 11 Privacy
+Рекламный ID и реклама	Advertising ID and ads
+Система хорошо закрыта	System is well locked down
+камера, микрофон, след	camera, mic, trace
+Выключение уведомлений…	Turning alerts off…
+Повторное сканирование…	Rescanning…
+Показать все разрешения	Show all permissions
+Резервная копия реестра	Registry backup
+Чистка временных файлов	Temporary files cleanup
+Чтение списка настроек…	Reading settings list…
+пунктов — отметьте ниже	items — tick them below
+
+Будет удалено приложений: 	Apps to be removed: 
+Данные получены с этого компьютера 	Data read from this computer 
+PowerShell завершился с кодом 	PowerShell exited with code 
+Не удалось запустить PowerShell: 	Could not start PowerShell: 
+Не удалось подготовить движок: 	Could not prepare the engine: 
+Будут изменены настройки системы (разделов: 	System settings will be changed (sections: 
+) не вернул данные, код 	) returned no data, code 
+Настоящее событие, отправленное в Microsoft — 	A real event sent to Microsoft — 
+Приватность\nWindows 11	Windows 11\nPrivacy
+Windows 11 Домашняя	Windows 11 Home

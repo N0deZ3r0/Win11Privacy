@@ -72,7 +72,11 @@ param(
     [switch]$ListApps,
     [switch]$RemoveApps,
     [string[]]$AppItems = @(),
-    [switch]$AllUsers
+    [switch]$AllUsers,
+    # --- полный откат и все разрешения ---
+    [switch]$RestoreAll,
+    [switch]$ChangeLog,
+    [switch]$SpyAll
 )
 
 $ErrorActionPreference = 'Continue'
@@ -114,6 +118,9 @@ $script:DiagDir        = Join-Path $env:ProgramData 'Microsoft\Diagnosis'
 $script:Changes = 0
 $script:Failures = 0
 $script:Already = 0
+# Журнал изменений реестра: что было до нашего вмешательства.
+# Без него откат требовал ручного импорта .reg-файлов.
+$script:Journal = New-Object System.Collections.Generic.List[object]
 $script:TelemetryDnsRegex = 'telemetry|vortex|events\.data\.microsoft|pipe\.aria|watson|settings-win\.data|ceipdata|telecommand|sqm\.|nexusrules|nexus\.officeapps|data\.microsoft\.com|activity\.windows\.com|licensing\.mp\.microsoft|browser\.events'
 
 # =========================================================================== #
@@ -144,6 +151,13 @@ function Set-Reg {
     # панели задач Windows защищает от перезаписи даже тем же самым числом.
     $cur = Get-RegValue $Path $Name
     if ($null -ne $cur -and "$cur" -eq "$Value") { Write-Log "   [в] $label -- уже настроено"; $script:Already++; return }
+
+    # запоминаем прежнее состояние — по нему работает откат одной кнопкой
+    try {
+        $script:Journal.Add(@{ kind = 'reg'; path = $Path; name = $Name; type = $Type
+                               existed = [bool]($null -ne $cur); old = $(if ($null -ne $cur) { $cur } else { '' })
+                               newValue = "$Value"; time = (Get-Date).ToString('s') })
+    } catch { }
 
     try {
         if (-not (Test-Path -LiteralPath $Path)) { New-Item -Path $Path -Force -ErrorAction Stop | Out-Null }
@@ -433,9 +447,40 @@ foreach ($tp in @(
     '\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector',
     '\Microsoft\Windows\Feedback\Siuf\DmClient',
     '\Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload',
-    '\Microsoft\Windows\Windows Error Reporting\QueueReporting')) {
+    '\Microsoft\Windows\Windows Error Reporting\QueueReporting',
+    '\Microsoft\Windows\Application Experience\PcaPatchDbTask',
+    '\Microsoft\Windows\Application Experience\StartupAppTask',
+    '\Microsoft\Windows\Application Experience\MareBackup',
+    '\Microsoft\Windows\Application Experience\AitAgent',
+    '\Microsoft\Windows\Customer Experience Improvement Program\KernelCeipTask',
+    '\Microsoft\Windows\Customer Experience Improvement Program\BthSQM',
+    '\Microsoft\Windows\Customer Experience Improvement Program\Uploader',
+    '\Microsoft\Windows\Device Information\Device',
+    '\Microsoft\Windows\Device Information\Device User',
+    '\Microsoft\Windows\DiskFootprint\Diagnostics',
+    '\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticResolver',
+    '\Microsoft\Windows\Maintenance\WinSAT',
+    '\Microsoft\Windows\NetTrace\GatherNetworkInfo',
+    '\Microsoft\Windows\PI\Sqm-Tasks',
+    '\Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem',
+    '\Microsoft\Windows\Windows Error Reporting\ProcessQueuedCallHomeReports',
+    '\Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload',
+    '\Microsoft\Windows\Clip\License Validation',
+    '\Microsoft\Windows\CloudExperienceHost\CreateObjectTask',
+    '\Microsoft\Windows\Shell\FamilySafetyMonitor',
+    '\Microsoft\Windows\Shell\FamilySafetyRefreshTask',
+    '\Microsoft\Windows\Speech\SpeechModelDownloadTask',
+    '\Microsoft\Windows\Autochk\Proxy')) {
     Def 'services' 'task' $tp '' 'Disabled' '' ('задача ' + (Split-Path $tp -Leaf))
 }
+
+$od = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OneDrive'
+Def 'onedrive' 'reg' $od 'DisableFileSyncNGSC' 1 'DWord' 'OneDrive: синхронизация файлов — выкл'
+Def 'onedrive' 'reg' $od 'DisableFileSync' 1 'DWord' 'OneDrive: старая синхронизация — выкл'
+Def 'onedrive' 'reg' $od 'DisableMeteredNetworkFileSync' 1 'DWord' 'OneDrive: не синхронизировать по лимитной сети'
+Def 'onedrive' 'reg' 'HKCU:\Software\Microsoft\OneDrive' 'DisablePersonalSync' 1 'DWord' 'OneDrive: личная синхронизация — выкл'
+Def 'onedrive' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'ShowSyncProviderNotifications' 0 'DWord' 'OneDrive: реклама в Проводнике — выкл'
+Def 'onedrive' 'taskglob' 'OneDrive*' '' 'Disabled' '' 'OneDrive: задачи обновления — выкл'
 
 Def 'hosts' 'hosts' '' '' '' '' 'блок телеметрийных доменов в hosts'
 
@@ -497,14 +542,14 @@ Def 'app_vs' 'reg' 'HKCU:\Software\Microsoft\VisualStudio\Telemetry' 'TurnOffSwi
 Def 'app_vs' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\VisualStudio\Feedback' 'DisableFeedbackDialog' 1 'DWord' 'Visual Studio: окно отзывов — выкл'
 
 $script:ModuleOrder = @('telemetry','errors','activity','input','edge','delivery','location','ads','widgets','search','copilot','ai',
-                        'defender','services','hosts','firewall','fwips','doh','buffer','app_nvidia','app_vscode','app_chrome','app_firefox',
+                        'defender','onedrive','services','hosts','firewall','fwips','doh','buffer','app_nvidia','app_vscode','app_chrome','app_firefox',
                         'app_office','app_devtools','app_vs','oem','cleanup','startup')
 $script:ModuleTitles = @{
     telemetry='Телеметрия и диагностика'; errors='Отчёты об ошибках'; activity='История активности и буфер обмена';
     input='Персонализация ввода, рукописный ввод, речь'; edge='Microsoft Edge'; delivery='Раздача обновлений другим ПК';
     location='Геолокация и поиск устройства'; ads='Рекламный ID и реклама в интерфейсе'; widgets='Виджеты и лента новостей';
     search='Поиск: Bing, Cortana, облако'; copilot='Copilot и Recall';
-    ai='ИИ-функции Windows'; defender='Защитник: облако и образцы'; services='Службы и задачи телеметрии'; hosts='Блокировка телеметрийных доменов (hosts)';
+    ai='ИИ-функции Windows'; defender='Защитник: облако и образцы'; onedrive='OneDrive: синхронизация и реклама'; services='Службы и задачи телеметрии'; hosts='Блокировка телеметрийных доменов (hosts)';
     firewall='Брандмауэр: блокировка служб телеметрии'; fwips='Брандмауэр: адреса сбора телеметрии'; doh='Шифрованный DNS (обход блокировки)'; buffer='Неотправленная телеметрия'; app_nvidia='NVIDIA';
     app_vscode='Visual Studio Code'; app_chrome='Google Chrome'; app_firefox='Mozilla Firefox'; app_office='Microsoft Office';
     app_devtools='PowerShell 7 / .NET SDK'; app_vs='Visual Studio'; oem='Компоненты сбора данных производителя';
@@ -714,7 +759,25 @@ $script:HostsDomains = @(
     'telemetry.urs.microsoft.com','choice.microsoft.com','v10.events.data.microsoft.com','v20.events.data.microsoft.com',
     'us-v10.events.data.microsoft.com','eu-v10.events.data.microsoft.com','self.events.data.microsoft.com',
     'functional.events.data.microsoft.com','browser.pipe.aria.microsoft.com','mobile.pipe.aria.microsoft.com',
-    'telemetry.appex.bing.net','nexus.officeapps.live.com','nexusrules.officeapps.live.com')
+    'telemetry.appex.bing.net','nexus.officeapps.live.com','nexusrules.officeapps.live.com',
+    'eu-mobile.events.data.microsoft.com','us-mobile.events.data.microsoft.com',
+    'jp.events.data.microsoft.com','uk.events.data.microsoft.com',
+    'in.events.data.microsoft.com','au.events.data.microsoft.com',
+    'ca.events.data.microsoft.com','br.events.data.microsoft.com',
+    'de.events.data.microsoft.com','fr.events.data.microsoft.com',
+    'asia.events.data.microsoft.com','tb.events.data.microsoft.com',
+    'v10.vortex-win.data.microsoft.com','v10c.events.data.microsoft.com',
+    'events-sandbox.data.microsoft.com','events.data.microsoft.com',
+    'watson.events.data.microsoft.com','umwatson.events.data.microsoft.com',
+    'settings-win.data.microsoft.com','settings-sandbox.data.microsoft.com',
+    'ceuswatcab01.blob.core.windows.net','ceuswatcab02.blob.core.windows.net',
+    'eaus2watcab01.blob.core.windows.net','eaus2watcab02.blob.core.windows.net',
+    'weus2watcab01.blob.core.windows.net','weus2watcab02.blob.core.windows.net',
+    'oca.telemetry.microsoft.com.nsatc.net','sqm.telemetry.microsoft.com.nsatc.net',
+    'telecommand.telemetry.microsoft.com.nsatc.net','vortex-sandbox.data.microsoft.com',
+    'cs11.wpc.v0cdn.net','cs1137.wpc.gammacdn.net','modern.watson.data.microsoft.com',
+    'browser.events.data.msn.com','self.events.data.microsoft.com',
+    'activity.windows.com','licensing.mp.microsoft.com')
 $script:HostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
 
 function Test-HostsBlock { try { return (@(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop) -contains $script:HostsMarkStart) } catch { return $false } }
@@ -1559,12 +1622,31 @@ if ($WatcherNotify) {
 #  мы его читаем и показываем человеку. Только чтение.
 # =========================================================================== #
 $script:SpyCaps = @(
-    @{ id='webcam';             title='Камера' },
-    @{ id='microphone';         title='Микрофон' },
-    @{ id='location';           title='Местоположение' },
-    @{ id='userDataTasks';      title='Задачи и планы' },
-    @{ id='contacts';           title='Контакты' },
-    @{ id='userAccountInformation'; title='Данные учётной записи' }
+    @{ id='webcam';                 title='Камера' },
+    @{ id='microphone';             title='Микрофон' },
+    @{ id='location';               title='Местоположение' },
+    @{ id='graphicsCaptureProgrammatic'; title='Снимки экрана' },
+    @{ id='graphicsCaptureWithoutBorder'; title='Захват экрана без рамки' },
+    @{ id='userNotificationListener'; title='Чтение уведомлений' },
+    @{ id='documentsLibrary';       title='Документы' },
+    @{ id='picturesLibrary';        title='Изображения' },
+    @{ id='videosLibrary';          title='Видео' },
+    @{ id='broadFileSystemAccess';  title='Весь диск' },
+    @{ id='contacts';               title='Контакты' },
+    @{ id='appointments';           title='Календарь' },
+    @{ id='email';                  title='Почта' },
+    @{ id='chat';                   title='Сообщения' },
+    @{ id='phoneCall';              title='Звонки' },
+    @{ id='phoneCallHistory';       title='Журнал звонков' },
+    @{ id='userDataTasks';          title='Задачи и планы' },
+    @{ id='userAccountInformation'; title='Данные учётной записи' },
+    @{ id='activity';               title='Сведения об активности' },
+    @{ id='bluetoothSync';          title='Обмен с устройствами' },
+    @{ id='radios';                 title='Управление радиомодулями' },
+    @{ id='sensors.custom';         title='Датчики устройства' },
+    @{ id='humanInterfaceDevice';   title='Устройства ввода' },
+    @{ id='cellularData';           title='Сотовая связь' },
+    @{ id='appDiagnostics';         title='Диагностика других программ' }
 )
 
 function ConvertTo-FriendlyAppName {
@@ -1601,20 +1683,23 @@ function Get-SpyReport {
                 if ($null -ne $p.LastUsedTimeStart) { $start = [long]$p.LastUsedTimeStart }
                 if ($null -ne $p.LastUsedTimeStop)  { $stop  = [long]$p.LastUsedTimeStop }
             } catch { }
-            if ($start -le 0) { continue }
+            if ($start -le 0 -and -not $SpyAll) { continue }
             $active = ($stop -le 0 -or $stop -lt $start)
             $lastTicks = [Math]::Max($start, $stop)
             $last = $null
-            try { $last = [DateTime]::FromFileTime($lastTicks) } catch { continue }
+            if ($lastTicks -gt 0) { try { $last = [DateTime]::FromFileTime($lastTicks) } catch { } }
+            $never = ($null -eq $last)
+            if ($never) { $last = [datetime]'1900-01-01' }
             $minutes = 0.0
             if (-not $active -and $stop -gt $start) { $minutes = [math]::Round(($stop - $start) / 600000000.0, 1) }
-            if ($active) { $activeNow++ }
-            if ($last -ge $since7) { $week++ }
+            if ($active -and -not $never) { $activeNow++ } else { $active = $false }
+            if (-not $never -and $last -ge $since7) { $week++ }
             $rel = ($k.PSPath -replace '^.*\\ConsentStore\\', '')
             $allow = 'Allow'
             try { $vv = (Get-ItemProperty -LiteralPath $k.PSPath -Name 'Value' -ErrorAction Stop).Value; if ($vv) { $allow = "$vv" } } catch { }
             $items += @{ app = (ConvertTo-FriendlyAppName $k.PSChildName); key = $rel; value = $allow
-                         last = $last.ToString('yyyy-MM-dd HH:mm'); minutes = $minutes; active = [bool]$active
+                         last = $(if ($never) { '' } else { $last.ToString('yyyy-MM-dd HH:mm') })
+                         minutes = $minutes; active = [bool]$active; never = [bool]$never
                          sort = $last.Ticks }
         }
         # один и тот же exe может числиться под несколькими ключами — оставляем самое свежее
@@ -2227,12 +2312,61 @@ if ($Audit) {
 }
 
 # =========================================================================== #
+#  ОТКАТ ПО ЖУРНАЛУ
+#  Возвращает каждый параметр реестра в то значение, которое было до нас.
+# =========================================================================== #
+function Restore-Journal {
+    $j = Load-Json 'changes.json'
+    if (-not $j -or -not $j.items) { Write-Log '   [-] журнал пуст — возвращать нечего'; return @{ restored = 0; failed = 0 } }
+    $items = @($j.items)
+    [array]::Reverse($items)
+    $ok = 0; $bad = 0; $seen = @{}
+    foreach ($e in $items) {
+        if ("$($e.kind)" -ne 'reg') { continue }
+        $key = "$($e.path)|$($e.name)"
+        if ($seen.ContainsKey($key)) { continue }      # только самое раннее состояние
+        $seen[$key] = $true
+        try {
+            if ($e.existed) {
+                if (-not (Test-Path -LiteralPath $e.path)) { New-Item -Path $e.path -Force -ErrorAction Stop | Out-Null }
+                New-ItemProperty -LiteralPath $e.path -Name $e.name -Value $e.old -PropertyType $e.type -Force -ErrorAction Stop | Out-Null
+            } else {
+                Remove-ItemProperty -LiteralPath $e.path -Name $e.name -Force -ErrorAction SilentlyContinue
+            }
+            $ok++
+        } catch { $bad++ }
+    }
+    Write-Log ("   [+] возвращено параметров реестра: {0}" -f $ok)
+    if ($bad -gt 0) { Write-Log ("   [!] не удалось вернуть: {0}" -f $bad) }
+    try { Remove-Item -LiteralPath (Join-Path $script:DataDir 'changes.json') -Force -ErrorAction SilentlyContinue } catch { }
+    return @{ restored = $ok; failed = $bad }
+}
+
+if ($ChangeLog) {
+    $j = Load-Json 'changes.json'
+    $n = 0
+    if ($j -and $j.items) { $n = @($j.items).Count }
+    Emit-Json @{ count = $n; updated = $(if ($j) { "$($j.updated)" } else { '' }) }
+    exit 0
+}
+
+if ($RestoreAll) {
+    if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
+    Write-Section 'Возврат настроек реестра по журналу'
+    $r = Restore-Journal
+    Emit-Json $r
+    Write-Log '###DONE###'
+    exit 0
+}
+
+# =========================================================================== #
 #  Revert (откат)
 # =========================================================================== #
 if ($Revert) {
     Write-Log 'ОТКАТ ИЗМЕНЕНИЙ'
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
 
+    Write-Section 'Настройки реестра'; $null = Restore-Journal
     Write-Section 'Файл hosts'; Remove-HostsBlock
     Write-Section 'Брандмауэр'; Remove-FwRules
     Write-Section 'Монитор'; if (Get-MonitorEnabled) { Set-MonitorEnabled $false | Out-Null } else { Write-Log '   [-] журнал аудита не включён' }
@@ -2296,8 +2430,8 @@ if ($Revert) {
     try { New-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location' -Name 'Value' -Value 'Allow' -PropertyType String -Force -ErrorAction Stop | Out-Null; Write-Log '   [+] доступ к местоположению возвращён (Allow)' } catch { }
 
     Write-Log ''
-    Write-Log 'Настройки реестра Windows откатываются .reg-файлами из папки резервной копии'
-    Write-Log 'на рабочем столе (двойной клик по каждому файлу), либо точкой восстановления.'
+    Write-Log 'Настройки реестра возвращены по журналу изменений — ручной импорт .reg больше не нужен.'
+    Write-Log 'Папка резервной копии на рабочем столе остаётся как запасной вариант.'
     Write-Log 'Готово. Перезагрузите компьютер.'
     Write-Log '###DONE###'
     exit 0
@@ -2457,6 +2591,18 @@ if (Use-Module 'startup') {
 
 # --- Итог ------------------------------------------------------------------- #
 Write-Section 'Итог'
+# журнал для отката — дописываем к тому, что было раньше
+if (-not $DryRun -and $script:Journal.Count -gt 0) {
+    try {
+        $prev = Load-Json 'changes.json'
+        $all = New-Object System.Collections.Generic.List[object]
+        if ($prev -and $prev.items) { foreach ($e in @($prev.items)) { $all.Add($e) } }
+        foreach ($e in $script:Journal) { $all.Add($e) }
+        Save-Json 'changes.json' @{ items = $all.ToArray(); updated = (Get-Date).ToString('s') }
+        Write-Log ("Записано в журнал отката: {0}" -f $script:Journal.Count)
+    } catch { }
+}
+
 Write-Log ("Изменений применено : {0}" -f $script:Changes)
 Write-Log ("Было уже настроено : {0}" -f $script:Already)
 Write-Log ("Ошибок              : {0}" -f $script:Failures)
