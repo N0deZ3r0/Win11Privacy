@@ -298,7 +298,8 @@ if ($regFound.Count -eq $regFns.Count) {
     # политика, которую система не отдаёт, — это не ошибка программы
     $script:Failures = 0; $script:Blocked = 0
     $script:Journal = New-Object System.Collections.Generic.List[object]
-    Set-Reg -Path 'HKLM:\SOFTWARE\Win11PrivacyProbe' -Name 'x' -Value 1 -Type 'DWord' -Comment 'политика' -Policy
+    # SECURITY закрыт и для администратора — годится на любой машине
+    Set-Reg -Path 'HKLM:\SECURITY\Win11PrivacyProbe' -Name 'x' -Value 1 -Type 'DWord' -Comment 'политика' -Policy
     Check 'отказ по политике не считается ошибкой' ($script:Failures -eq 0) ("ошибок: " + $script:Failures)
     Check 'отказ по политике посчитан отдельно' ($script:Blocked -eq 1) ("заблокировано: " + $script:Blocked)
     Check 'отказ по политике не пишется в журнал' ($script:Journal.Count -eq 0)
