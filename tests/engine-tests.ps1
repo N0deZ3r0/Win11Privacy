@@ -387,6 +387,54 @@ if (Get-Command Apply-Def -ErrorAction SilentlyContinue) {
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
+Write-Host 'Резервная копия: только при ручном применении и только по факту'
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($fn.Name -in @('Ensure-Backup', 'Write-Section')) { Invoke-Expression $fn.Extent.Text }
+}
+if (Get-Command Ensure-Backup -ErrorAction SilentlyContinue) {
+    $script:Defs = @(
+        @{ M = 'probe'; T = 'reg';   P = 'HKCU:\Software'; N = 'x'; V = 0 },
+        @{ M = 'probe'; T = 'regif'; P = 'HKLM:\SECURITY'; N = 'y'; V = 0 }
+    )
+    $script:RegTypes = @('reg', 'regif', 'regpol')
+    $Modules = @('probe')
+    $DryRun = $false
+    $NoBackup = $false
+    $NoRestorePoint = $true
+    $BackupRoot = Join-Path $env:TEMP 'w11p-tests-backup'
+    $script:BackupDir = ''
+    $script:BackupTried = $false
+    $script:BackupEnabled = $false
+    Remove-Item -LiteralPath $BackupRoot -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
+    # свой сборщик строк: так видно, что именно написала копия
+    $bkLines = New-Object System.Collections.Generic.List[string]
+    function Write-Log { param([string]$Message = '') $bkLines.Add($Message) }
+
+    Ensure-Backup
+    Check 'без ручного применения копия не создаётся' (@(Get-ChildItem $BackupRoot -Directory).Count -eq 0)
+
+    $script:BackupEnabled = $true
+    Ensure-Backup
+    $made = @(Get-ChildItem $BackupRoot -Directory)
+    Check 'при применении копия создаётся' ($made.Count -eq 1) ("папок: " + $made.Count)
+    if ($made.Count -eq 1) {
+        $files = @(Get-ChildItem $made[0].FullName -File)
+        Check 'в копии лежит выгруженная ветка' ($files.Count -eq 1) ("файлов: " + $files.Count)
+        Check 'недоступная ветка не засчитана' (@($bkLines | Where-Object { $_ -match 'сохранено веток: 1' }).Count -ge 1) `
+              (($bkLines -join ' | '))
+        Check 'о невыгруженной ветке сказано' (@($bkLines | Where-Object { $_ -match 'не выгрузились ветки' }).Count -ge 1)
+    }
+
+    Ensure-Backup
+    Check 'повторный вызов не плодит папки' (@(Get-ChildItem $BackupRoot -Directory).Count -eq 1)
+    Remove-Item -LiteralPath $BackupRoot -Recurse -Force -ErrorAction SilentlyContinue
+} else {
+    Check 'Ensure-Backup найдена в движке' $false
+}
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
 Write-Host 'Применение (тестовый прогон, ничего не меняется)'
 if ($isAdmin) {
     $mods = 'telemetry,errors,activity,input,edge,ads,copilot'

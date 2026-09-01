@@ -223,6 +223,7 @@ function Set-Reg {
     # ВАЖНО: в журнал отката пишем только после удачной записи. Раньше запись
     # добавлялась заранее, и неудавшиеся попытки оседали в журнале как
     # «изменения», которых на самом деле не было.
+    Ensure-Backup          # копию делаем перед первым изменением, а не «всегда»
     $existed = [bool]($null -ne $cur)
     $oldValue = $(if ($existed) { $cur } else { '' })
     $done = $false
@@ -311,6 +312,68 @@ function Save-Json { param([string]$Name, $Object) Ensure-DataDir; ($Object | Co
 # Дописывает накопленный журнал «что было до нас» к changes.json. Раньше это
 # делалось только в самом конце применения модулей — теперь любая команда,
 # меняющая систему, может сохранить свой след для отката одной кнопкой.
+# --- Резервная копия и точка восстановления --------------------------------- #
+#  Делаются не «на всякий случай» при каждом запуске, а ровно перед первым
+#  настоящим изменением. Если всё уже настроено, на рабочем столе не появится
+#  очередная пустая папка, а система не потратит минуту на точку отката.
+$script:BackupDir = ''
+$script:BackupTried = $false
+# Копию и точку восстановления делает только ручное применение. Страж чинит
+# сбитые настройки сам по расписанию — ему незачем сорить папками на рабочем
+# столе и тратить минуту на точку отката при каждой мелкой правке.
+$script:BackupEnabled = $false
+
+function Ensure-Backup {
+    if (-not $script:BackupEnabled -or $script:BackupTried -or $DryRun) { return }
+    $script:BackupTried = $true
+
+    if (-not $NoBackup) {
+        Write-Section 'Резервная копия реестра'
+        $root = if ($BackupRoot) { $BackupRoot } else { [Environment]::GetFolderPath('Desktop') }
+        $dir = Join-Path $root ('Win11Privacy-Backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        $keys = @($script:Defs | Where-Object { $script:RegTypes -contains $_.T -and $Modules -contains $_.M } | ForEach-Object { $_.P } | Select-Object -Unique)
+        try {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $saved = 0
+            $missed = @()
+            foreach ($k in $keys) {
+                if (-not (Test-Path -LiteralPath $k)) { continue }
+                $native = $k -replace '^HKLM:\\','HKLM\' -replace '^HKCU:\\','HKCU\'
+                $file = Join-Path $dir ((($k -replace '[:\\ ]','_')) + '.reg')
+                # ВАЖНО: reg.exe зовём через cmd, а не с «2>&1». В PowerShell 5.1
+                # поток ошибок родной программы превращается в терминирующую
+                # ошибку, и одна нечитаемая ветка обрывала всю копию целиком.
+                try { $null = & cmd.exe /c "reg export `"$native`" `"$file`" /y >nul 2>&1" } catch { }
+                # считаем только то, что действительно легло на диск: раньше
+                # счётчик прибавлял на каждую попытку, и в журнале стояло
+                # «сохранено веток: 35», даже если часть выгрузить не удалось
+                if (Test-Path -LiteralPath $file) { $saved++ } else { $missed += $k }
+            }
+            if ($saved -gt 0) {
+                $script:BackupDir = $dir
+                Write-Log ("   [+] сохранено веток: {0} -> {1}" -f $saved, $dir)
+            } else {
+                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+                Write-Log '   [-] сохранять нечего: ни одна ветка не выгрузилась'
+            }
+            if ($missed.Count -gt 0) {
+                Write-Log ("   [-] не выгрузились ветки: {0} (Windows не отдаёт их даже на чтение)" -f $missed.Count)
+                foreach ($k in $missed) { Write-Log ("       {0}" -f $k) }
+            }
+        } catch { Write-Log "   [!] не удалось создать резервную копию: $($_.Exception.Message)" }
+    }
+
+    if (-not $NoRestorePoint) {
+        Write-Section 'Точка восстановления системы'
+        try {
+            Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction SilentlyContinue
+            New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore' -Name 'SystemRestorePointCreationFrequency' -Value 0 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
+            Checkpoint-Computer -Description 'Win11Privacy: до изменений' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop
+            Write-Log '   [+] точка восстановления создана'
+        } catch { Write-Log "   [!] точку восстановления создать не удалось: $($_.Exception.Message)" }
+    }
+}
+
 function Save-JournalEntries {
     if ($DryRun -or $script:Journal.Count -eq 0) { return }
     try {
@@ -716,6 +779,7 @@ function Set-VsCodeValue {
     if ($null -ne $curVal -and "$curVal".ToLower() -eq "$Value".ToLower()) {
         Write-Log "   [в] $Comment -- уже настроено"; $script:Already++; return
     }
+    Ensure-Backup
     try {
         $dir = Split-Path $p -Parent
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -763,6 +827,7 @@ function Set-FirefoxPolicy {
     if ($null -ne $curVal -and "$curVal".ToLower() -eq "$Value".ToLower()) {
         Write-Log "   [в] $Comment -- уже настроено"; $script:Already++; return
     }
+    Ensure-Backup
     try {
         $dir = Split-Path $p -Parent
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -853,6 +918,7 @@ function Apply-Def {
                 if ($s.StartType -eq 'Disabled' -and $s.Status -ne 'Running') {
                     Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
                 }
+                Ensure-Backup
                 if ($s.Status -eq 'Running') { Stop-Service -Name $d.P -Force -ErrorAction SilentlyContinue }
                 Set-Service -Name $d.P -StartupType Disabled -ErrorAction Stop
                 Write-Log "   [+] $($d.C) -- остановлена и отключена"; $script:Changes++
@@ -866,6 +932,7 @@ function Apply-Def {
                 if ($s.StartType -eq 'Disabled' -and $s.Status -ne 'Running') {
                     Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
                 }
+                Ensure-Backup
                 if ($s.Status -eq 'Running') { Stop-Service -Name $d.P -Force -ErrorAction SilentlyContinue }
                 Set-Service -Name $d.P -StartupType Disabled -ErrorAction Stop
                 Write-Log "   [+] $($d.C) -- отключена"; $script:Changes++
@@ -876,6 +943,7 @@ function Apply-Def {
             if ($DryRun) { Write-Log "   [тест] $($d.C) -- отключить"; return }
             $st = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
             if ($st -and $st.State -eq 'Disabled') { Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return }
+            Ensure-Backup
             try { Disable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null; Write-Log "   [+] $($d.C) -- отключена"; $script:Changes++ }
             catch { Write-Log "   [-] $($d.C) -- не найдена" }
         }
@@ -885,6 +953,7 @@ function Apply-Def {
             foreach ($t in $ts) {
                 if ($DryRun) { Write-Log "   [тест] задача $($t.TaskName) -- отключить"; continue }
                 if ($t.State -eq 'Disabled') { Write-Log "   [в] задача $($t.TaskName) -- уже отключена"; $script:Already++; continue }
+                Ensure-Backup
                 try { Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null; Write-Log "   [+] задача $($t.TaskName) -- отключена"; $script:Changes++ }
                 catch { Write-Log "   [-] задача $($t.TaskName) -- не удалось" }
             }
@@ -894,6 +963,7 @@ function Apply-Def {
             if ([string][Environment]::GetEnvironmentVariable($d.P, 'User') -eq [string]$d.V) {
                 Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
             }
+            Ensure-Backup
             try { [Environment]::SetEnvironmentVariable($d.P, [string]$d.V, 'User'); Write-Log "   [+] $($d.C)"; $script:Changes++ }
             catch { Write-Log "   [!] не удалось: $($d.C)"; $script:Failures++ }
         }
@@ -3382,38 +3452,7 @@ if (-not $DryRun -and -not (Load-Json 'proof-before.json')) {
     try { Save-Json 'proof-before.json' (Get-ProofSnapshot); Write-Log 'Состояние «до» запомнено — потом покажем разницу.' } catch { }
 }
 
-# --- Резервная копия -------------------------------------------------------- #
-$script:BackupDir = ''
-if (-not $NoBackup -and -not $DryRun) {
-    Write-Section 'Резервная копия реестра'
-    $root = if ($BackupRoot) { $BackupRoot } else { [Environment]::GetFolderPath('Desktop') }
-    $script:BackupDir = Join-Path $root ('Win11Privacy-Backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
-    $keys = @($script:Defs | Where-Object { $script:RegTypes -contains $_.T -and $Modules -contains $_.M } | ForEach-Object { $_.P } | Select-Object -Unique)
-    try {
-        New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null
-        $n = 0
-        foreach ($k in $keys) {
-            if (Test-Path -LiteralPath $k) {
-                $native = $k -replace '^HKLM:\\','HKLM\' -replace '^HKCU:\\','HKCU\'
-                $file = Join-Path $script:BackupDir ((($k -replace '[:\\ ]','_')) + '.reg')
-                $null = & reg.exe export "$native" "$file" /y 2>&1
-                $n++
-            }
-        }
-        Write-Log ("   [+] сохранено веток: {0} -> {1}" -f $n, $script:BackupDir)
-    } catch { Write-Log "   [!] не удалось создать резервную копию: $($_.Exception.Message)" }
-}
-
-# --- Точка восстановления --------------------------------------------------- #
-if (-not $NoRestorePoint -and -not $DryRun) {
-    Write-Section 'Точка восстановления системы'
-    try {
-        Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction SilentlyContinue
-        New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore' -Name 'SystemRestorePointCreationFrequency' -Value 0 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
-        Checkpoint-Computer -Description 'Win11Privacy: до изменений' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop
-        Write-Log '   [+] точка восстановления создана'
-    } catch { Write-Log "   [!] точку восстановления создать не удалось: $($_.Exception.Message)" }
-}
+$script:BackupEnabled = $true    # дальше идёт ручное применение
 
 # --- Уборка за старыми версиями --------------------------------------------- #
 $junkFound = @(Find-JunkValues)
