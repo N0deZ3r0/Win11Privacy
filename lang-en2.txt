@@ -1,6 +1,6 @@
 # Продолжение перевода: длинные строки, диалоги и HTML-отчёт
-) не вернул данные, код 	) returned no data, code
-\nЭталон «до» сохранён: 	\nBaseline saved:
+) не вернул данные, код 	) returned no data, code 
+\nЭталон «до» сохранён: 	\nBaseline saved: 
 Виджеты и лента новостей	Widgets and news feed
 Куда (адреса назначения)	Where to (destinations)
 Не выбран ни один пункт.	No items selected.
@@ -17,7 +17,7 @@
 работе стража и монитора.	Guard and monitor activity.
 HTML-отчёт (*.html)|*.html	HTML report (*.html)|*.html
 Блокировка доменов (hosts)	Domain blocking (hosts)
-Будет удалено приложений: 	Apps to be removed:
+Будет удалено приложений: 	Apps to be removed: 
 Защитник: облако и образцы	Defender: cloud and samples
 Кто отправляет (программы)	Who sends (programs)
 Не удалось получить список	Could not get the list
@@ -31,23 +31,23 @@ HTML-отчёт (*.html)|*.html	HTML report (*.html)|*.html
 Проверка состояния системы…	Checking system state…
 Сбор статистики соединений…	Collecting connection stats…
 она будет пополняться сама.	it will fill up on its own.
-\nЛокальная копия на диске: 	\nLocal copy on disk:
+\nЛокальная копия на диске: 	\nLocal copy on disk: 
 Предустановленные приложения	Preinstalled apps
 камера, микрофон, геолокация	camera, microphone, location
-\nНеотправленная телеметрия: 	\nUnsent telemetry:
+\nНеотправленная телеметрия: 	\nUnsent telemetry: 
 Блокировка адресов телеметрии	Telemetry address blocking
 Защита настроена не полностью	Protection is incomplete
 Раздача обновлений в интернет	Update sharing to the internet
 Сканирование цифрового следа…	Scanning digital trace…
 Слежка производителя ноутбука	Laptop maker's tracking
-PowerShell завершился с кодом 	PowerShell exited with code
+PowerShell завершился с кодом 	PowerShell exited with code 
 Журнал доступа к датчикам пуст	The sensor access log is empty
 Свернуть или развернуть панель	Collapse or expand the panel
 Телеметрия средств разработки.	Developer tooling telemetry.
  не заблокировано (из кэша DNS)	 not blocked (from DNS cache)
 \n\nВозможно, мешает антивирус.	\n\nAn antivirus may be blocking it.
 Геолокация и «Поиск устройства»	Location and Find My Device
-Не удалось подготовить движок: 	Could not prepare the engine:
+Не удалось подготовить движок: 	Could not prepare the engine: 
 Включение слежения за датчиками…	Turning sensor watch on…
 Не удалось запустить PowerShell.	Could not start PowerShell.
 включите запись и просканируйте.	turn recording on and scan.
@@ -56,7 +56,7 @@ OneDrive: синхронизация и реклама	OneDrive: sync and ads
 Здесь появится история по дням.\n	Day-by-day history will appear here.\n
 История активности и буфер обмена	Activity history and clipboard
 Машина времени — снимки состояния	Time machine — state snapshots
-Не удалось запустить PowerShell: 	Could not start PowerShell:
+Не удалось запустить PowerShell: 	Could not start PowerShell: 
 Отключение слежения за датчиками…	Turning sensor watch off…
 Стереть неотправленную телеметрию	Wipe unsent telemetry
 вы сразу увидите уведомление.\n\n	you will see an alert at once.\n\n
@@ -71,7 +71,7 @@ OneDrive: синхронизация и реклама	OneDrive: sync and ads
 Телеметрия и исследования Firefox.	Firefox telemetry and studies.
  шт.) будут удалены безвозвратно.\n	 items) will be deleted permanently.\n
 Включите монитор, чтобы начать сбор	Turn the monitor on to start collecting
-Данные получены с этого компьютера 	Data read from this computer
+Данные получены с этого компьютера 	Data read from this computer 
 Профиль Win11Privacy (*.json)|*.json	Win11Privacy profile (*.json)|*.json
 Телеметрия и эксперименты редактора.	Editor telemetry and experiments.
 программа не трогает.\n\nПродолжить?	are left untouched.\n\nContinue?
@@ -86,7 +86,7 @@ OneDrive: синхронизация и реклама	OneDrive: sync and ads
 Программа улучшения качества и телеметрия.	Customer Experience Program and telemetry.
 Что умеет эта программа, чего нет у других	What this program does that others do not
 ИИ-помощник и запись снимков экрана Recall.	AI assistant and Recall screen snapshots.
-Будут изменены настройки системы (разделов: 	System settings will be changed (sections:
+Будут изменены настройки системы (разделов: 	System settings will be changed (sections: 
 Обращения к доменам телеметрии (из кэша DNS)	Telemetry domain lookups (from DNS cache)
 Отчёт по автозапуску, ничего не отключается.	Startup report only, nothing is disabled.
 Чтение журнала доступа к камере и микрофону…	Reading camera and microphone access log…
@@ -94,7 +94,7 @@ Temp, кэш обновлений, эскизы, дампы, корзина.	Tem
 Отметьте галочками, какие приложения удалить.	Tick the apps you want removed.
 Слежение за датчиками (камера, микрофон, гео)	Sensor watch (camera, microphone, location)
 Снимков пока нет — нажмите «Снимок состояния»	No snapshots yet — press Snapshot
-Настоящее событие, отправленное в Microsoft — 	A real event sent to Microsoft —
+Настоящее событие, отправленное в Microsoft — 	A real event sent to Microsoft — 
 Останавливает DiagTrack и задачи планировщика.	Stops DiagTrack and scheduled tasks.
 Система не определена\n(PowerShell недоступен)	System not detected\n(PowerShell unavailable)
 Статистика, Privacy Sandbox, отправка адресов.	Usage stats, Privacy Sandbox, URL sending.
@@ -177,7 +177,7 @@ Windows сама ведёт журналы: кто включал камеру �
 • настройки реестра — по журналу изменений, в те значения, что были до неё;\n	• registry settings — from the change journal, back to their previous values;\n
 \n\nПеред изменениями на рабочий стол будет сохранена резервная копия реестра.	\n\nA registry backup will be saved to the desktop before any changes.
 с расшифровкой и сырым содержимым. Включите запись, дайте системе поработать\n	with plain-language decoding and raw content. Turn recording on, let it run\n
-Данные получены из реестра, служб, планировщика, кэша DNS, журнала брандмауэра 	Data taken from the registry, services, scheduler, DNS cache, firewall log
+Данные получены из реестра, служб, планировщика, кэша DNS, журнала брандмауэра 	Data taken from the registry, services, scheduler, DNS cache, firewall log 
 На этой системе нет модуля Microsoft.DiagnosticDataViewer — рентген недоступен.	This system has no Microsoft.DiagnosticDataViewer module — X-ray unavailable.
 то, что копия сохраняется на диске. Стереть её можно кнопкой «Стереть копию».\n\n	that a copy is stored on disk. You can erase it with Wipe local copy.\n\n
 ВНИМАНИЕ: программа запущена без прав администратора — изменения применить нельзя.	WARNING: the program runs without administrator rights — changes cannot be applied.
@@ -189,12 +189,12 @@ Windows сама ведёт журналы: кто включал камеру �
 Удалённые приложения не возвращаются — их можно поставить из Microsoft Store.\n\nПродолжить?	Removed apps do not come back — you can reinstall them from the Store.\n\nContinue?
 • Блокировка через брандмауэр, а не только hosts; удаление накопленного буфера телеметрии.\n	• Firewall blocking, not just hosts; wiping the accumulated telemetry queue.\n
 • Проверка на деле: читает реальное состояние системы и показывает индекс, а не «галочки».\n	• Verified for real: reads the actual system state and shows an index, not checkmarks.\n
-на Windows нельзя: остаются проверка обновлений, активация лицензии и проверка сертификатов. 	on Windows: update checks, licence activation and certificate checks remain.
+на Windows нельзя: остаются проверка обновлений, активация лицензии и проверка сертификатов. 	on Windows: update checks, licence activation and certificate checks remain. 
 Синее окно показывается любому неподписанному приложению из интернета. Убрать его можно так:\n	The blue window appears for any unsigned app from the internet. To remove it:\n
 Полностью прекратить обмен данными с Microsoft на Windows нельзя: остаются проверка обновлений,\n	Data exchange with Microsoft cannot be stopped completely: update checks,\n
 правый клик по файлу → Свойства → внизу галочка «Разблокировать» → ОК. Запрос прав администратора\n	right-click the file → Properties → tick Unblock at the bottom → OK. The admin prompt\n
 • Страж: возвращает настройки, сбитые обновлениями Windows; машина времени со снимками состояния.\n	• Guard: restores settings reverted by Windows updates; time machine with state snapshots.\n
-На редакциях Home и Pro минимальный уровень телеметрии система трактует как «Обязательные данные» — 	On Home and Pro the minimum telemetry level is treated as Required data —
+На редакциях Home и Pro минимальный уровень телеметрии система трактует как «Обязательные данные» — 	On Home and Pro the minimum telemetry level is treated as Required data — 
 активация лицензии и проверка сертификатов. На редакциях Home и Pro минимальный уровень телеметрии\n	licence activation and certificate checks remain. On Home and Pro the minimum level\n
 система трактует как «Обязательные данные» — это ограничение редакции, а не программы. Всё, что можно\n	is treated as Required data — an edition limit, not a program limit. Everything that\n
 • Досье: кто и когда реально включал камеру, микрофон и геолокацию — с длительностью и меткой «сейчас».\n	• Dossier: who really turned on the camera, mic and location, with duration and a "now" badge.\n

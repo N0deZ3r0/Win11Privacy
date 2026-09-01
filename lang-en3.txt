@@ -169,8 +169,8 @@ Visual Studio: окно отзывов — выкл	Visual Studio: feedback dial
 Показатель	Metric
 Было	Before
 Стало	Now
-Снимок «до» сделан 	"Before" snapshot taken
-, текущее состояние — 	, current state —
+Снимок «до» сделан 	"Before" snapshot taken 
+, текущее состояние — 	, current state — 
 из	of
 Сессии трассировки телеметрии	Telemetry trace sessions
 нет на этой системе	not present on this system

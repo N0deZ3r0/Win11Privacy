@@ -24,15 +24,28 @@ CYR = re.compile(u'[Ѐ-ӿ]')
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     known = set()
+    spaces = []
     for name in DICTS:
         path = os.path.join(root, name)
         if not os.path.exists(path):
             continue
-        for line in io.open(path, encoding='utf-8-sig'):
+        for num, line in enumerate(io.open(path, encoding='utf-8-sig'), 1):
             line = line.rstrip('\r\n')
             if not line.strip() or line.lstrip().startswith('#') or '\t' not in line:
                 continue
-            known.add(line.split('\t', 1)[0])
+            ru, en = line.split('\t', 1)
+            known.add(ru)
+            # Строки склеиваются из кусков, поэтому краевой пробел значим:
+            # без него получается «Unsent telemetry:4.7 MB».
+            if en.strip() and (ru.endswith(' ') != en.endswith(' ') or
+                               ru.startswith(' ') != en.startswith(' ')):
+                spaces.append((name, num, ru, en))
+
+    if spaces:
+        sys.stdout.write('краевые пробелы не совпадают: %d\n' % len(spaces))
+        for name, num, ru, en in spaces:
+            sys.stdout.write('%s:%d  %r -> %r\n' % (name, num, ru, en))
+        return 1
 
     missing = []
     seen = set()

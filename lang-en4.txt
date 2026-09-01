@@ -117,4 +117,4 @@ OneDrive: синхронизация в облако	OneDrive: syncing to the cl
 <footer>Отчёт сформирован программой «Приватность Windows 11». 	<footer>Report produced by "Windows 11 Privacy". 
 и встроенного механизма диагностики Windows.</footer></body></html>	and the built-in Windows diagnostics.</footer></body></html>
 Win11Privacy.exe --profile "C:\\путь\\profile.json" --silent   тихо применить профиль\n	Win11Privacy.exe --profile "C:\\path\\profile.json" --silent   apply a profile silently\n
-Win11Privacy.exe --audit                                        проверка (код возврата = число несоответствий)\n	Win11Privacy.exe --audit                                        check (exit code = number of mismatches)\n
+Win11Privacy.exe --audit                                     проверка (код возврата = число несоответствий)\n	Win11Privacy.exe --audit                                     check (exit code = number of mismatches)\n

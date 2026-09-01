@@ -2350,8 +2350,8 @@ namespace Win11Privacy
 
             f.Controls.Add(AboutCard(L.T("Командная строка"),
                 L.T("Win11Privacy.exe --profile \"C:\\путь\\profile.json\" --silent   тихо применить профиль\n") +
-                L.T("Win11Privacy.exe --audit                                        проверка (код возврата = число несоответствий)\n") +
-                L.T("Профиль сохраняется кнопкой «Сохранить профиль» на странице «Настройки».")));
+                L.T("Win11Privacy.exe --audit                                     проверка (код возврата = число несоответствий)\n") +
+                L.T("Профиль сохраняется кнопкой «Сохранить профиль» на странице «Настройки»."), true));
 
             f.Controls.Add(AboutCard(L.T("Честно о пределах"),
                 L.T("Полностью прекратить обмен данными с Microsoft на Windows нельзя: остаются проверка обновлений,\n") +
@@ -2364,44 +2364,78 @@ namespace Win11Privacy
                 L.T("правый клик по файлу → Свойства → внизу галочка «Разблокировать» → ОК. Запрос прав администратора\n") +
                 L.T("(UAC) остаётся — он нужен, потому что программа меняет системные настройки.")));
             page.Controls.Add(f);
+            page.Resize += delegate { FitAboutCards(page); };
+            _aboutFlow = f;
             return page;
         }
         private Control _aboutEdition;
+        private FlowLayoutPanel _aboutFlow;
 
-        private Control AboutCard(string title, string body)
+        // Карточки «О программе» тянутся по ширине окна, но не шире 54 строчных высот
+        private void FitAboutCards(Control page)
+        {
+            if (_aboutFlow == null) return;
+            int u = Font.Height;
+            int w = Math.Max((int)(u * 24F), Math.Min((int)(u * 54F), page.ClientSize.Width - (int)(u * 1.2F)));
+            foreach (Control c in _aboutFlow.Controls)
+            {
+                TableLayoutPanel tl = null;
+                foreach (Control cc in c.Controls) { tl = cc as TableLayoutPanel; if (tl != null) break; }
+                if (tl == null || tl.ColumnStyles.Count == 0) continue;
+                int inner = w - c.Padding.Horizontal;
+                if ((int)tl.ColumnStyles[0].Width == inner) continue;
+                tl.ColumnStyles[0].Width = inner;
+                tl.Width = inner;
+                foreach (Control lb in tl.Controls)
+                    if (lb is Label) lb.MaximumSize = new Size(inner, 0);
+            }
+        }
+
+        private Control AboutCard(string title, string body) { return AboutCard(title, body, false); }
+
+        // ВАЖНО: шрифт меткам задаём здесь же. Раньше высота карточки считалась
+        // до того, как ей доставался шрифт формы, — по системному 8-точечному,
+        // и настоящий текст в эту высоту потом не влезал (обрезался снизу).
+        private Control AboutCard(string title, string body, bool mono)
         {
             int u = Font.Height;
             int cardW = (int)(u * 54F);
             int padX = (int)(u * 0.9F);
+            int innerW = cardW - padX * 2;
             Card c = new Card();
-            c.Width = cardW;
             c.Margin = new Padding(0, 0, 0, (int)(u * 0.6F));
             c.Padding = new Padding(padX, (int)(u * 0.7F), padX, (int)(u * 0.7F));
+            c.AutoSize = true;
+            c.AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
             TableLayoutPanel tl = new TableLayoutPanel();
-            tl.Dock = DockStyle.Top; tl.AutoSize = true; tl.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            tl.AutoSize = true; tl.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             tl.ColumnCount = 1; tl.RowCount = 2; tl.BackColor = Theme.CardBg;
-            tl.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            tl.Margin = new Padding(0);
+            // обычная панель не двигает недокованных детей на свой Padding —
+            // ставим руками, иначе текст прижимается к самому краю карточки
+            tl.Location = new Point(padX, (int)(u * 0.7F));
+            tl.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, innerW));
             tl.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             tl.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             Label t = new Label(); t.Text = title; t.Font = new Font(Font, FontStyle.Bold); t.ForeColor = Theme.Text;
-            t.AutoSize = true; t.Margin = new Padding(0, 0, 0, (int)(u * 0.4F));
+            t.AutoSize = true; t.MaximumSize = new Size(innerW, 0);
+            t.Margin = new Padding(0, 0, 0, (int)(u * 0.4F));
             Label b = new Label(); b.Text = body; b.ForeColor = Theme.TextDim; b.AutoSize = true;
-            b.MaximumSize = new Size(cardW - padX * 2, 0); b.Tag = "body";
+            // моноширинный — для командной строки: только так колонки сходятся
+            b.Font = mono ? Theme.PickFont(Theme.MonoFonts, Font.Size * 0.95F, FontStyle.Regular) : Font;
+            b.Margin = new Padding(0);
+            b.MaximumSize = new Size(innerW, 0); b.Tag = "body";
             tl.Controls.Add(t, 0, 0); tl.Controls.Add(b, 0, 1);
             c.Controls.Add(tl);
-            c.Height = tl.PreferredSize.Height + (int)(u * 1.4F);
             return c;
         }
         private void SetAboutBody(Control card, string text)
         {
             foreach (Control c in card.Controls)   // c = TableLayoutPanel
-            {
                 foreach (Control cc in c.Controls)
                     if (cc is Label && (string)cc.Tag == "body") cc.Text = text;
-                card.Height = c.PreferredSize.Height + (int)(Font.Height * 1.4F);
-            }
         }
 
         // ================================================================== //

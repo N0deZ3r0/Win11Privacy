@@ -303,7 +303,7 @@ namespace Win11Privacy
             _map["Настоящее событие, отправленное в Microsoft — "] = "A real event sent to Microsoft — ";
             _map["Приватность\nWindows 11"] = "Windows 11\nPrivacy";
             _map["Windows 11 Домашняя"] = "Windows 11 Home";
-            _map["\nЭталон «до» сохранён: "] = "\nBaseline saved:";
+            _map["\nЭталон «до» сохранён: "] = "\nBaseline saved: ";
             _map["Виджеты и лента новостей"] = "Widgets and news feed";
             _map["Куда (адреса назначения)"] = "Where to (destinations)";
             _map["Не выбран ни один пункт."] = "No items selected.";
@@ -333,10 +333,10 @@ namespace Win11Privacy
             _map["Проверка состояния системы…"] = "Checking system state…";
             _map["Сбор статистики соединений…"] = "Collecting connection stats…";
             _map["она будет пополняться сама."] = "it will fill up on its own.";
-            _map["\nЛокальная копия на диске: "] = "\nLocal copy on disk:";
+            _map["\nЛокальная копия на диске: "] = "\nLocal copy on disk: ";
             _map["Предустановленные приложения"] = "Preinstalled apps";
             _map["камера, микрофон, геолокация"] = "camera, microphone, location";
-            _map["\nНеотправленная телеметрия: "] = "\nUnsent telemetry:";
+            _map["\nНеотправленная телеметрия: "] = "\nUnsent telemetry: ";
             _map["Блокировка адресов телеметрии"] = "Telemetry address blocking";
             _map["Защита настроена не полностью"] = "Protection is incomplete";
             _map["Раздача обновлений в интернет"] = "Update sharing to the internet";
@@ -473,7 +473,7 @@ namespace Win11Privacy
             _map["• настройки реестра — по журналу изменений, в те значения, что были до неё;\n"] = "• registry settings — from the change journal, back to their previous values;\n";
             _map["\n\nПеред изменениями на рабочий стол будет сохранена резервная копия реестра."] = "\n\nA registry backup will be saved to the desktop before any changes.";
             _map["с расшифровкой и сырым содержимым. Включите запись, дайте системе поработать\n"] = "with plain-language decoding and raw content. Turn recording on, let it run\n";
-            _map["Данные получены из реестра, служб, планировщика, кэша DNS, журнала брандмауэра "] = "Data taken from the registry, services, scheduler, DNS cache, firewall log";
+            _map["Данные получены из реестра, служб, планировщика, кэша DNS, журнала брандмауэра "] = "Data taken from the registry, services, scheduler, DNS cache, firewall log ";
             _map["На этой системе нет модуля Microsoft.DiagnosticDataViewer — рентген недоступен."] = "This system has no Microsoft.DiagnosticDataViewer module — X-ray unavailable.";
             _map["то, что копия сохраняется на диске. Стереть её можно кнопкой «Стереть копию».\n\n"] = "that a copy is stored on disk. You can erase it with Wipe local copy.\n\n";
             _map["ВНИМАНИЕ: программа запущена без прав администратора — изменения применить нельзя."] = "WARNING: the program runs without administrator rights — changes cannot be applied.";
@@ -485,12 +485,12 @@ namespace Win11Privacy
             _map["Удалённые приложения не возвращаются — их можно поставить из Microsoft Store.\n\nПродолжить?"] = "Removed apps do not come back — you can reinstall them from the Store.\n\nContinue?";
             _map["• Блокировка через брандмауэр, а не только hosts; удаление накопленного буфера телеметрии.\n"] = "• Firewall blocking, not just hosts; wiping the accumulated telemetry queue.\n";
             _map["• Проверка на деле: читает реальное состояние системы и показывает индекс, а не «галочки».\n"] = "• Verified for real: reads the actual system state and shows an index, not checkmarks.\n";
-            _map["на Windows нельзя: остаются проверка обновлений, активация лицензии и проверка сертификатов. "] = "on Windows: update checks, licence activation and certificate checks remain.";
+            _map["на Windows нельзя: остаются проверка обновлений, активация лицензии и проверка сертификатов. "] = "on Windows: update checks, licence activation and certificate checks remain. ";
             _map["Синее окно показывается любому неподписанному приложению из интернета. Убрать его можно так:\n"] = "The blue window appears for any unsigned app from the internet. To remove it:\n";
             _map["Полностью прекратить обмен данными с Microsoft на Windows нельзя: остаются проверка обновлений,\n"] = "Data exchange with Microsoft cannot be stopped completely: update checks,\n";
             _map["правый клик по файлу → Свойства → внизу галочка «Разблокировать» → ОК. Запрос прав администратора\n"] = "right-click the file → Properties → tick Unblock at the bottom → OK. The admin prompt\n";
             _map["• Страж: возвращает настройки, сбитые обновлениями Windows; машина времени со снимками состояния.\n"] = "• Guard: restores settings reverted by Windows updates; time machine with state snapshots.\n";
-            _map["На редакциях Home и Pro минимальный уровень телеметрии система трактует как «Обязательные данные» — "] = "On Home and Pro the minimum telemetry level is treated as Required data —";
+            _map["На редакциях Home и Pro минимальный уровень телеметрии система трактует как «Обязательные данные» — "] = "On Home and Pro the minimum telemetry level is treated as Required data — ";
             _map["активация лицензии и проверка сертификатов. На редакциях Home и Pro минимальный уровень телеметрии\n"] = "licence activation and certificate checks remain. On Home and Pro the minimum level\n";
             _map["система трактует как «Обязательные данные» — это ограничение редакции, а не программы. Всё, что можно\n"] = "is treated as Required data — an edition limit, not a program limit. Everything that\n";
             _map["• Досье: кто и когда реально включал камеру, микрофон и геолокацию — с длительностью и меткой «сейчас».\n"] = "• Dossier: who really turned on the camera, mic and location, with duration and a \"now\" badge.\n";
@@ -742,8 +742,8 @@ namespace Win11Privacy
             _map["Показатель"] = "Metric";
             _map["Было"] = "Before";
             _map["Стало"] = "Now";
-            _map["Снимок «до» сделан "] = "\"Before\" snapshot taken";
-            _map[", текущее состояние — "] = ", current state —";
+            _map["Снимок «до» сделан "] = "\"Before\" snapshot taken ";
+            _map[", текущее состояние — "] = ", current state — ";
             _map["из"] = "of";
             _map["Сессии трассировки телеметрии"] = "Telemetry trace sessions";
             _map["нет на этой системе"] = "not present on this system";
@@ -861,7 +861,7 @@ namespace Win11Privacy
             _map["<footer>Отчёт сформирован программой «Приватность Windows 11». "] = "<footer>Report produced by \"Windows 11 Privacy\". ";
             _map["и встроенного механизма диагностики Windows.</footer></body></html>"] = "and the built-in Windows diagnostics.</footer></body></html>";
             _map["Win11Privacy.exe --profile \"C:\\путь\\profile.json\" --silent   тихо применить профиль\n"] = "Win11Privacy.exe --profile \"C:\\path\\profile.json\" --silent   apply a profile silently\n";
-            _map["Win11Privacy.exe --audit                                        проверка (код возврата = число несоответствий)\n"] = "Win11Privacy.exe --audit                                        check (exit code = number of mismatches)\n";
+            _map["Win11Privacy.exe --audit                                     проверка (код возврата = число несоответствий)\n"] = "Win11Privacy.exe --audit                                     check (exit code = number of mismatches)\n";
         }
     }
 }
