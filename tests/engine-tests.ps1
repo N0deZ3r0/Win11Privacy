@@ -296,11 +296,25 @@ if ($regFound.Count -eq $regFns.Count) {
     Check 'служебный ключ убран' (-not (Test-Path 'HKCU:\Software\Win11PrivacyProbe'))
 }
 
-$appsW = Get-EngineJson @('-ListApps')
-if ($appsW) {
-    $widget = @($appsW.apps | Where-Object { "$($_.name)" -eq 'MicrosoftWindows.Client.WebExperience' })
-    Check 'доска виджетов предлагается к удалению' ($widget.Count -eq 1 -and $widget[0].bloat) `
-          ("найдено: " + $widget.Count)
+# Пакета виджетов на машине сборки нет, поэтому проверяем сам отбор, а не
+# список установленного: исключение обязано работать, а защита — оставаться.
+foreach ($asg in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+    $lt = $asg.Left -as [System.Management.Automation.Language.VariableExpressionAst]
+    if ($null -eq $lt) { continue }
+    if ($lt.VariablePath.UserPath -in @('script:AppxProtected', 'script:AppxAllowed', 'script:AppxBloat')) {
+        Invoke-Expression $asg.Extent.Text
+    }
+}
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($fn.Name -eq 'Test-AppxProtected') { Invoke-Expression $fn.Extent.Text }
+}
+if (Get-Command Test-AppxProtected -ErrorAction SilentlyContinue) {
+    Check 'доска виджетов выведена из-под защиты' (-not (Test-AppxProtected 'MicrosoftWindows.Client.WebExperience'))
+    Check 'остальная оболочка по-прежнему защищена' (Test-AppxProtected 'MicrosoftWindows.Client.CBS')
+    Check 'магазин по-прежнему защищён' (Test-AppxProtected 'Microsoft.WindowsStore')
+    Check 'у доски виджетов есть человеческое название' ($script:AppxBloat.ContainsKey('MicrosoftWindows.Client.WebExperience'))
+} else {
+    Check 'функция отбора приложений найдена' $false
 }
 
 # --------------------------------------------------------------------------- #
