@@ -139,6 +139,9 @@ $script:GuardTask      = 'Win11Privacy Guard'
 $script:SensorTask     = 'Win11Privacy Sensor'
 $script:AuditGuid      = '{0CCE9226-69AE-11D9-BED3-505054503030}'   # Filtering Platform Connection
 $script:DiagDir        = Join-Path $env:ProgramData 'Microsoft\Diagnosis'
+# Все виды определений, которые пишут в реестр. Список один, потому что
+# забыть про новый вид в резервной копии или уборке — тихая потеря данных.
+$script:RegTypes = @('reg', 'regif', 'regpol')
 $script:Changes = 0
 $script:Failures = 0
 $script:Already = 0
@@ -783,7 +786,7 @@ function Find-JunkValues {
     $byIdx = @{}
     $paths = @{}
     foreach ($d in $script:Defs) {
-        if ($d.T -ne 'reg' -and $d.T -ne 'regif' -and $d.T -ne 'regpol') { continue }
+        if ($script:RegTypes -notcontains $d.T) { continue }
         $paths["$($d.P)"] = $true
         $parts = "$($d.Id)" -split '#'
         if ($parts.Count -ne 2) { continue }
@@ -3076,7 +3079,7 @@ function Get-ChangeGroups {
     if (-not $j -or -not $j.items) { return @() }
     $byPath = @{}
     foreach ($d in $script:Defs) {
-        if ($d.T -ne 'reg' -and $d.T -ne 'regif' -and $d.T -ne 'regpol') { continue }
+        if ($script:RegTypes -notcontains $d.T) { continue }
         $k = ("{0}|{1}" -f $d.P, $d.N).ToLowerInvariant()
         if (-not $byPath.ContainsKey($k)) { $byPath[$k] = @{ title = [string]$d.C; module = [string]$d.M } }
     }
@@ -3364,7 +3367,7 @@ if (-not $NoBackup -and -not $DryRun) {
     Write-Section 'Резервная копия реестра'
     $root = if ($BackupRoot) { $BackupRoot } else { [Environment]::GetFolderPath('Desktop') }
     $script:BackupDir = Join-Path $root ('Win11Privacy-Backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
-    $keys = @($script:Defs | Where-Object { $_.T -eq 'reg' -and $Modules -contains $_.M } | ForEach-Object { $_.P } | Select-Object -Unique)
+    $keys = @($script:Defs | Where-Object { $script:RegTypes -contains $_.T -and $Modules -contains $_.M } | ForEach-Object { $_.P } | Select-Object -Unique)
     try {
         New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null
         $n = 0

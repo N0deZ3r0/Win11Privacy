@@ -253,6 +253,26 @@ Check 'локальные переменные не затирают парам�
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
+Write-Host 'Виды определений реестра учтены везде'
+$regTypes = @()
+foreach ($asg in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+    $lt = $asg.Left -as [System.Management.Automation.Language.VariableExpressionAst]
+    if ($null -ne $lt -and $lt.VariablePath.UserPath -eq 'script:RegTypes') { Invoke-Expression $asg.Extent.Text; $regTypes = @($script:RegTypes) }
+}
+Check 'общий список видов реестра есть' ($regTypes.Count -ge 3) ("получено: " + ($regTypes -join ','))
+if ($defs -and $regTypes.Count -gt 0) {
+    $kinds = @()
+    foreach ($g in @($defs.groups)) { foreach ($i in @($g.items)) { $kinds += "$($i.kind)" } }
+    $regLike = @($kinds | Where-Object { $_ -like 'reg*' } | Select-Object -Unique)
+    $missed = @($regLike | Where-Object { $regTypes -notcontains $_ })
+    Check 'ни один вид записи в реестр не забыт' ($missed.Count -eq 0) ("забыты: " + ($missed -join ','))
+    # резервная копия обязана брать ключи по этому же списку
+    Check 'резервная копия берёт ключи по общему списку' `
+          ($engineText -match [regex]::Escape('$script:RegTypes -contains $_.T'))
+}
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
 Write-Host 'Журнал изменений и данные программы'
 $log2 = Get-EngineJson @('-ChangeLog')
 Check 'журнал изменений отвечает' ($null -ne $log2 -and $null -ne $log2.count)
