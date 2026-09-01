@@ -169,8 +169,157 @@ Visual Studio: окно отзывов — выкл	Visual Studio: feedback dial
 Показатель	Metric
 Было	Before
 Стало	Now
-Снимок «до» сделан 	"Before" snapshot taken
-, текущее состояние — 	, current state —
+Снимок «до» сделан 	"Before" snapshot taken 
+, текущее состояние — 	, current state — 
 из	of
 Сессии трассировки телеметрии	Telemetry trace sessions
 нет на этой системе	not present on this system
+
+# --- новые модули: сеть, синхронизация, локальные истории ---
+Локальные истории и записи	Local histories and recordings
+Недавние документы, история поиска и запуска, фоновая запись игр, почта на экране входа.	Recent documents, search and run history, background game recording, e-mail on the sign-in screen.
+Синхронизация с учётной записью	Sync with your account
+Настройки, пароли и темы уезжают в облако Microsoft; связь с телефоном и обмен с устройствами поблизости.	Settings, passwords and themes go to the Microsoft cloud; phone link and nearby sharing.
+Сеть: имя компьютера в эфир	Network: your PC name on the air
+LLMNR, mDNS, NetBIOS, WPAD и проверка связи через сервер Microsoft. Значок сети может показать «нет интернета», хотя он есть.	LLMNR, mDNS, NetBIOS, WPAD and the connectivity check that calls a Microsoft server. The network icon may say "no internet" even when there is one.
+Синхронизация с учётной записью и телефоном	Sync with your account and phone
+Сеть: имя компьютера в эфир и зонды	Network: PC name broadcasts and probes
+# --- настройки модуля «Сеть» ---
+LLMNR: имя компьютера не рассылается по сети	LLMNR: PC name not broadcast on the network
+mDNS: многоадресные запросы имён — выкл	mDNS: multicast name queries — off
+NetBIOS: без широковещательных запросов имён	NetBIOS: no broadcast name queries
+WPAD: автопоиск прокси в сети — выкл	WPAD: proxy auto-discovery — off
+проверка связи через сервер Microsoft — выкл	connectivity check via a Microsoft server — off
+Wi-Fi Sense: отчёты о точках доступа — выкл	Wi-Fi Sense: hotspot reporting — off
+Wi-Fi Sense: автоподключение к чужим точкам — выкл	Wi-Fi Sense: auto-connect to shared hotspots — off
+автоподключение к сетям производителя — выкл	auto-connect to vendor networks — off
+# --- настройки модуля «Синхронизация» ---
+синхронизация настроек с учётной записью — выкл	settings sync with your account — off
+вернуть синхронизацию из Параметров нельзя	sync cannot be switched back on in Settings
+синхронизация паролей — выкл	password sync — off
+вернуть синхронизацию паролей нельзя	password sync cannot be switched back on
+синхронизация настроек браузера — выкл	browser settings sync — off
+вернуть синхронизацию браузера нельзя	browser sync cannot be switched back on
+синхронизация настроек приложений — выкл	app settings sync — off
+вернуть синхронизацию приложений нельзя	app sync cannot be switched back on
+синхронизация темы и обоев — выкл	theme and wallpaper sync — off
+синхронизация меню Пуск — выкл	Start menu sync — off
+синхронизация прочих параметров Windows — выкл	other Windows settings sync — off
+не синхронизировать в лимитных сетях	no sync on metered networks
+«Продолжить на этом устройстве» — выкл	"Continue on this device" — off
+связь с телефоном (Phone Link) — выкл	Phone Link — off
+общие сеансы между устройствами — выкл	shared sessions between devices — off
+обмен с устройствами поблизости — выкл	nearby sharing — off
+канал Project Rome для приложений — выкл	Project Rome channel for apps — off
+# --- настройки модуля «Локальные истории» ---
+не вести список недавних документов	do not keep a recent documents list
+очищать список недавних при выходе	clear the recent list on sign-out
+не собирать статистику работы пользователя	do not collect user activity statistics
+Пуск: не запоминать открытые файлы	Start: do not remember opened files
+Пуск: не запоминать запущенные программы	Start: do not remember launched programs
+Проводник: недавние файлы в «Главной» — скрыть	Explorer: recent files on Home — hidden
+Проводник: частые папки в «Главной» — скрыть	Explorer: frequent folders on Home — hidden
+подсказки из интернета в поле поиска — выкл	web suggestions in the search box — off
+фоновая запись игр (Game DVR) — выкл	background game recording (Game DVR) — off
+запись игр запрещена политикой	game recording blocked by policy
+адрес почты на экране входа — скрыть	e-mail address on the sign-in screen — hidden
+камера с экрана блокировки — выкл	camera from the lock screen — off
+# --- проба связи ---
+Проба связи	Connection probe
+Проба связи с адресами сбора данных…	Probing the data-collection addresses…
+Проба связи: 	Connection probe: 
+Проба связи: отвечают ли адреса сбора данных	Connection probe: do the data-collection addresses answer
+Отвечает адресов	Addresses answering
+Адреса сбора данных	Data-collection addresses
+не отвечают — канал закрыт	not answering — the channel is closed
+ ещё отвечают	 still answering
+имя не разрешается	name does not resolve
+заблокирован в hosts	blocked in hosts
+соединение невозможно	connection not possible
+ОТВЕЧАЕТ	ANSWERS
+соединение отклонено	connection refused
+не отвечает	not answering
+основной приёмник телеметрии Windows	main Windows telemetry endpoint
+приёмник телеметрии, новая версия	telemetry endpoint, newer version
+настройки сбора данных (OneSettings)	data-collection settings (OneSettings)
+прежний приёмник телеметрии	former telemetry endpoint
+отчёты об ошибках (Watson)	error reports (Watson)
+общий узел телеметрии	general telemetry host
+телеметрия приложений (Aria)	app telemetry (Aria)
+телеметрия Office	Office telemetry
+телеметрия Bing и виджетов	Bing and widgets telemetry
+лента активности	activity feed
+функциональные события	functional events
+проверка связи (NCSI)	connectivity check (NCSI)
+<h2>Проба связи: отвечают ли адреса сбора данных</h2><div class="grid">	<h2>Connection probe: do the data-collection addresses answer</h2><div class="grid">
+<div class="tile"><div class="c">Не отвечают</div><div class="v">	<div class="tile"><div class="c">Not answering</div><div class="v">
+</div><div class="s">адресов сбора данных молчит</div></div></div>	</div><div class="s">data-collection addresses are silent</div></div></div>
+<table><tr><th>Адрес</th><th>Что это</th><th>Состояние</th></tr>	<table><tr><th>Address</th><th>What it is</th><th>State</th></tr>
+<div class="note">Проба только устанавливает соединение и сразу его закрывает — никакие данные при этом не отправляются.</div>	<div class="note">The probe only opens a connection and closes it right away — no data is sent.</div>
+# --- цифровой след: новые элементы ---
+История команд PowerShell	PowerShell command history
+Что вы запускали через Win+R	What you ran via Win+R
+Подключения к удалённым компьютерам	Remote desktop connections
+Кэш эскизов файлов	File thumbnail cache
+Снимки экрана Recall	Recall screen snapshots
+# --- цифровой след: пояснения к элементам ---
+Уникальный ID, по которому рекламные сети узнают вас во всех приложениях.	A unique ID that lets ad networks recognise you across every app.
+MachineGuid и SQM MachineId — метки, которыми помечается телеметрия. Нужны системе, стереть нельзя.	MachineGuid and SQM MachineId — the labels stamped onto telemetry. The system needs them; they cannot be erased.
+Список всех сетей, к которым подключался компьютер — по ним видно, где вы бывали. Пароли Wi-Fi не трогаются.	Every network this PC has joined — they show where you have been. Wi-Fi passwords are left alone.
+Windows помнит каждую флешку и внешний диск. Запись системная, показываем для сведения.	Windows remembers every flash drive and external disk. The record is a system one, shown for information.
+ActivitiesCache.db — какие программы и документы вы открывали, с точным временем.	ActivitiesCache.db — which programs and documents you opened, with exact times.
+Ярлыки всего, что вы открывали, плюс списки переходов на панели задач.	Shortcuts to everything you opened, plus the taskbar jump lists.
+История запросов в строке поиска Проводника.	The query history of the File Explorer search box.
+Что вы вручную набирали в адресной строке Проводника.	What you typed by hand into the File Explorer address bar.
+Всё скопированное (Win+V) хранится на диске.	Everything you copied (Win+V) is kept on disk.
+Дампы и отчёты о сбоях: содержат пути файлов, имена программ, куски памяти.	Crash dumps and reports: they hold file paths, program names and pieces of memory.
+Слова, собранные из вашего набора и рукописного ввода.	Words collected from your typing and handwriting.
+Адреса сайтов и служб, к которым недавно обращался компьютер.	Addresses of the sites and services this PC contacted recently.
+Всё, что вы набирали в PowerShell, пишется в файл без ограничения по сроку — вместе с паролями и ключами, если они были в строке.	Everything you typed in PowerShell goes into a file that is never trimmed — passwords and keys included, if they were on the line.
+Список команд из окна «Выполнить».	The list of commands from the Run box.
+Адреса компьютеров, к которым вы подключались по RDP, и имена учётных записей.	Addresses of the computers you connected to over RDP, and the account names.
+Уменьшенные копии картинок и документов, которые вы открывали. Остаются даже после удаления самих файлов.	Thumbnail copies of the pictures and documents you opened. They survive even after the files themselves are gone.
+Recall раз в несколько секунд снимает экран и хранит распознанный текст в базе на диске.	Recall takes a screenshot every few seconds and keeps the recognised text in a database on disk.
+• Проба связи: компьютер сам звонит по адресам сбора данных и показывает, кто ещё отвечает.\n	• Connection probe: the PC dials the data-collection addresses itself and shows who still answers.\n
+
+# --- HTML-отчёт: заголовки и таблицы ---
+<title>Отчёт о приватности Windows 11</title><style>	<title>Windows 11 privacy report</title><style>
+<h1>Отчёт о приватности Windows 11</h1>	<h1>Windows 11 privacy report</h1>
+<div class="sub">Составлен 	<div class="sub">Compiled 
+<h2>Проверка настроек</h2><div class="grid">	<h2>Settings check</h2><div class="grid">
+<div class="tile"><div class="c">Индекс приватности</div><div class="v">	<div class="tile"><div class="c">Privacy index</div><div class="v">
+ настроек подтверждено</div></div>	 settings confirmed</div></div>
+<div class="tile"><div class="c">Не применено</div><div class="v">	<div class="tile"><div class="c">Not applied</div><div class="v">
+</div><div class="s">требуют внимания</div></div></div>	</div><div class="s">need attention</div></div></div>
+<table><tr><th>Раздел</th><th>Применено</th></tr>	<table><tr><th>Section</th><th>Applied</th></tr>
+<h2>Обращения к доменам телеметрии (кэш DNS)</h2><table><tr><th>Домен</th><th>Состояние</th></tr>	<h2>Requests to telemetry domains (DNS cache)</h2><table><tr><th>Domain</th><th>State</th></tr>
+<h2>Рентген телеметрии — что было собрано</h2><div class="grid">	<h2>Telemetry X-ray — what was collected</h2><div class="grid">
+<div class="tile"><div class="c">Событий в сутки</div><div class="v">	<div class="tile"><div class="c">Events per day</div><div class="v">
+ МБ данных</div></div>	 MB of data</div></div>
+<div class="tile"><div class="c">Прогноз за год</div><div class="v">	<div class="tile"><div class="c">Forecast for a year</div><div class="v">
+ МБ в год</div></div>	 MB per year</div></div>
+<div class="tile"><div class="c">Было до настройки</div><div class="v">	<div class="tile"><div class="c">Before the changes</div><div class="v">
+</div><div class="s">событий в сутки</div></div>	</div><div class="s">events per day</div></div>
+<table><tr><th>Категория данных</th><th>Событий</th><th>Доля</th><th>Что это</th></tr>	<table><tr><th>Data category</th><th>Events</th><th>Share</th><th>What it is</th></tr>
+<h2>Пример настоящего события: 	<h2>A real event as an example: 
+<h2>Досье: кто включал камеру, микрофон и геолокацию</h2>	<h2>Dossier: who turned on the camera, microphone and location</h2>
+<table><tr><th>Программа</th><th>Датчик</th><th>Когда</th><th>Длительность</th></tr>	<table><tr><th>Program</th><th>Sensor</th><th>When</th><th>Duration</th></tr>
+<span class="bad">прямо сейчас</span>	<span class="bad">right now</span>
+<h2>Цифровой след на диске</h2>	<h2>Digital trace on disk</h2>
+<table><tr><th>Что хранится</th><th>Сколько</th></tr>	<table><tr><th>What is stored</th><th>How much</th></tr>
+<h2>Монитор исходящих соединений</h2><div class="grid">	<h2>Outgoing connection monitor</h2><div class="grid">
+<div class="tile"><div class="c">Соединений</div><div class="v">	<div class="tile"><div class="c">Connections</div><div class="v">
+</div><div class="s">за 24 часа</div></div>	</div><div class="s">over 24 hours</div></div>
+<div class="tile"><div class="c">К телеметрии</div><div class="v">	<div class="tile"><div class="c">To telemetry</div><div class="v">
+</div><div class="s">распознано по домену</div></div></div>	</div><div class="s">recognised by domain name</div></div></div>
+<div class="note"><b>Честно о пределах.</b> Полностью прекратить обмен данными с Microsoft 	<div class="note"><b>Honestly about the limits.</b> Stopping the exchange of data with Microsoft completely 
+это ограничение редакции, а не программы.</div>	this is a limit of the edition, not of the program.</div>
+<footer>Отчёт сформирован программой «Приватность Windows 11». 	<footer>Report produced by "Windows 11 Privacy". 
+и встроенного механизма диагностики Windows.</footer></body></html>	and the diagnostics engine built into Windows.</footer></body></html>
+# --- диалоги и командная строка ---
+\n\nПродолжить?	\n\nContinue?
+\nБлок hosts: 	\nhosts block: 
+\nБрандмауэр (правил): 	\nFirewall (rules): 
+\nСлужба DiagTrack: 	\nDiagTrack service: 
+Win11Privacy.exe --audit                                        проверка (код возврата = число несоответствий)\n	Win11Privacy.exe --audit                                        check (exit code = number of mismatches)\n
+Win11Privacy.exe --profile "C:\путь\profile.json" --silent   тихо применить профиль\n	Win11Privacy.exe --profile "C:\path\profile.json" --silent   apply a profile silently\n

@@ -84,7 +84,7 @@ namespace Win11Privacy
         private Label _xrayState;
         private ModernButton _btnXrayRec, _btnXrayScan, _btnXrayBase, _btnXrayWipe, _btnReport;
         private bool _xrayRecording;
-        private Dictionary<string, object> _lastXray, _lastAudit, _lastMonitor;
+        private Dictionary<string, object> _lastXray, _lastAudit, _lastMonitor, _lastProbe;
 
         // состояние из -Detect
         private Dictionary<string, object> _detect;
@@ -145,10 +145,12 @@ namespace Win11Privacy
             A(S1,"telemetry",L.T("Телеметрия и диагностика"),L.T("Диагностические данные, логи и дампы памяти в Microsoft."),GDiag,true,false,false);
             A(S1,"errors",L.T("Отчёты об ошибках"),L.T("Отчёты о сбоях программ и системы."),GError,true,false,false);
             A(S1,"activity",L.T("История активности и буфер обмена"),L.T("Лента активности и синхронизация буфера через облако."),GHistory,true,false,false);
+            A(S1,"history",L.T("Локальные истории и записи"),L.T("Недавние документы, история поиска и запуска, фоновая запись игр, почта на экране входа."),GHistory,false,false,false);
             A(S1,"input",L.T("Персонализация ввода и речь"),L.T("Сбор набранного текста, рукописного ввода, облачная речь."),GKeyboard,true,false,false);
             A(S1,"edge","Microsoft Edge",L.T("Статистика и персонализация Edge; блокировка трекеров."),GGlobe,true,false,false);
             A(S1,"delivery",L.T("Раздача обновлений в интернет"),L.T("Отдача файлов обновлений чужим ПК."),GSync,true,false,false);
             A(S1,"onedrive",L.T("OneDrive: синхронизация и реклама"),L.T("Отключает выгрузку файлов в облако и рекламу OneDrive в Проводнике. Файлы на диске остаются."),GSync,false,false,false);
+            A(S1,"sync",L.T("Синхронизация с учётной записью"),L.T("Настройки, пароли и темы уезжают в облако Microsoft; связь с телефоном и обмен с устройствами поблизости."),GSync,false,false,false);
             A(S1,"location",L.T("Геолокация и «Поиск устройства»"),L.T("Служба местоположения целиком и отправка координат в Microsoft."),GPin,false,false,false);
 
             A(S2,"ads",L.T("Рекламный ID и реклама"),L.T("Реклама в Пуске, на экране блокировки и в Параметрах."),GAds,true,false,false);
@@ -164,6 +166,7 @@ namespace Win11Privacy
             A(S4,"buffer",L.T("Стереть неотправленную телеметрию"),L.T("Удаляет накопленный буфер C:\\ProgramData\\Microsoft\\Diagnosis."),GBroom,false,true,false);
             A(S4,"defender",L.T("Защитник: облако и образцы"),L.T("Отправка подозрительных файлов и облачная проверка MAPS. Чуть снижает защиту."),GShield,false,true,false);
             A(S4,"fwips",L.T("Блокировка адресов телеметрии"),L.T("Брандмауэр режет сами IP сбора данных — hosts телеметрия обходит. Если что-то отвалится, снимите и откатите."),GFire,false,true,false);
+            A(S4,"network",L.T("Сеть: имя компьютера в эфир"),L.T("LLMNR, mDNS, NetBIOS, WPAD и проверка связи через сервер Microsoft. Значок сети может показать «нет интернета», хотя он есть."),GGlobe,false,true,false);
             A(S4,"doh",L.T("Запретить шифрованный DNS"),L.T("Через DoH браузеры и Windows обходят блокировку по доменам. Отключение вернёт видимость запросов провайдеру."),GGlobe,false,true,false);
 
             A(S5,"app_nvidia","NVIDIA",L.T("Телеметрия драйвера и GeForce Experience."),GApp,true,false,true);
@@ -1391,7 +1394,7 @@ namespace Win11Privacy
                 {
                     Dictionary<string, object> it = Json.Obj(o);
                     string id = Json.GetStr(it, "id");
-                    _dossierList.Controls.Add(new WipeRow(id, L.T(Json.GetStr(it, "title")), Json.GetStr(it, "what"),
+                    _dossierList.Controls.Add(new WipeRow(id, L.T(Json.GetStr(it, "title")), L.T(Json.GetStr(it, "what")),
                         Json.GetStr(it, "value"), FootGlyph(id), Json.GetBool(it, "canWipe")) { Font = this.Font });
                 }
                 _btnDossierWipe.Enabled = Json.GetInt(_lastFoot, "wipeable") > 0;
@@ -1546,6 +1549,26 @@ namespace Win11Privacy
                 }
             }
 
+            // Проба связи
+            if (_lastProbe != null)
+            {
+                int popen = Json.GetInt(_lastProbe, "open"), ptotal = Json.GetInt(_lastProbe, "total");
+                h.Append(L.T("<h2>Проба связи: отвечают ли адреса сбора данных</h2><div class=\"grid\">"));
+                h.Append(L.T("<div class=\"tile\"><div class=\"c\">Не отвечают</div><div class=\"v\">"))
+                 .Append(ptotal - popen).Append(" / ").Append(ptotal).Append(L.T("</div><div class=\"s\">адресов сбора данных молчит</div></div></div>"));
+                h.Append(L.T("<table><tr><th>Адрес</th><th>Что это</th><th>Состояние</th></tr>"));
+                foreach (object o in Json.GetArr(_lastProbe, "items"))
+                {
+                    Dictionary<string, object> it = Json.Obj(o);
+                    bool bl = Json.GetBool(it, "blocked");
+                    h.Append("<tr><td>").Append(Esc(Json.GetStr(it, "host"))).Append("</td><td>")
+                     .Append(Esc(L.T(Json.GetStr(it, "what")))).Append("</td><td class=\"")
+                     .Append(bl ? "ok" : "bad").Append("\">").Append(Esc(L.T(Json.GetStr(it, "state")))).Append("</td></tr>");
+                }
+                h.Append("</table>");
+                h.Append(L.T("<div class=\"note\">Проба только устанавливает соединение и сразу его закрывает — никакие данные при этом не отправляются.</div>"));
+            }
+
             // Рентген
             if (_lastXray != null)
             {
@@ -1688,14 +1711,19 @@ namespace Win11Privacy
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
             TableLayoutPanel head = new TableLayoutPanel();
-            head.ColumnCount = 2; head.Dock = DockStyle.Fill; head.AutoSize = true;
+            head.ColumnCount = 3; head.Dock = DockStyle.Fill; head.AutoSize = true;
             head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             head.Controls.Add(PageTitle(L.T("Проверка на деле")), 0, 0);
+            ModernButton probe = new ModernButton(L.T("Проба связи"), false); probe.Font = Font;
+            probe.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
+            probe.Click += delegate { RunProbe(); };
+            head.Controls.Add(probe, 1, 0);
             ModernButton rerun = new ModernButton(L.T("Проверить сейчас"), true); rerun.Font = new Font(Font, FontStyle.Bold);
             rerun.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
             rerun.Click += delegate { RunAudit(); };
-            head.Controls.Add(rerun, 1, 0);
+            head.Controls.Add(rerun, 2, 0);
             page.Controls.Add(head, 0, 0);
 
             // верх: кольцо + плитки
@@ -2060,6 +2088,7 @@ namespace Win11Privacy
                 L.T("• Цифровой след: рекламный ID, история сетей и флешек, всё, что Windows помнит о вас — с выборочным стиранием.\n") +
                 L.T("• Рентген телеметрии: настоящие события, собранные о компьютере, с сырым содержимым.\n") +
                 L.T("• Проверка на деле: читает реальное состояние системы и показывает индекс, а не «галочки».\n") +
+                L.T("• Проба связи: компьютер сам звонит по адресам сбора данных и показывает, кто ещё отвечает.\n") +
                 L.T("• Монитор утечек: показывает, кто и куда реально отправляет данные.\n") +
                 L.T("• Страж: возвращает настройки, сбитые обновлениями Windows; машина времени со снимками состояния.\n") +
                 L.T("• Телеметрия сторонних программ и слежка производителя ноутбука.\n") +
@@ -2703,10 +2732,19 @@ namespace Win11Privacy
             if (buf != null) { string mb = Json.GetStr(buf, "mb"); _auditTiles.Controls.Add(Tile(L.T("Буфер телеметрии"), (mb == "-1" ? L.T("нет") : mb + L.T(" МБ")), Json.GetInt(buf, "files") + L.T(" файлов ждут отправки"), Theme.Accent)); }
             List<object> dns = Json.GetArr(d, "dns");
             int leaked = 0; foreach (object o in dns) if (!Json.GetBool(Json.Obj(o), "blocked")) leaked++;
-            _auditTiles.Controls.Add(Tile(L.T("Обращения к телеметрии"), dns.Count.ToString(), leaked + L.T(" не заблокировано (из кэша DNS)"), leaked == 0 ? Theme.Ok : Theme.Err));
+            if (_lastProbe != null)
+            {
+                int popen = Json.GetInt(_lastProbe, "open"), ptotal = Json.GetInt(_lastProbe, "total");
+                _auditTiles.Controls.Add(Tile(L.T("Адреса сбора данных"), (ptotal - popen) + " / " + ptotal,
+                    popen == 0 ? L.T("не отвечают — канал закрыт") : popen + L.T(" ещё отвечают"),
+                    popen == 0 ? Theme.Ok : Theme.Err));
+            }
+            else
+                _auditTiles.Controls.Add(Tile(L.T("Обращения к телеметрии"), dns.Count.ToString(), leaked + L.T(" не заблокировано (из кэша DNS)"), leaked == 0 ? Theme.Ok : Theme.Err));
 
             _auditGroups.Controls.Clear();
             RenderProof();
+            RenderProbe();
             foreach (object go in Json.GetArr(d, "groups"))
             {
                 Dictionary<string, object> g = Json.Obj(go);
@@ -2756,6 +2794,41 @@ namespace Win11Privacy
             int xa = Json.GetInt(_lastProof, "xrayNow");
             if (xb > 0 && xa > 0)
                 AddProofRow(L.T("Событий телеметрии в сутки"), xb, xa, "", false);
+        }
+
+        // Проба связи: компьютер сам звонит по адресам сбора данных и говорит,
+        // кто ответил. Это уже не «настройка на месте», а состояние канала.
+        private void RunProbe()
+        {
+            RunJson("-Probe", L.T("Проба связи с адресами сбора данных…"), delegate(Dictionary<string, object> d)
+            {
+                if (d == null) { _auditWhen.Text = L.T("Не удалось получить данные."); return; }
+                _lastProbe = d;
+                if (_lastAudit != null) { RenderAudit(_lastAudit); return; }
+                _auditHint.Visible = false;
+                _auditWhen.Text = L.T("Проба связи: ") + Json.GetStr(d, "time");
+                _auditGroups.Controls.Clear();
+                RenderProbe();
+                try { _auditGroups.AutoScrollPosition = Point.Empty; } catch { }
+                _auditGroups.Restack();
+            });
+        }
+
+        private void RenderProbe()
+        {
+            if (_lastProbe == null || _auditGroups == null) return;
+            int open = Json.GetInt(_lastProbe, "open"), total = Json.GetInt(_lastProbe, "total");
+            SectionHeader sh = new SectionHeader(L.T("Проба связи: отвечают ли адреса сбора данных")
+                                                 + " — " + Json.GetStr(_lastProbe, "time"));
+            sh.Font = Font; _auditGroups.Controls.Add(sh);
+            _auditGroups.Controls.Add(new KvRow(L.T("Отвечает адресов"),
+                open + " " + L.T("из") + " " + total, open > 0) { Font = this.Font });
+            foreach (object o in Json.GetArr(_lastProbe, "items"))
+            {
+                Dictionary<string, object> it = Json.Obj(o);
+                _auditGroups.Controls.Add(new KvRow(Json.GetStr(it, "host") + "  —  " + L.T(Json.GetStr(it, "what")),
+                    L.T(Json.GetStr(it, "state")), !Json.GetBool(it, "blocked")) { Font = this.Font });
+            }
         }
 
         // Строка «было → стало». more = «больше значит лучше»

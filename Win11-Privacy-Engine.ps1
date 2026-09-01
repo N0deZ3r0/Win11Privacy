@@ -7,6 +7,7 @@
       -Audit -Modules ...                   проверить реальное состояние (JSON)
       -Detect                               определить систему, установленные программы, статусы (JSON)
       -Monitor [-MonitorHours 24]           статистика перехваченных отправок (JSON)
+      -Probe                                проба связи: отвечают ли адреса сбора данных (JSON)
       -EnableMonitor / -DisableMonitor      журнал аудита заблокированных соединений
       -InstallGuard -Modules ... / -RemoveGuard / -GuardNow
       -PurgeBuffer                          стереть неотправленную телеметрию
@@ -79,7 +80,10 @@ param(
     [switch]$SpyAll,
     # --- доказательство результата ---
     [switch]$Proof,
-    [switch]$ProofSave
+    [switch]$ProofSave,
+    # --- проба связи: отвечают ли адреса сбора данных ---
+    [switch]$Probe,
+    [int]$ProbeTimeout = 1500
 )
 
 $ErrorActionPreference = 'Continue'
@@ -441,7 +445,7 @@ Def 'defender' 'reg' $dfn 'SubmitSamplesConsent' 2 'DWord' 'Защитник: о
 
 Def 'services' 'svc' 'DiagTrack' '' 'Disabled' '' 'служба DiagTrack (телеметрия)'
 Def 'services' 'svc' 'dmwappushservice' '' 'Disabled' '' 'служба dmwappushservice (WAP push)'
-foreach ($tp in @(
+foreach ($tp in @(@(
     '\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraisal',
     '\Microsoft\Windows\Application Experience\ProgramDataUpdater',
     '\Microsoft\Windows\Autochk\Proxy',
@@ -473,7 +477,7 @@ foreach ($tp in @(
     '\Microsoft\Windows\Shell\FamilySafetyMonitor',
     '\Microsoft\Windows\Shell\FamilySafetyRefreshTask',
     '\Microsoft\Windows\Speech\SpeechModelDownloadTask',
-    '\Microsoft\Windows\Autochk\Proxy')) {
+    '\Microsoft\Windows\Autochk\Proxy') | Select-Object -Unique)) {
     Def 'services' 'task' $tp '' 'Disabled' '' ('задача ' + (Split-Path $tp -Leaf))
 }
 
@@ -558,11 +562,65 @@ Def 'app_vs' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\VisualStudio\SQM' 'OptIn' 
 Def 'app_vs' 'reg' 'HKCU:\Software\Microsoft\VisualStudio\Telemetry' 'TurnOffSwitch' 1 'DWord' 'Visual Studio: телеметрия — выкл'
 Def 'app_vs' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\VisualStudio\Feedback' 'DisableFeedbackDialog' 1 'DWord' 'Visual Studio: окно отзывов — выкл'
 
-$script:ModuleOrder = @('telemetry','errors','activity','input','edge','delivery','location','ads','widgets','search','copilot','ai',
-                        'defender','onedrive','services','etw','hosts','firewall','fwips','doh','buffer','app_nvidia','app_vscode','app_chrome','app_firefox',
+# --- Сеть: имя компьютера в эфир и зонды связи ------------------------------ #
+# Windows объявляет имя компьютера в локальной сети и регулярно звонит в
+# Microsoft, чтобы проверить, есть ли интернет. Для работы сети это не нужно,
+# зато по этим запросам компьютер видно и в кафе, и в офисе.
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' 'EnableMulticast' 0 'DWord' 'LLMNR: имя компьютера не рассылается по сети'
+Def 'network' 'reg' 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' 'EnableMDNS' 0 'DWord' 'mDNS: многоадресные запросы имён — выкл'
+Def 'network' 'reg' 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters' 'NodeType' 2 'DWord' 'NetBIOS: без широковещательных запросов имён'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\Wpad' 'WpadOverride' 1 'DWord' 'WPAD: автопоиск прокси в сети — выкл'
+Def 'network' 'reg' 'HKLM:\SYSTEM\CurrentControlSet\Services\NlaSvc\Parameters\Internet' 'EnableActiveProbing' 0 'DWord' 'проверка связи через сервер Microsoft — выкл'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\WiFi\AllowWiFiHotSpotReporting' 'value' 0 'DWord' 'Wi-Fi Sense: отчёты о точках доступа — выкл'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\WiFi\AllowAutoConnectToWiFiSenseHotspots' 'value' 0 'DWord' 'Wi-Fi Sense: автоподключение к чужим точкам — выкл'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Microsoft\WcmSvc\wifinetworkmanager\config' 'AutoConnectAllowedOEM' 0 'DWord' 'автоподключение к сетям производителя — выкл'
+
+# --- Синхронизация с учётной записью и телефоном ---------------------------- #
+# Настройки, пароли и темы уезжают в облако Microsoft, а «общие возможности»
+# держат постоянный канал между компьютером, телефоном и чужими устройствами.
+$ssy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'
+Def 'sync' 'reg' $ssy 'DisableSettingSync' 2 'DWord' 'синхронизация настроек с учётной записью — выкл'
+Def 'sync' 'reg' $ssy 'DisableSettingSyncUserOverride' 1 'DWord' 'вернуть синхронизацию из Параметров нельзя'
+Def 'sync' 'reg' $ssy 'DisableCredentialsSettingSync' 2 'DWord' 'синхронизация паролей — выкл'
+Def 'sync' 'reg' $ssy 'DisableCredentialsSettingSyncUserOverride' 1 'DWord' 'вернуть синхронизацию паролей нельзя'
+Def 'sync' 'reg' $ssy 'DisableWebBrowserSettingSync' 2 'DWord' 'синхронизация настроек браузера — выкл'
+Def 'sync' 'reg' $ssy 'DisableWebBrowserSettingSyncUserOverride' 1 'DWord' 'вернуть синхронизацию браузера нельзя'
+Def 'sync' 'reg' $ssy 'DisableApplicationSettingSync' 2 'DWord' 'синхронизация настроек приложений — выкл'
+Def 'sync' 'reg' $ssy 'DisableApplicationSettingSyncUserOverride' 1 'DWord' 'вернуть синхронизацию приложений нельзя'
+Def 'sync' 'reg' $ssy 'DisablePersonalizationSettingSync' 2 'DWord' 'синхронизация темы и обоев — выкл'
+Def 'sync' 'reg' $ssy 'DisableStartLayoutSettingSync' 2 'DWord' 'синхронизация меню Пуск — выкл'
+Def 'sync' 'reg' $ssy 'DisableWindowsSettingSync' 2 'DWord' 'синхронизация прочих параметров Windows — выкл'
+Def 'sync' 'reg' $ssy 'DisableSyncOnPaidNetwork' 1 'DWord' 'не синхронизировать в лимитных сетях'
+Def 'sync' 'reg' $sys 'EnableCdp' 0 'DWord' '«Продолжить на этом устройстве» — выкл'
+Def 'sync' 'reg' $sys 'EnableMmx' 0 'DWord' 'связь с телефоном (Phone Link) — выкл'
+$cdpu = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CDP'
+Def 'sync' 'reg' $cdpu 'CdpSessionUserAuthzPolicy' 0 'DWord' 'общие сеансы между устройствами — выкл'
+Def 'sync' 'reg' $cdpu 'NearShareChannelUserAuthzPolicy' 0 'DWord' 'обмен с устройствами поблизости — выкл'
+Def 'sync' 'reg' $cdpu 'RomeSdkChannelUserAuthzPolicy' 0 'DWord' 'канал Project Rome для приложений — выкл'
+
+# --- Локальные истории и записи --------------------------------------------- #
+# «Досье» стирает уже накопленное — эти настройки запрещают копить заново.
+$pex = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'
+$eadv = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+Def 'history' 'reg' $pex 'NoRecentDocsHistory' 1 'DWord' 'не вести список недавних документов'
+Def 'history' 'reg' $pex 'ClearRecentDocsOnExit' 1 'DWord' 'очищать список недавних при выходе'
+Def 'history' 'reg' $pex 'NoInstrumentation' 1 'DWord' 'не собирать статистику работы пользователя'
+Def 'history' 'reg' $eadv 'Start_TrackDocs' 0 'DWord' 'Пуск: не запоминать открытые файлы'
+Def 'history' 'reg' $eadv 'Start_TrackProgs' 0 'DWord' 'Пуск: не запоминать запущенные программы'
+Def 'history' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer' 'ShowRecent' 0 'DWord' 'Проводник: недавние файлы в «Главной» — скрыть'
+Def 'history' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer' 'ShowFrequent' 0 'DWord' 'Проводник: частые папки в «Главной» — скрыть'
+Def 'history' 'reg' 'HKCU:\Software\Policies\Microsoft\Windows\Explorer' 'DisableSearchBoxSuggestions' 1 'DWord' 'подсказки из интернета в поле поиска — выкл'
+Def 'history' 'reg' 'HKCU:\System\GameConfigStore' 'GameDVR_Enabled' 0 'DWord' 'фоновая запись игр (Game DVR) — выкл'
+Def 'history' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR' 'AllowGameDVR' 0 'DWord' 'запись игр запрещена политикой'
+Def 'history' 'reg' $sys 'BlockUserFromShowingAccountDetailsOnSignin' 1 'DWord' 'адрес почты на экране входа — скрыть'
+Def 'history' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization' 'NoLockScreenCamera' 1 'DWord' 'камера с экрана блокировки — выкл'
+
+$script:ModuleOrder = @('telemetry','errors','activity','history','input','edge','delivery','location','ads','widgets','search','copilot','ai',
+                        'defender','onedrive','sync','services','etw','network','hosts','firewall','fwips','doh','buffer','app_nvidia','app_vscode','app_chrome','app_firefox',
                         'app_office','app_devtools','app_vs','oem','cleanup','startup')
 $script:ModuleTitles = @{
     telemetry='Телеметрия и диагностика'; errors='Отчёты об ошибках'; activity='История активности и буфер обмена';
+    history='Локальные истории и записи'; sync='Синхронизация с учётной записью и телефоном'; network='Сеть: имя компьютера в эфир и зонды';
     input='Персонализация ввода, рукописный ввод, речь'; edge='Microsoft Edge'; delivery='Раздача обновлений другим ПК';
     location='Геолокация и поиск устройства'; ads='Рекламный ID и реклама в интерфейсе'; widgets='Виджеты и лента новостей';
     search='Поиск: Bing, Cortana, облако'; copilot='Copilot и Recall';
@@ -1013,6 +1071,71 @@ function Get-DnsEvidence {
         }
     } catch { }
     return $list
+}
+
+# --- проба связи: отвечают ли адреса сбора данных --------------------------- #
+# Индекс приватности говорит «настройка на месте». Проба звонит по адресам
+# сбора данных и показывает, дозвонился ли компьютер на самом деле. Данные
+# никуда не отправляются: только разрешение имени и попытка открыть соединение,
+# которая тут же закрывается.
+$script:ProbeHosts = @(
+    @{ h='v10.events.data.microsoft.com';        w='основной приёмник телеметрии Windows' },
+    @{ h='v20.events.data.microsoft.com';        w='приёмник телеметрии, новая версия' },
+    @{ h='settings-win.data.microsoft.com';      w='настройки сбора данных (OneSettings)' },
+    @{ h='vortex.data.microsoft.com';            w='прежний приёмник телеметрии' },
+    @{ h='watson.telemetry.microsoft.com';       w='отчёты об ошибках (Watson)' },
+    @{ h='telemetry.microsoft.com';              w='общий узел телеметрии' },
+    @{ h='browser.pipe.aria.microsoft.com';      w='телеметрия приложений (Aria)' },
+    @{ h='nexusrules.officeapps.live.com';       w='телеметрия Office' },
+    @{ h='telemetry.appex.bing.net';             w='телеметрия Bing и виджетов' },
+    @{ h='activity.windows.com';                 w='лента активности' },
+    @{ h='functional.events.data.microsoft.com'; w='функциональные события' },
+    @{ h='www.msftconnecttest.com';              w='проверка связи (NCSI)' }
+)
+
+function Invoke-Probe {
+    param([int]$TimeoutMs = 1500)
+    $done = New-Object System.Collections.Generic.List[object]
+    $wait = New-Object System.Collections.Generic.List[object]
+
+    foreach ($e in $script:ProbeHosts) {
+        $r = @{ host = [string]$e.h; what = [string]$e.w; ip = ''; state = ''; blocked = $true }
+        $ips = @()
+        try { $ips = @([System.Net.Dns]::GetHostAddresses($e.h) | ForEach-Object { $_.IPAddressToString }) } catch { }
+        $v4 = @($ips | Where-Object { $_ -notmatch ':' })
+        if ($v4.Count -gt 0) { $ips = $v4 }
+        if ($ips.Count -eq 0) { $r.state = 'имя не разрешается'; $done.Add($r); continue }
+        $r.ip = [string]$ips[0]
+        if ($r.ip -eq '0.0.0.0' -or $r.ip -eq '127.0.0.1' -or $r.ip -eq '::' -or $r.ip -eq '::1') {
+            $r.state = 'заблокирован в hosts'; $done.Add($r); continue
+        }
+        try {
+            $c = New-Object System.Net.Sockets.TcpClient
+            $ar = $c.BeginConnect($r.ip, 443, $null, $null)
+            $wait.Add(@{ r = $r; c = $c; ar = $ar })
+        } catch { $r.state = 'соединение невозможно'; $done.Add($r) }
+    }
+
+    # соединения открываются разом, поэтому ждём их все вместе, а не по очереди
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+    foreach ($w in $wait) {
+        $left = [int][math]::Max(0, ($deadline - (Get-Date)).TotalMilliseconds)
+        $answered = $false
+        try { $answered = $w.ar.AsyncWaitHandle.WaitOne($left, $false) } catch { }
+        if ($answered) {
+            try { $w.c.EndConnect($w.ar); $w.r.state = 'ОТВЕЧАЕТ'; $w.r.blocked = $false }
+            catch { $w.r.state = 'соединение отклонено' }
+        } else { $w.r.state = 'не отвечает' }
+        try { $w.c.Close() } catch { }
+        $done.Add($w.r)
+    }
+
+    $items = @($done.ToArray() | Sort-Object { [int][bool]$_.blocked }, { $_.host })
+    $open = @($items | Where-Object { -not $_.blocked }).Count
+    return @{ time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); items = $items
+              total = $items.Count; open = $open; blocked = ($items.Count - $open)
+              hostsBlocked = (Test-HostsBlock)
+              fwRules = @(Get-NetFirewallRule -Group $script:FwGroup -ErrorAction SilentlyContinue).Count }
 }
 
 # --- буфер телеметрии ------------------------------------------------------- #
@@ -1897,6 +2020,42 @@ function Get-Footprint {
     $inpMb = Get-FolderSizeMB $inp
     & $add 'inputpers' 'Личный словарь набора текста' 'Слова, собранные из вашего набора и рукописного ввода.' ("{0} МБ" -f $inpMb) $inpMb (Get-FileCount $inp) ($inpMb -gt 0) ''
 
+    # История команд PowerShell
+    $psh = Join-Path $env:APPDATA 'Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt'
+    $pshN = 0
+    try { if (Test-Path -LiteralPath $psh) { $pshN = @(Get-Content -LiteralPath $psh -ErrorAction Stop).Count } } catch { }
+    & $add 'psreadline' 'История команд PowerShell' 'Всё, что вы набирали в PowerShell, пишется в файл без ограничения по сроку — вместе с паролями и ключами, если они были в строке.' ("{0} команд" -f $pshN) 0 $pshN ($pshN -gt 0) ''
+
+    # Win+R
+    $run = 0
+    try { $k = Get-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU' -ErrorAction Stop; $run = @($k.GetValueNames() | Where-Object { $_ -ne 'MRUList' }).Count } catch { }
+    & $add 'runmru' 'Что вы запускали через Win+R' 'Список команд из окна «Выполнить».' ("{0} записей" -f $run) 0 $run ($run -gt 0) ''
+
+    # Подключения к удалённым рабочим столам
+    $rdp = 0
+    try { $k = Get-Item 'HKCU:\Software\Microsoft\Terminal Server Client\Default' -ErrorAction Stop; $rdp = @($k.GetValueNames() | Where-Object { $_ -like 'MRU*' }).Count } catch { }
+    $rdpSrv = 0
+    try { $rdpSrv = @(Get-ChildItem 'HKCU:\Software\Microsoft\Terminal Server Client\Servers' -ErrorAction Stop).Count } catch { }
+    & $add 'rdp' 'Подключения к удалённым компьютерам' 'Адреса компьютеров, к которым вы подключались по RDP, и имена учётных записей.' ("{0} адресов" -f ([math]::Max($rdp, $rdpSrv))) 0 ([math]::Max($rdp, $rdpSrv)) (($rdp + $rdpSrv) -gt 0) ''
+
+    # Кэш эскизов
+    $thDir = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Explorer'
+    $thN = 0; $thMb = 0.0
+    try {
+        $thFiles = @(Get-ChildItem -LiteralPath $thDir -Filter 'thumbcache_*.db' -Force -ErrorAction Stop)
+        $thN = $thFiles.Count
+        $sum = ($thFiles | Measure-Object -Property Length -Sum).Sum
+        if ($sum) { $thMb = [math]::Round($sum / 1MB, 1) }
+    } catch { }
+    & $add 'thumbs' 'Кэш эскизов файлов' 'Уменьшенные копии картинок и документов, которые вы открывали. Остаются даже после удаления самих файлов.' ("{0} МБ" -f $thMb) $thMb $thN ($thN -gt 0) ''
+
+    # Снимки экрана Recall
+    $rec = Join-Path $env:LOCALAPPDATA 'CoreAIPlatform.00\UKP'
+    $recMb = Get-FolderSizeMB $rec
+    $recOn = (Get-RegValue 'HKCU:\Software\Policies\Microsoft\Windows\WindowsAI' 'DisableAIDataAnalysis')
+    $recVal = if ($recMb -gt 0) { "{0} МБ" -f $recMb } elseif ($recOn -eq 1) { 'выключен, снимков нет' } else { 'снимков нет' }
+    & $add 'recall' 'Снимки экрана Recall' 'Recall раз в несколько секунд снимает экран и хранит распознанный текст в базе на диске.' $recVal $recMb (Get-FileCount $rec) ($recMb -gt 0) ''
+
     # Кэш DNS
     $dnsN = 0
     try { $dnsN = @(Get-DnsClientCache -ErrorAction Stop).Count } catch { }
@@ -1963,6 +2122,44 @@ function Invoke-FootprintWipe {
             }
             'inputpers' {
                 $null = Clear-FolderContents (Join-Path $env:APPDATA 'Microsoft\InputPersonalization') 'личный словарь набора'
+            }
+            'psreadline' {
+                $f = Join-Path $env:APPDATA 'Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt'
+                if ($DryRun) { Write-Log '   [тест] история команд PowerShell — стереть'; break }
+                try { Remove-Item -LiteralPath $f -Force -ErrorAction Stop; Write-Log '   [+] история команд PowerShell стёрта'; $script:Changes++ }
+                catch { Write-Log '   [-] истории команд PowerShell нет' }
+            }
+            'runmru' {
+                if ($DryRun) { Write-Log '   [тест] список Win+R — очистить'; break }
+                try { Remove-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU' -Recurse -Force -ErrorAction Stop; Write-Log '   [+] список запуска через Win+R очищен'; $script:Changes++ }
+                catch { Write-Log '   [-] список Win+R уже пуст' }
+            }
+            'rdp' {
+                if ($DryRun) { Write-Log '   [тест] история RDP-подключений — очистить'; break }
+                $n = 0
+                try {
+                    $k = 'HKCU:\Software\Microsoft\Terminal Server Client\Default'
+                    foreach ($v in @((Get-Item $k -ErrorAction Stop).GetValueNames() | Where-Object { $_ -like 'MRU*' })) {
+                        Remove-ItemProperty -LiteralPath $k -Name $v -Force -ErrorAction SilentlyContinue; $n++
+                    }
+                } catch { }
+                try { Remove-Item 'HKCU:\Software\Microsoft\Terminal Server Client\Servers' -Recurse -Force -ErrorAction Stop; $n++ } catch { }
+                if ($n -gt 0) { Write-Log '   [+] история подключений к удалённым компьютерам очищена'; $script:Changes++ }
+                else { Write-Log '   [-] истории RDP-подключений нет' }
+            }
+            'thumbs' {
+                $dir = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Explorer'
+                if ($DryRun) { Write-Log '   [тест] кэш эскизов — стереть'; break }
+                $n = 0; $locked = 0
+                foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter 'thumbcache_*.db' -Force -ErrorAction SilentlyContinue)) {
+                    try { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop; $n++ } catch { $locked++ }
+                }
+                if ($n -gt 0) { Write-Log ("   [+] кэш эскизов стёрт: {0} файлов" -f $n); $script:Changes++ }
+                if ($locked -gt 0) { Write-Log ("   [-] занято Проводником: {0} файлов — стираются после перезагрузки" -f $locked) }
+                if ($n -eq 0 -and $locked -eq 0) { Write-Log '   [-] кэша эскизов нет' }
+            }
+            'recall' {
+                $null = Clear-FolderContents (Join-Path $env:LOCALAPPDATA 'CoreAIPlatform.00\UKP') 'снимки экрана Recall'
             }
             'dnscache' {
                 if ($DryRun) { Write-Log '   [тест] кэш DNS — очистить'; break }
@@ -2401,6 +2598,27 @@ if ($Audit) {
         monitorEnabled = (Get-MonitorEnabled); hostsBlocked = (Test-HostsBlock)
     }
     Emit-Json $result
+    exit 0
+}
+
+# =========================================================================== #
+#  ПРОБА СВЯЗИ
+#  Настройка «на месте» ещё не значит, что канал закрыт. Здесь компьютер сам
+#  пробует дозвониться до адресов сбора данных и отчитывается, кто ответил.
+# =========================================================================== #
+if ($Probe) {
+    $pr = Invoke-Probe -TimeoutMs $ProbeTimeout
+    Write-Section 'Проба связи с адресами сбора данных'
+    foreach ($it in @($pr.items)) {
+        $mark = if ($it.blocked) { '+' } else { '!' }
+        Write-Log ("   [{0}] {1,-42} {2}  ({3})" -f $mark, $it.host, $it.state, $it.what)
+    }
+    Write-Log ''
+    Write-Log ("   отвечает адресов: {0} из {1}" -f $pr.open, $pr.total)
+    if ($pr.open -eq 0) { Write-Log '   Ни один адрес сбора данных не отвечает — канал закрыт.' }
+    else { Write-Log '   Через отвечающие адреса телеметрия ещё может уходить: включите модули «Блокировка доменов» и «Блокировка адресов телеметрии».' }
+    Emit-Json $pr
+    Write-Log '###DONE###'
     exit 0
 }
 

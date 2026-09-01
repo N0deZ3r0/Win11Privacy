@@ -63,10 +63,26 @@ if ($defs) {
     Check 'модулей больше 20' ($groups.Count -gt 20) ("получено: " + $groups.Count)
     $ids = @()
     foreach ($g in $groups) { foreach ($i in @($g.items)) { $ids += $i.id } }
-    Check 'настроек больше 150' ($ids.Count -gt 150) ("получено: " + $ids.Count)
+    Check 'настроек больше 200' ($ids.Count -gt 200) ("получено: " + $ids.Count)
     Check 'номера настроек уникальны' (($ids | Select-Object -Unique).Count -eq $ids.Count)
     $empty = @($groups | Where-Object { -not $_.title })
     Check 'у всех модулей есть название' ($empty.Count -eq 0)
+
+    $names = @($groups | ForEach-Object { $_.module })
+    foreach ($need in @('network', 'sync', 'history')) {
+        Check ("модуль $need на месте") ($names -contains $need)
+    }
+
+    # одна и та же настройка не должна попадать в список дважды: раньше две
+    # задачи планировщика были записаны по два раза и считались как разные
+    $seen = @{}; $twice = 0
+    foreach ($g in $groups) {
+        foreach ($i in @($g.items)) {
+            $k = "$($g.module)|$($i.name)"
+            if ($seen.ContainsKey($k)) { $twice++ } else { $seen[$k] = $true }
+        }
+    }
+    Check 'нет повторяющихся настроек' ($twice -eq 0) ("повторов: " + $twice)
 }
 
 # --------------------------------------------------------------------------- #
@@ -82,7 +98,7 @@ if ($two) {
 
 $all = Get-EngineJson @('-Audit')
 Check 'полный аудит отвечает' ($null -ne $all)
-if ($all) { Check 'настроек в аудите больше 150' ([int]$all.total -gt 150) ("получено: " + $all.total) }
+if ($all) { Check 'настроек в аудите больше 200' ([int]$all.total -gt 200) ("получено: " + $all.total) }
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
@@ -104,8 +120,27 @@ $spy = Get-EngineJson @('-Spy')
 Check 'досье по датчикам отвечает' ($null -ne $spy -and $null -ne $spy.caps)
 $foot = Get-EngineJson @('-Footprint')
 Check 'цифровой след отвечает' ($null -ne $foot -and $null -ne $foot.items)
+if ($foot) {
+    $footIds = @($foot.items | ForEach-Object { $_.id })
+    foreach ($need in @('psreadline', 'runmru', 'rdp', 'thumbs', 'recall')) {
+        Check ("след: элемент $need на месте") ($footIds -contains $need)
+    }
+    $noWhat = @($foot.items | Where-Object { -not $_.what })
+    Check 'у всех элементов следа есть пояснение' ($noWhat.Count -eq 0)
+}
 $apps = Get-EngineJson @('-ListApps')
 Check 'список приложений отвечает' ($null -ne $apps -and $null -ne $apps.apps)
+# Проба связи. Куда именно дозвонится агент сборки — неизвестно (сеть у него
+# своя), поэтому проверяем форму ответа, а не результат.
+$probe = Get-EngineJson @('-Probe', '-ProbeTimeout', '1500')
+Check 'проба связи отвечает' ($null -ne $probe -and $null -ne $probe.items)
+if ($probe) {
+    Check 'проба проверила все адреса' ([int]$probe.total -ge 12) ("получено: " + $probe.total)
+    Check 'открытых плюс закрытых = всего' (([int]$probe.open + [int]$probe.blocked) -eq [int]$probe.total)
+    $noState = @($probe.items | Where-Object { -not $_.state })
+    Check 'у каждого адреса есть состояние' ($noState.Count -eq 0)
+}
+
 $self = Get-EngineJson @('-SelfTest')
 Check 'самопроверка отвечает' ($null -ne $self)
 $log = Get-EngineJson @('-ChangeLog')
@@ -115,11 +150,11 @@ Check 'журнал отката отвечает' ($null -ne $log)
 Write-Host ''
 Write-Host 'Применение (тестовый прогон, ничего не меняется)'
 if ($isAdmin) {
-    $mods = 'telemetry,errors,activity,input,edge,ads,copilot'
+    $mods = 'telemetry,errors,activity,history,input,edge,ads,copilot,sync,network'
     $out = Run-Engine @('-DryRun', '-NoBackup', '-NoRestorePoint', '-Modules', $mods)
     $sections = @([regex]::Matches($out, '(?m)^--- ')).Count - 1     # минус раздел «Итог»
-    Check 'выполнены все выбранные модули (регрессия: $defs === $script:Defs)' ($sections -ge 7) `
-          ("разделов: " + $sections + " из 7")
+    Check 'выполнены все выбранные модули (регрессия: $defs === $script:Defs)' ($sections -ge 10) `
+          ("разделов: " + $sections + " из 10")
     Check 'в тестовом прогоне нет изменений' ($out -match 'Изменений применено : 0')
 } else {
     Write-Host '  (пропущено: нужны права администратора)'
