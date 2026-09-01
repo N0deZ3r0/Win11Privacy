@@ -166,6 +166,34 @@ function Get-RegValue {
     try { $p = Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop; return $p.$Name } catch { return $null }
 }
 
+# Запасная запись мимо провайдера PowerShell: обычный API реестра просит
+# ровно те права, которые нужны, и иногда справляется там, где New-ItemProperty
+# уже получил отказ. Заодно рассказывает, чем именно кончилась попытка.
+function Set-RegDirect {
+    param([string]$Path, [string]$Name, $Value, [string]$Type = 'DWord')
+    try {
+        $hive = $null; $sub = ''
+        if ($Path -match '^HKLM:\\(.+)$')      { $hive = [Microsoft.Win32.Registry]::LocalMachine; $sub = $Matches[1] }
+        elseif ($Path -match '^HKCU:\\(.+)$')  { $hive = [Microsoft.Win32.Registry]::CurrentUser;  $sub = $Matches[1] }
+        elseif ($Path -match '^HKCR:\\(.+)$')  { $hive = [Microsoft.Win32.Registry]::ClassesRoot;  $sub = $Matches[1] }
+        elseif ($Path -match '^HKU:\\(.+)$')   { $hive = [Microsoft.Win32.Registry]::Users;        $sub = $Matches[1] }
+        else { return @{ ok = $false; error = 'неизвестный куст реестра' } }
+        $key = $hive.CreateSubKey($sub, $true)
+        if ($null -eq $key) { return @{ ok = $false; error = 'ключ не открылся на запись' } }
+        try {
+            switch ($Type) {
+                'DWord'        { $key.SetValue($Name, [int]$Value,  [Microsoft.Win32.RegistryValueKind]::DWord) }
+                'QWord'        { $key.SetValue($Name, [long]$Value, [Microsoft.Win32.RegistryValueKind]::QWord) }
+                'Binary'       { $key.SetValue($Name, [byte[]]$Value, [Microsoft.Win32.RegistryValueKind]::Binary) }
+                'ExpandString' { $key.SetValue($Name, [string]$Value, [Microsoft.Win32.RegistryValueKind]::ExpandString) }
+                'MultiString'  { $key.SetValue($Name, [string[]]$Value, [Microsoft.Win32.RegistryValueKind]::MultiString) }
+                default        { $key.SetValue($Name, [string]$Value, [Microsoft.Win32.RegistryValueKind]::String) }
+            }
+        } finally { $key.Close() }
+        return @{ ok = $true }
+    } catch { return @{ ok = $false; error = ("{0}: {1}" -f $_.Exception.GetType().Name, $_.Exception.Message) } }
+}
+
 function Set-Reg {
     param([string]$Path, [string]$Name, $Value, [string]$Type = 'DWord', [string]$Comment = '')
     $label = if ($Comment) { $Comment } else { "$Path -> $Name" }
@@ -176,27 +204,43 @@ function Set-Reg {
     $cur = Get-RegValue $Path $Name
     if ($null -ne $cur -and "$cur" -eq "$Value") { Write-Log "   [в] $label -- уже настроено"; $script:Already++; return }
 
-    # запоминаем прежнее состояние — по нему работает откат одной кнопкой
-    try {
-        $script:Journal.Add(@{ kind = 'reg'; path = $Path; name = $Name; type = $Type
-                               existed = [bool]($null -ne $cur); old = $(if ($null -ne $cur) { $cur } else { '' })
-                               newValue = "$Value"; time = (Get-Date).ToString('s') })
-    } catch { }
-
+    # ВАЖНО: в журнал отката пишем только после удачной записи. Раньше запись
+    # добавлялась заранее, и неудавшиеся попытки оседали в журнале как
+    # «изменения», которых на самом деле не было.
+    $existed = [bool]($null -ne $cur)
+    $oldValue = $(if ($existed) { $cur } else { '' })
+    $done = $false
+    $why = ''
     try {
         if (-not (Test-Path -LiteralPath $Path)) { New-Item -Path $Path -Force -ErrorAction Stop | Out-Null }
         New-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -PropertyType $Type -Force -ErrorAction Stop | Out-Null
-        Write-Log "   [+] $label"; $script:Changes++
+        $done = $true
     } catch {
+        $why = ("{0}: {1}" -f $_.Exception.GetType().Name, $_.Exception.Message)
         $after = Get-RegValue $Path $Name
         if ($null -ne $after -and "$after" -eq "$Value") { Write-Log "   [в] $label -- уже настроено"; $script:Already++; return }
-        if ($_.Exception -is [UnauthorizedAccessException]) {
-            Write-Log "   [!] $label -- Windows не разрешает менять этот параметр (защищён системой)"
-        } else {
-            Write-Log "   [!] не удалось: $label -- $($_.Exception.Message)"
-        }
-        $script:Failures++
+        $retry = Set-RegDirect -Path $Path -Name $Name -Value $Value -Type $Type
+        if ($retry.ok) { $done = $true } else { $why += " / вторая попытка: $($retry.error)" }
     }
+
+    if ($done) {
+        try {
+            $script:Journal.Add(@{ kind = 'reg'; path = $Path; name = $Name; type = $Type
+                                   existed = $existed; old = $oldValue
+                                   newValue = "$Value"; time = (Get-Date).ToString('s') })
+        } catch { }
+        Write-Log "   [+] $label"; $script:Changes++
+        return
+    }
+
+    if ($why -like '*UnauthorizedAccessException*') {
+        Write-Log "   [!] $label -- Windows не отдаёт этот параметр даже администратору"
+        Write-Log "       ключ: $Path -> $Name"
+        Write-Log "       права администратора у программы: $(if (Test-Admin) { 'есть' } else { 'НЕТ' })"
+    } else {
+        Write-Log "   [!] не удалось: $label -- $why"
+    }
+    $script:Failures++
 }
 
 function Get-FolderSizeMB {
@@ -2564,6 +2608,7 @@ $script:AppxProtected = @(
 
 # Что обычно ставят без спроса — помечаем как «можно убрать»
 $script:AppxBloat = @{
+    'MicrosoftWindows.Client.WebExperience' = 'Виджеты и лента Microsoft Start'
     'Microsoft.BingNews'                = 'Новости MSN'
     'Microsoft.BingWeather'             = 'Погода MSN'
     'Microsoft.BingSearch'              = 'Поиск Bing в Пуске'
@@ -2602,8 +2647,14 @@ $script:AppxBloat = @{
     'Microsoft.549981C3F5F10'           = 'Cortana'
 }
 
+# Исключения из защищённых префиксов: сама «оболочка» MicrosoftWindows.Client
+# трогать нельзя, а вот доска виджетов внутри неё удаляется безболезненно —
+# на Home это единственный способ убрать её совсем.
+$script:AppxAllowed = @('MicrosoftWindows.Client.WebExperience')
+
 function Test-AppxProtected {
     param([string]$Name)
+    foreach ($a in $script:AppxAllowed) { if ($Name -eq $a) { return $false } }
     foreach ($p in $script:AppxProtected) { if ($Name -like ($p + '*')) { return $true } }
     return $false
 }

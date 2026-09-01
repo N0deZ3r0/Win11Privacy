@@ -40,7 +40,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(877, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(878, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -918,6 +918,7 @@ namespace Win11Privacy
             _map["Проверка: раз в неделю"] = "Check: once a week";
             _map["Страж будет проверять каждый день. Нажмите «Включить стража»."] = "The guard will check every day. Press \"Turn the guard on\".";
             _map["Страж будет проверять раз в неделю. Нажмите «Включить стража»."] = "The guard will check once a week. Press \"Turn the guard on\".";
+            _map["Виджеты и лента Microsoft Start"] = "Widgets and the Microsoft Start feed";
         }
     }
 }

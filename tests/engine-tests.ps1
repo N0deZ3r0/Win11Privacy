@@ -267,6 +267,44 @@ Check 'возврат без выбора ничего не делает' ($null
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
+Write-Host 'Запись в реестр: журнал только после удачи'
+$regFns = @('Get-RegValue', 'Set-RegDirect', 'Set-Reg', 'Test-Admin')
+$regFound = @()
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($regFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $regFound += $fn.Name }
+}
+Check 'функции записи найдены в движке' ($regFound.Count -eq $regFns.Count) ("найдено: " + ($regFound -join ','))
+if ($regFound.Count -eq $regFns.Count) {
+    $script:Journal = New-Object System.Collections.Generic.List[object]
+    $script:Changes = 0; $script:Failures = 0; $script:Already = 0
+    $DryRun = $false
+    $logLines = New-Object System.Collections.Generic.List[string]
+    function Write-Log { param([string]$Message = '') $logLines.Add($Message) }
+
+    # SECURITY закрыт даже от администратора — запись обязана провалиться
+    Set-Reg -Path 'HKLM:\SECURITY\Win11PrivacyProbe' -Name 'x' -Value 1 -Type 'DWord' -Comment 'проверка отказа'
+    Check 'неудачная запись не попадает в журнал отката' ($script:Journal.Count -eq 0) ("записей: " + $script:Journal.Count)
+    Check 'неудача посчитана ошибкой' ($script:Failures -eq 1)
+    Check 'в журнале выполнения виден вид ошибки' (@($logLines | Where-Object { $_ -match 'Exception' }).Count -ge 1) `
+          ($logLines -join ' | ')
+
+    # свой ключ пользователя — запись обязана пройти и попасть в журнал
+    Set-Reg -Path 'HKCU:\Software\Win11PrivacyProbe' -Name 'x' -Value 7 -Type 'DWord' -Comment 'проверка записи'
+    Check 'удачная запись попадает в журнал отката' ($script:Journal.Count -eq 1) ("записей: " + $script:Journal.Count)
+    Check 'значение записано' ((Get-RegValue 'HKCU:\Software\Win11PrivacyProbe' 'x') -eq 7)
+    Remove-Item -LiteralPath 'HKCU:\Software\Win11PrivacyProbe' -Recurse -Force -ErrorAction SilentlyContinue
+    Check 'служебный ключ убран' (-not (Test-Path 'HKCU:\Software\Win11PrivacyProbe'))
+}
+
+$appsW = Get-EngineJson @('-ListApps')
+if ($appsW) {
+    $widget = @($appsW.apps | Where-Object { "$($_.name)" -eq 'MicrosoftWindows.Client.WebExperience' })
+    Check 'доска виджетов предлагается к удалению' ($widget.Count -eq 1 -and $widget[0].bloat) `
+          ("найдено: " + $widget.Count)
+}
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
 Write-Host 'Применение (тестовый прогон, ничего не меняется)'
 if ($isAdmin) {
     $mods = 'telemetry,errors,activity,input,edge,ads,copilot'

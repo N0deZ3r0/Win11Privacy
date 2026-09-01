@@ -178,3 +178,4 @@ Win11Privacy.exe --audit                                     проверка (�
 Проверка: раз в неделю	Check: once a week
 Страж будет проверять каждый день. Нажмите «Включить стража».	The guard will check every day. Press "Turn the guard on".
 Страж будет проверять раз в неделю. Нажмите «Включить стража».	The guard will check once a week. Press "Turn the guard on".
+Виджеты и лента Microsoft Start	Widgets and the Microsoft Start feed
