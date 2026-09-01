@@ -185,8 +185,10 @@ Def 'telemetry' 'reg' 'HKLM:\SOFTWARE\Policies\...' 'ИмяПараметра' 0
 
 `Def` описывает **что должно быть**, а не как это сделать. Из одного описания
 работают сразу: применение, проверка, страж и снимки состояния. Поддерживаемые
-типы: `reg`, `svc`, `svcopt`, `task`, `taskglob`, `env`, `vscode`, `firefox`,
-`hosts`, `fwsvc`, `fwapp`.
+типы: `reg`, `regif` (только если ключ уже есть), `regpol` (политика, которую
+Windows может не отдать даже администратору — тогда это не ошибка), `svc`,
+`svcopt`, `task`, `taskglob`, `env`, `vscode`, `firefox`, `hosts`, `fwsvc`,
+`fwapp`.
 
 Чтобы новый модуль появился в интерфейсе — добавьте строку в `BuildModules()`
 в `MainForm.cs`.

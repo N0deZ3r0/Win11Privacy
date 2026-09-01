@@ -142,6 +142,7 @@ $script:DiagDir        = Join-Path $env:ProgramData 'Microsoft\Diagnosis'
 $script:Changes = 0
 $script:Failures = 0
 $script:Already = 0
+$script:Blocked = 0
 # Журнал изменений реестра: что было до нашего вмешательства.
 # Без него откат требовал ручного импорта .reg-файлов.
 $script:Journal = New-Object System.Collections.Generic.List[object]
@@ -206,7 +207,8 @@ function Test-RegKeyWritable {
 }
 
 function Set-Reg {
-    param([string]$Path, [string]$Name, $Value, [string]$Type = 'DWord', [string]$Comment = '')
+    param([string]$Path, [string]$Name, $Value, [string]$Type = 'DWord', [string]$Comment = '',
+          [switch]$Policy)
     $label = if ($Comment) { $Comment } else { "$Path -> $Name" }
     if ($DryRun) { Write-Log "   [тест] $label"; return }
 
@@ -245,6 +247,13 @@ function Set-Reg {
     }
 
     if ($why -like '*UnauthorizedAccessException*' -or $why -like '*SecurityException*') {
+        # Часть политик Windows держит сама и не отдаёт даже администратору —
+        # это не поломка программы, а решение системы, и в ошибки оно не идёт.
+        if ($Policy) {
+            Write-Log "   [-] $label -- Windows этой редакции не разрешает менять этот параметр"
+            $script:Blocked++
+            return
+        }
         Write-Log "   [!] $label -- Windows не отдаёт этот параметр даже администратору"
         Write-Log "       ключ: $Path -> $Name"
         Write-Log "       права администратора у программы: $(if (Test-Admin) { 'есть' } else { 'НЕТ' })"
@@ -534,9 +543,9 @@ Def 'location' 'reg' $loc 'DisableWindowsLocationProvider' 1 'DWord' 'поста
 Def 'location' 'reg' 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location' 'Value' 'Deny' 'String' 'доступ приложений к местоположению — запрещён'
 Def 'location' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\FindMyDevice' 'AllowFindMyDevice' 0 'DWord' '«Поиск устройства» (отправка координат) — выкл'
 
-Def 'widgets' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests' 0 'DWord' 'виджеты и лента новостей MSN — выкл'
+Def 'widgets' 'regpol' 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests' 0 'DWord' 'виджеты и лента новостей MSN — выкл'
 Def 'widgets' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'TaskbarDa' 0 'DWord' 'кнопка виджетов на панели задач — убрать'
-Def 'widgets' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds' 'EnableFeeds' 0 'DWord' 'лента новостей и интересов — выкл (запасной ключ)'
+Def 'widgets' 'regpol' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds' 'EnableFeeds' 0 'DWord' 'лента новостей и интересов — выкл (запасной ключ)'
 
 $dfn = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet'
 Def 'defender' 'reg' $dfn 'SpyNetReporting' 0 'DWord' 'Защитник: облачная отправка MAPS — выкл'
@@ -774,7 +783,7 @@ function Find-JunkValues {
     $byIdx = @{}
     $paths = @{}
     foreach ($d in $script:Defs) {
-        if ($d.T -ne 'reg' -and $d.T -ne 'regif') { continue }
+        if ($d.T -ne 'reg' -and $d.T -ne 'regif' -and $d.T -ne 'regpol') { continue }
         $paths["$($d.P)"] = $true
         $parts = "$($d.Id)" -split '#'
         if ($parts.Count -ne 2) { continue }
@@ -819,6 +828,7 @@ function Apply-Def {
     param($d)
     switch ($d.T) {
         'reg' { Set-Reg -Path $d.P -Name $d.N -Value $d.V -Type $d.Type -Comment $d.C }
+        'regpol' { Set-Reg -Path $d.P -Name $d.N -Value $d.V -Type $d.Type -Comment $d.C -Policy }
         'regif' {
             # сессия трассировки есть не на каждой сборке Windows — чего нет, то не создаём
             if (Test-Path -LiteralPath $d.P) { Set-Reg -Path $d.P -Name $d.N -Value $d.V -Type $d.Type -Comment $d.C }
@@ -883,6 +893,12 @@ function Check-Def {
                 $actual = if ($null -eq $v) { 'не задано' } else { "$v" }
                 $ok = ($null -ne $v) -and ("$v" -eq "$($d.V)")
             }
+        }
+        'regpol' {
+            # проверяем честно, как обычный параметр: не записано — значит не применено
+            $v = Get-RegValue $d.P $d.N
+            $actual = if ($null -eq $v) { 'Windows не разрешает' } else { "$v" }
+            $ok = ($null -ne $v) -and ("$v" -eq "$($d.V)")
         }
         'reg' {
             $v = Get-RegValue $d.P $d.N
@@ -3060,7 +3076,7 @@ function Get-ChangeGroups {
     if (-not $j -or -not $j.items) { return @() }
     $byPath = @{}
     foreach ($d in $script:Defs) {
-        if ($d.T -ne 'reg' -and $d.T -ne 'regif') { continue }
+        if ($d.T -ne 'reg' -and $d.T -ne 'regif' -and $d.T -ne 'regpol') { continue }
         $k = ("{0}|{1}" -f $d.P, $d.N).ToLowerInvariant()
         if (-not $byPath.ContainsKey($k)) { $byPath[$k] = @{ title = [string]$d.C; module = [string]$d.M } }
     }
@@ -3397,12 +3413,12 @@ foreach ($m in $script:ModuleOrder) {
     $modDefs = @($script:Defs | Where-Object { $_.M -eq $m })
     if ($modDefs.Count -eq 0) { continue }
     Write-Section $script:ModuleTitles[$m]
-    $failBefore = $script:Failures
+    $failBefore = $script:Failures + $script:Blocked
     foreach ($d in $modDefs) {
         if ($SkipItems -contains $d.Id) { Write-Log ("   [п] {0} -- пропущено по вашему выбору" -f $d.C); continue }
         Apply-Def $d
     }
-    if ($script:Failures -gt $failBefore -and $script:ModuleHints.ContainsKey($m)) {
+    if (($script:Failures + $script:Blocked) -gt $failBefore -and $script:ModuleHints.ContainsKey($m)) {
         Write-Log ("   [i] {0}" -f $script:ModuleHints[$m])
     }
 }
@@ -3513,8 +3529,10 @@ Save-JournalEntries
 Write-Log ("Изменений применено : {0}" -f $script:Changes)
 Write-Log ("Было уже настроено : {0}" -f $script:Already)
 Write-Log ("Ошибок              : {0}" -f $script:Failures)
+if ($script:Blocked -gt 0) { Write-Log ("Windows не разрешила: {0} (см. пометки [-] выше)" -f $script:Blocked) }
 if ($script:BackupDir) { Write-Log ("Резервная копия     : {0}" -f $script:BackupDir) }
 Write-Log ''
 Write-Log 'Перезагрузите компьютер, чтобы всё вступило в силу. Нажмите «Проверить» — программа прочитает реальное состояние системы.'
-Emit-Json @{ changes=$script:Changes; already=$script:Already; failures=$script:Failures; backup=$script:BackupDir }
+Emit-Json @{ changes=$script:Changes; already=$script:Already; failures=$script:Failures
+             blocked=$script:Blocked; backup=$script:BackupDir }
 Write-Log '###DONE###'

@@ -295,6 +295,14 @@ if ($regFound.Count -eq $regFns.Count) {
     Remove-Item -LiteralPath 'HKCU:\Software\Win11PrivacyProbe' -Recurse -Force -ErrorAction SilentlyContinue
     Check 'служебный ключ убран' (-not (Test-Path 'HKCU:\Software\Win11PrivacyProbe'))
 
+    # политика, которую система не отдаёт, — это не ошибка программы
+    $script:Failures = 0; $script:Blocked = 0
+    $script:Journal = New-Object System.Collections.Generic.List[object]
+    Set-Reg -Path 'HKLM:\SOFTWARE\Win11PrivacyProbe' -Name 'x' -Value 1 -Type 'DWord' -Comment 'политика' -Policy
+    Check 'отказ по политике не считается ошибкой' ($script:Failures -eq 0) ("ошибок: " + $script:Failures)
+    Check 'отказ по политике посчитан отдельно' ($script:Blocked -eq 1) ("заблокировано: " + $script:Blocked)
+    Check 'отказ по политике не пишется в журнал' ($script:Journal.Count -eq 0)
+
     # проба «пишется ли ключ» не должна оставлять следов
     Check 'проба видит доступный ключ' (Test-RegKeyWritable 'HKCU:\Software')
     Check 'проба не оставляет параметр' ($null -eq (Get-RegValue 'HKCU:\Software' '_Win11PrivacyProbe'))
