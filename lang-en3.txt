@@ -1,0 +1,176 @@
+# Названия отдельных настроек (приходят из движка)
+уровень телеметрии — минимальный	telemetry level — minimum
+потолок телеметрии	telemetry ceiling
+не отправлять имя устройства	do not send the device name
+не запрашивать отзывы	do not ask for feedback
+не собирать диагностические логи	do not collect diagnostic logs
+не собирать дампы памяти	do not collect memory dumps
+отключить загрузку конфигураций OneSettings	turn off OneSettings config downloads
+отключить коммерческий канал данных	turn off the commercial data pipeline
+отключить Update Compliance	turn off Update Compliance
+без рекомендаций на основе диагностики	no tailored experiences from diagnostics
+опросы Центра отзывов — выкл	Feedback Hub surveys — off
+эксперименты Microsoft — выкл	Microsoft experiments — off
+отправка отчётов об ошибках — выкл	error reporting — off
+то же, политикой	the same, by policy
+не отправлять дополнительные данные	do not send additional data
+рекламный ID — выкл	advertising ID — off
+рекламный ID заблокирован политикой	advertising ID blocked by policy
+реклама приложений в меню Пуск	app ads in the Start menu
+тихая установка рекламных приложений	silent install of promoted apps
+предустановка партнёрских приложений	preinstall of partner apps
+предустановка приложений OEM	preinstall of OEM apps
+всплывающие подсказки-реклама	pop-up tip ads
+реклама на экране блокировки	ads on the lock screen
+предложения в меню Пуск	suggestions in the Start menu
+советы и подсказки Windows	Windows tips and tricks
+предложения в Параметрах	suggestions in Settings
+предложения в Параметрах (2)	suggestions in Settings (2)
+предложения в Параметрах (3)	suggestions in Settings (3)
+приветственные экраны после обновлений	welcome screens after updates
+доставка рекламного контента	promotional content delivery
+авто-установка игр и промо-приложений	auto-install of games and promo apps
+облачный «оптимизированный» контент	cloud-optimised content
+реклама подписок Microsoft	Microsoft subscription ads
+подсказки Windows	Windows tips
+рекомендации в меню Пуск	recommendations in the Start menu
+реклама OneDrive в Проводнике	OneDrive ads in Explorer
+лента активности — выкл	activity feed — off
+не публиковать активность	do not publish activity
+не выгружать активность в облако	do not upload activity to the cloud
+история буфера обмена — выкл	clipboard history — off
+синхронизация буфера между устройствами — выкл	clipboard sync across devices — off
+не собирать набранный текст	do not collect typed text
+не собирать рукописный ввод	do not collect handwriting
+не собирать контакты	do not harvest contacts
+персонализация ввода — отказ	input personalisation — declined
+облачное распознавание речи — выкл	online speech recognition — off
+не отдавать сайтам список языков	do not give websites the language list
+приложениям запрещена диагностика других приложений	apps cannot run diagnostics on other apps
+поиск Bing в меню Пуск — выкл	Bing search in Start — off
+согласие Cortana снято	Cortana consent withdrawn
+история поиска на устройстве — выкл	device search history — off
+показ истории поиска — выкл	showing search history — off
+Cortana — выкл	Cortana — off
+веб-поиск из Пуска — выкл	web search from Start — off
+не обращаться к вебу при поиске	do not reach the web when searching
+поиск не использует геолокацию	search does not use location
+облачный поиск по OneDrive/Outlook — выкл	cloud search in OneDrive/Outlook — off
+рекламные подсказки в поле поиска — выкл	promoted suggestions in the search box — off
+Windows Copilot — выкл	Windows Copilot — off
+Windows Copilot — выкл для всех	Windows Copilot — off for everyone
+кнопка Copilot на панели задач — убрать	Copilot button on the taskbar — removed
+Recall (снимки экрана) — выкл	Recall (screen snapshots) — off
+запрет включения Recall	Recall cannot be enabled
+Recall — выкл для пользователя	Recall — off for this user
+Click to Do — выкл	Click to Do — off
+сохранение снимков экрана — выкл	saving screen snapshots — off
+Copilot в Блокноте — выкл	Copilot in Notepad — off
+Paint Cocreator — выкл	Paint Cocreator — off
+Paint: генеративная заливка — выкл	Paint: generative fill — off
+Paint Image Creator — выкл	Paint Image Creator — off
+Edge: Copilot не читает страницы	Edge: Copilot does not read pages
+Edge: Copilot без контекста вкладок	Edge: Copilot without tab context
+Edge: ИИ-подсказки при наборе — выкл	Edge: AI writing suggestions — off
+Edge: ИИ-поиск по истории — выкл	Edge: AI history search — off
+Edge: извлечение сущностей — выкл	Edge: entity extraction — off
+Edge: значок Copilot — убрать	Edge: Copilot icon — removed
+Проводник: облачные «недавние» — выкл	Explorer: cloud recent files — off
+Пуск: раздел «Рекомендуем» — скрыть	Start: Recommended section — hidden
+Проводник: рекомендации в «Главной» — выкл	Explorer: recommendations on Home — off
+статистика использования — выкл	usage statistics — off
+диагностические данные — выкл	diagnostic data — off
+не отправлять адреса сайтов	do not send site addresses
+персонализация рекламы — выкл	ad personalisation — off
+отзывы — выкл	feedback — off
+шопинг-ассистент — выкл	shopping assistant — off
+не отправлять ошибочные адреса	do not send mistyped addresses
+подсказки поиска (отправка ввода) — выкл	search suggestions (sends typing) — off
+боковая панель Copilot — выкл	Copilot sidebar — off
+блокировка отслеживания — сбалансированная	tracking prevention — balanced
+не раздавать обновления в интернет	do not share updates to the internet
+служба геолокации — выкл	location service — off
+поставщик местоположения Windows — выкл	Windows location provider — off
+доступ приложений к местоположению — запрещён	app access to location — denied
+«Поиск устройства» (отправка координат) — выкл	Find My Device (sends coordinates) — off
+виджеты и лента новостей MSN — выкл	widgets and the MSN news feed — off
+кнопка виджетов на панели задач — убрать	widgets button on the taskbar — removed
+лента новостей и интересов — выкл (запасной ключ)	news and interests feed — off (fallback key)
+Защитник: облачная отправка MAPS — выкл	Defender: MAPS cloud reporting — off
+Защитник: отправка образцов файлов — никогда	Defender: sample submission — never
+служба DiagTrack (телеметрия)	DiagTrack service (telemetry)
+служба dmwappushservice (WAP push)	dmwappushservice (WAP push)
+OneDrive: синхронизация файлов — выкл	OneDrive: file sync — off
+OneDrive: старая синхронизация — выкл	OneDrive: legacy sync — off
+OneDrive: не синхронизировать по лимитной сети	OneDrive: no sync on metered networks
+OneDrive: личная синхронизация — выкл	OneDrive: personal sync — off
+OneDrive: реклама в Проводнике — выкл	OneDrive: ads in Explorer — off
+OneDrive: задачи обновления — выкл	OneDrive: update tasks — off
+главный сборщик телеметрии (Diagtrack-Listener)	main telemetry collector (Diagtrack-Listener)
+сборщик Diagtrack (второй вариант)	Diagtrack collector (second variant)
+сборщик программы улучшения качества (SQM)	Customer Experience collector (SQM)
+трассировка сеансов Wi-Fi	Wi-Fi session tracing
+трассировка первоначальной настройки	first-run setup tracing
+диагностический журнал DiagLog	DiagLog diagnostic log
+трассировка планировщика (UBPM)	scheduler tracing (UBPM)
+трассировка AssignedAccess	AssignedAccess tracing
+трассировка запуска приложений (AppModel)	app launch tracing (AppModel)
+запрет включения сборщика телеметрии	telemetry collector cannot be enabled
+блок телеметрийных доменов в hosts	telemetry domains blocked in hosts
+блокировка адресов сбора телеметрии	telemetry collection addresses blocked
+Windows: шифрованный DNS — запретить	Windows: encrypted DNS — blocked
+Edge: шифрованный DNS — выкл	Edge: encrypted DNS — off
+Chrome: шифрованный DNS — выкл	Chrome: encrypted DNS — off
+исходящие DiagTrack — блок	DiagTrack outbound — blocked
+исходящие dmwappushservice — блок	dmwappushservice outbound — blocked
+исходящие Windows Error Reporting — блок	Windows Error Reporting outbound — blocked
+исходящие CompatTelRunner — блок	CompatTelRunner outbound — blocked
+исходящие DeviceCensus — блок	DeviceCensus outbound — blocked
+исходящие wsqmcons (CEIP) — блок	wsqmcons (CEIP) outbound — blocked
+NVIDIA: участие в сборе данных — отказ	NVIDIA: data collection — declined
+NVIDIA: телеметрия FTS (1) — выкл	NVIDIA: FTS telemetry (1) — off
+NVIDIA: телеметрия FTS (2) — выкл	NVIDIA: FTS telemetry (2) — off
+NVIDIA: телеметрия FTS (3) — выкл	NVIDIA: FTS telemetry (3) — off
+NVIDIA: служба NvTelemetryContainer	NVIDIA: NvTelemetryContainer service
+NVIDIA: задачи телеметрии NvTm*	NVIDIA: NvTm* telemetry tasks
+VS Code: телеметрия — выкл	VS Code: telemetry — off
+VS Code: эксперименты — выкл	VS Code: experiments — off
+VS Code: опросы — выкл	VS Code: surveys — off
+Chrome: статистика использования — выкл	Chrome: usage statistics — off
+Chrome: отправка адресов сайтов — выкл	Chrome: sending site addresses — off
+Chrome: не отправлять ошибочные адреса	Chrome: do not send mistyped addresses
+Chrome: облачная проверка орфографии — выкл	Chrome: cloud spell check — off
+Chrome: измерение рекламы — выкл	Chrome: ad measurement — off
+Chrome: рекламные темы — выкл	Chrome: ad topics — off
+Chrome: реклама по сайтам — выкл	Chrome: site-suggested ads — off
+Chrome: окно Privacy Sandbox — выкл	Chrome: Privacy Sandbox prompt — off
+Firefox: телеметрия — выкл	Firefox: telemetry — off
+Firefox: исследования — выкл	Firefox: studies — off
+Office: телеметрия — ни базовой, ни расширенной	Office: telemetry — neither basic nor extended
+Office: телеметрия клиента — выкл	Office: client telemetry — off
+Office: данные клиента — не отправлять	Office: customer data — not sent
+Office: отзывы — выкл	Office: feedback — off
+Office: снимки экрана в отзывах — выкл	Office: screenshots in feedback — off
+PowerShell 7: телеметрия — выкл	PowerShell 7: telemetry — off
+PowerShell 7: проверка обновлений — выкл	PowerShell 7: update check — off
+.NET SDK: телеметрия — выкл	.NET SDK: telemetry — off
+Visual Studio: программа улучшения качества — отказ	Visual Studio: Customer Experience Program — declined
+Visual Studio: телеметрия — выкл	Visual Studio: telemetry — off
+Visual Studio: окно отзывов — выкл	Visual Studio: feedback dialog — off
+# --- строки раздела «Результат» ---
+Результат: что было до программы и что стало	Result: before this program and now
+Снимок «до» будет сделан автоматически при первом применении настроек	The "before" snapshot is taken automatically the first time you apply settings
+Настроек приватности на месте	Privacy settings in place
+Сборщиков трассировки выключено	Trace collectors turned off
+Задач телеметрии ещё работает	Telemetry tasks still running
+Доменов телеметрии не отвечает	Telemetry domains not answering
+Правил брандмауэра против телеметрии	Firewall rules against telemetry
+Событий телеметрии в сутки	Telemetry events per day
+Показатель	Metric
+Было	Before
+Стало	Now
+Снимок «до» сделан 	"Before" snapshot taken
+, текущее состояние — 	, current state —
+из	of
+Сессии трассировки телеметрии	Telemetry trace sessions
+нет на этой системе	not present on this system

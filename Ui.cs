@@ -1208,7 +1208,7 @@ namespace Win11Privacy
                     if (!all && ok) continue;   // при несоответствиях показываем только их
                     Color dot = ok ? Theme.Ok : Theme.Err;
                     using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, u * 1.9F, y + (u * 1.7F - u * 0.45F) / 2F, u * 0.45F, u * 0.45F);
-                    string nm = Json.GetStr(it, "name"); string act = Json.GetStr(it, "actual");
+                    string nm = L.T(Json.GetStr(it, "name")); string act = L.T(Json.GetStr(it, "actual"));
                     Size acs = TextRenderer.MeasureText(act, Font);
                     TextRenderer.DrawText(g, nm, Font, new Rectangle((int)(u * 2.9F), y, Width - (int)(u * 2.9F) - acs.Width - (int)(u * 1.0F), (int)(u * 1.7F)),
                         Theme.TextDim, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);

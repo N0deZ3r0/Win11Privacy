@@ -76,7 +76,10 @@ param(
     # --- полный откат и все разрешения ---
     [switch]$RestoreAll,
     [switch]$ChangeLog,
-    [switch]$SpyAll
+    [switch]$SpyAll,
+    # --- доказательство результата ---
+    [switch]$Proof,
+    [switch]$ProofSave
 )
 
 $ErrorActionPreference = 'Continue'
@@ -482,6 +485,20 @@ Def 'onedrive' 'reg' 'HKCU:\Software\Microsoft\OneDrive' 'DisablePersonalSync' 1
 Def 'onedrive' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'ShowSyncProviderNotifications' 0 'DWord' 'OneDrive: реклама в Проводнике — выкл'
 Def 'onedrive' 'taskglob' 'OneDrive*' '' 'Disabled' '' 'OneDrive: задачи обновления — выкл'
 
+# Сессии трассировки запускаются при загрузке самой Windows и пишут телеметрию
+# независимо от службы DiagTrack. Start = 0 отключает сборщик.
+$al = 'HKLM:\SYSTEM\CurrentControlSet\Control\WMI\Autologger'
+Def 'etw' 'regif' "$al\AutoLogger-Diagtrack-Listener" 'Start' 0 'DWord' 'главный сборщик телеметрии (Diagtrack-Listener)'
+Def 'etw' 'regif' "$al\Diagtrack-Listener" 'Start' 0 'DWord' 'сборщик Diagtrack (второй вариант)'
+Def 'etw' 'regif' "$al\SQMLogger" 'Start' 0 'DWord' 'сборщик программы улучшения качества (SQM)'
+Def 'etw' 'regif' "$al\WiFiSession" 'Start' 0 'DWord' 'трассировка сеансов Wi-Fi'
+Def 'etw' 'regif' "$al\CloudExperienceHostOobe" 'Start' 0 'DWord' 'трассировка первоначальной настройки'
+Def 'etw' 'regif' "$al\DiagLog" 'Start' 0 'DWord' 'диагностический журнал DiagLog'
+Def 'etw' 'regif' "$al\UBPM" 'Start' 0 'DWord' 'трассировка планировщика (UBPM)'
+Def 'etw' 'regif' "$al\Microsoft-Windows-AssignedAccess-Trace" 'Start' 0 'DWord' 'трассировка AssignedAccess'
+Def 'etw' 'regif' "$al\AppModel" 'Start' 0 'DWord' 'трассировка запуска приложений (AppModel)'
+Def 'etw' 'reg' 'HKLM:\SYSTEM\CurrentControlSet\Control\WMI\Autologger\AutoLogger-Diagtrack-Listener' 'Enabled' 0 'DWord' 'запрет включения сборщика телеметрии'
+
 Def 'hosts' 'hosts' '' '' '' '' 'блок телеметрийных доменов в hosts'
 
 # Блокировка самих адресов: hosts телеметрия обходит через шифрованный DNS
@@ -542,14 +559,14 @@ Def 'app_vs' 'reg' 'HKCU:\Software\Microsoft\VisualStudio\Telemetry' 'TurnOffSwi
 Def 'app_vs' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\VisualStudio\Feedback' 'DisableFeedbackDialog' 1 'DWord' 'Visual Studio: окно отзывов — выкл'
 
 $script:ModuleOrder = @('telemetry','errors','activity','input','edge','delivery','location','ads','widgets','search','copilot','ai',
-                        'defender','onedrive','services','hosts','firewall','fwips','doh','buffer','app_nvidia','app_vscode','app_chrome','app_firefox',
+                        'defender','onedrive','services','etw','hosts','firewall','fwips','doh','buffer','app_nvidia','app_vscode','app_chrome','app_firefox',
                         'app_office','app_devtools','app_vs','oem','cleanup','startup')
 $script:ModuleTitles = @{
     telemetry='Телеметрия и диагностика'; errors='Отчёты об ошибках'; activity='История активности и буфер обмена';
     input='Персонализация ввода, рукописный ввод, речь'; edge='Microsoft Edge'; delivery='Раздача обновлений другим ПК';
     location='Геолокация и поиск устройства'; ads='Рекламный ID и реклама в интерфейсе'; widgets='Виджеты и лента новостей';
     search='Поиск: Bing, Cortana, облако'; copilot='Copilot и Recall';
-    ai='ИИ-функции Windows'; defender='Защитник: облако и образцы'; onedrive='OneDrive: синхронизация и реклама'; services='Службы и задачи телеметрии'; hosts='Блокировка телеметрийных доменов (hosts)';
+    ai='ИИ-функции Windows'; defender='Защитник: облако и образцы'; etw='Сессии трассировки телеметрии'; onedrive='OneDrive: синхронизация и реклама'; services='Службы и задачи телеметрии'; hosts='Блокировка телеметрийных доменов (hosts)';
     firewall='Брандмауэр: блокировка служб телеметрии'; fwips='Брандмауэр: адреса сбора телеметрии'; doh='Шифрованный DNS (обход блокировки)'; buffer='Неотправленная телеметрия'; app_nvidia='NVIDIA';
     app_vscode='Visual Studio Code'; app_chrome='Google Chrome'; app_firefox='Mozilla Firefox'; app_office='Microsoft Office';
     app_devtools='PowerShell 7 / .NET SDK'; app_vs='Visual Studio'; oem='Компоненты сбора данных производителя';
@@ -647,6 +664,11 @@ function Apply-Def {
     param($d)
     switch ($d.T) {
         'reg' { Set-Reg -Path $d.P -Name $d.N -Value $d.V -Type $d.Type -Comment $d.C }
+        'regif' {
+            # сессия трассировки есть не на каждой сборке Windows — чего нет, то не создаём
+            if (Test-Path -LiteralPath $d.P) { Set-Reg -Path $d.P -Name $d.N -Value $d.V -Type $d.Type -Comment $d.C }
+            else { Write-Log ("   [-] {0} -- нет на этой системе" -f $d.C) }
+        }
         'svc' {
             if ($DryRun) { Write-Log "   [тест] $($d.C) -- отключить"; return }
             try {
@@ -699,6 +721,14 @@ function Check-Def {
     param($d)
     $ok = $false; $actual = ''
     switch ($d.T) {
+        'regif' {
+            if (-not (Test-Path -LiteralPath $d.P)) { $ok = $true; $actual = 'нет на этой системе' }
+            else {
+                $v = Get-RegValue $d.P $d.N
+                $actual = if ($null -eq $v) { 'не задано' } else { "$v" }
+                $ok = ($null -ne $v) -and ("$v" -eq "$($d.V)")
+            }
+        }
         'reg' {
             $v = Get-RegValue $d.P $d.N
             $actual = if ($null -eq $v) { 'не задано' } else { "$v" }
@@ -1444,6 +1474,7 @@ if ($XrayDisable) {
 
 if ($XrayScan) {
     $r = Invoke-XrayScan -Hours $XrayHours -Max $XrayMax
+    if (-not $r.error) { try { Save-Json 'xray-last.json' @{ time = $r.time; perDay = $r.perDay; mbPerDay = $r.mbPerDay } } catch { } }
     if ($XrayBaseline -and -not $r.error) {
         Save-Json 'xray-baseline.json' @{ time = $r.time; perDay = $r.perDay; mbPerDay = $r.mbPerDay; total = $r.total; hours = $r.hours }
         $r.savedBaseline = $true
@@ -2191,6 +2222,68 @@ if ($RemoveApps) {
 }
 
 # =========================================================================== #
+#  ДОКАЗАТЕЛЬСТВО РЕЗУЛЬТАТА
+#  Индекс говорит лишь «настройки на месте». Здесь собирается то, что можно
+#  сравнить «до» и «после»: сколько событий уходило, сколько доменов молчит,
+#  сколько сборщиков осталось включёнными и сколько телеметрии ждёт отправки.
+# =========================================================================== #
+function Get-ProofSnapshot {
+    $ok = 0; $tot = 0; $etwOff = 0; $etwTotal = 0
+    foreach ($d in $script:Defs) {
+        if ($d.M -in @('cleanup', 'startup', 'buffer', 'oem')) { continue }
+        $r = Check-Def $d
+        $tot++
+        if ($r.ok) { $ok++ }
+        if ($d.M -eq 'etw') { $etwTotal++; if ($r.ok) { $etwOff++ } }
+    }
+    $dns = @(Get-DnsEvidence)
+    $buf = Get-BufferInfo
+    $fw = @(Get-NetFirewallRule -Group $script:FwGroup -ErrorAction SilentlyContinue).Count
+    $base = Load-Json 'xray-baseline.json'
+    $tasks = 0
+    try {
+        foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+            if (($t.TaskPath + $t.TaskName) -match 'Appraiser|Consolidator|UsbCeip|DmClient|QueueReporting|ProgramDataUpdater|KernelCeip|Sqm-Tasks|GatherNetworkInfo|Device Information') {
+                if ($t.State -ne 'Disabled') { $tasks++ }
+            }
+        }
+    } catch { }
+    return @{
+        time       = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+        ok         = $ok
+        total      = $tot
+        dnsBlocked = @($dns | Where-Object { $_.blocked }).Count
+        dnsOpen    = @($dns | Where-Object { -not $_.blocked }).Count
+        bufferMb   = $buf.mb
+        bufferFiles= $buf.files
+        fwRules    = $fw
+        etwOff     = $etwOff
+        etwTotal   = $etwTotal
+        tasksLive  = $tasks
+        xrayPerDay = $(if ($base -and $base.perDay) { [int]$base.perDay } else { 0 })
+        diagTrack  = $(try { [string](Get-Service DiagTrack -ErrorAction Stop).StartType } catch { 'нет' })
+    }
+}
+
+if ($ProofSave) {
+    $snap = Get-ProofSnapshot
+    Save-Json 'proof-before.json' $snap
+    Emit-Json $snap
+    exit 0
+}
+
+if ($Proof) {
+    $before = Load-Json 'proof-before.json'
+    $after = Get-ProofSnapshot
+    $xrayNow = 0
+    $xr = Load-Json 'xray-last.json'
+    if ($xr -and $xr.perDay) { $xrayNow = [int]$xr.perDay }
+    Emit-Json @{ before = $before; after = $after; xrayNow = $xrayNow
+                 has = [bool]$before }
+    exit 0
+}
+
+# =========================================================================== #
 #  САМОПРОВЕРКА: может ли программа реально менять настройки на этом ПК
 # =========================================================================== #
 if ($SelfTest) {
@@ -2449,6 +2542,11 @@ Write-Log "Модули  : $($Modules -join ', ')"
 if ($DryRun) { Write-Log 'РЕЖИМ ТЕСТА: изменения не применяются.' }
 if ($edInfo.kind -ne 'enterprise' -and (Use-Module 'telemetry')) {
     Write-Log 'Примечание: на редакциях Home/Pro минимальный уровень телеметрии — «Обязательные данные»; полное отключение доступно только в Enterprise/Education.'
+}
+
+# --- Снимок «до» для доказательства результата -------------------------- #
+if (-not $DryRun -and -not (Load-Json 'proof-before.json')) {
+    try { Save-Json 'proof-before.json' (Get-ProofSnapshot); Write-Log 'Состояние «до» запомнено — потом покажем разницу.' } catch { }
 }
 
 # --- Резервная копия -------------------------------------------------------- #

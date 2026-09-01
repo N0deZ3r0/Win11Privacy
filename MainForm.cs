@@ -46,7 +46,7 @@ namespace Win11Privacy
         private Label _dossierState;
         private ModernButton _btnDossierRefresh, _btnDossierWipe, _btnDossierAll;
         private bool _spyShowAll;
-        private Dictionary<string, object> _lastSpy, _lastFoot;
+        private Dictionary<string, object> _lastSpy, _lastFoot, _lastProof;
         private TextBox _search;
         private NavHost _navHost;
         private TitleBar _titleBar;
@@ -1591,6 +1591,34 @@ namespace Win11Privacy
                  .Append(Json.GetInt(_lastMonitor, "telemetryHits")).Append(L.T("</div><div class=\"s\">распознано по домену</div></div></div>"));
             }
 
+            // Результат: до и после
+            if (_lastProof != null && Json.GetObj(_lastProof, "before") != null)
+            {
+                Dictionary<string, object> pb = Json.GetObj(_lastProof, "before");
+                Dictionary<string, object> pa = Json.GetObj(_lastProof, "after");
+                h.Append("<h2>").Append(Esc(L.T("Результат: что было до программы и что стало"))).Append("</h2>");
+                h.Append("<table><tr><th>").Append(Esc(L.T("Показатель"))).Append("</th><th>")
+                 .Append(Esc(L.T("Было"))).Append("</th><th>").Append(Esc(L.T("Стало"))).Append("</th></tr>");
+                string[,] rows = {
+                    { L.T("Настроек приватности на месте"), "ok" },
+                    { L.T("Сборщиков трассировки выключено"), "etwOff" },
+                    { L.T("Задач телеметрии ещё работает"), "tasksLive" },
+                    { L.T("Доменов телеметрии не отвечает"), "dnsBlocked" },
+                    { L.T("Правил брандмауэра против телеметрии"), "fwRules" }
+                };
+                for (int i = 0; i < rows.GetLength(0); i++)
+                    h.Append("<tr><td>").Append(Esc(rows[i, 0])).Append("</td><td>")
+                     .Append(Json.GetInt(pb, rows[i, 1])).Append("</td><td>")
+                     .Append(Json.GetInt(pa, rows[i, 1])).Append("</td></tr>");
+                int xb2 = Json.GetInt(pb, "xrayPerDay"), xa2 = Json.GetInt(_lastProof, "xrayNow");
+                if (xb2 > 0 && xa2 > 0)
+                    h.Append("<tr><td>").Append(Esc(L.T("Событий телеметрии в сутки"))).Append("</td><td>")
+                     .Append(xb2).Append("</td><td>").Append(xa2).Append("</td></tr>");
+                h.Append("</table>");
+                h.Append("<div class=\"sub\">").Append(Esc(L.T("Снимок «до» сделан "))).Append(Esc(Json.GetStr(pb, "time")))
+                 .Append(Esc(L.T(", текущее состояние — "))).Append(Esc(Json.GetStr(pa, "time"))).Append("</div>");
+            }
+
             // Досье
             if (_lastSpy != null)
             {
@@ -2642,6 +2670,15 @@ namespace Win11Privacy
             List<string> skipAudit = SkippedItems();
             string auditArgs = "-Audit";
             if (skipAudit.Count > 0) auditArgs += " -SkipItems " + string.Join(",", skipAudit.ToArray());
+            RunJson("-Proof", L.T("Проверка состояния системы…"), delegate(Dictionary<string, object> pf)
+            {
+                _lastProof = pf;
+                RunAuditInner(auditArgs);
+            });
+        }
+
+        private void RunAuditInner(string auditArgs)
+        {
             RunJson(auditArgs, L.T("Проверка состояния системы…"), delegate(Dictionary<string, object> d)
             {
                 if (d == null) { _auditWhen.Text = L.T("Не удалось получить данные."); return; }
@@ -2669,6 +2706,7 @@ namespace Win11Privacy
             _auditTiles.Controls.Add(Tile(L.T("Обращения к телеметрии"), dns.Count.ToString(), leaked + L.T(" не заблокировано (из кэша DNS)"), leaked == 0 ? Theme.Ok : Theme.Err));
 
             _auditGroups.Controls.Clear();
+            RenderProof();
             foreach (object go in Json.GetArr(d, "groups"))
             {
                 Dictionary<string, object> g = Json.Obj(go);
@@ -2685,6 +2723,48 @@ namespace Win11Privacy
             }
             try { _auditGroups.AutoScrollPosition = Point.Empty; } catch { }
             _auditGroups.Restack();
+        }
+
+        // Результат, а не намерение: что было до программы и что стало
+        private void RenderProof()
+        {
+            if (_lastProof == null || _auditGroups == null) return;
+            Dictionary<string, object> before = Json.GetObj(_lastProof, "before");
+            Dictionary<string, object> after = Json.GetObj(_lastProof, "after");
+            if (after == null) return;
+
+            SectionHeader sh = new SectionHeader(L.T("Результат: что было до программы и что стало"));
+            sh.Font = Font; _auditGroups.Controls.Add(sh);
+
+            if (before == null)
+            {
+                _auditGroups.Controls.Add(new KvRow(
+                    L.T("Снимок «до» будет сделан автоматически при первом применении настроек"),
+                    "", false) { Font = this.Font });
+                return;
+            }
+
+            AddProofRow(L.T("Настроек приватности на месте"), Json.GetInt(before, "ok"), Json.GetInt(after, "ok"),
+                        " " + L.T("из") + " " + Json.GetInt(after, "total"), true);
+            AddProofRow(L.T("Сборщиков трассировки выключено"), Json.GetInt(before, "etwOff"), Json.GetInt(after, "etwOff"),
+                        " " + L.T("из") + " " + Json.GetInt(after, "etwTotal"), true);
+            AddProofRow(L.T("Задач телеметрии ещё работает"), Json.GetInt(before, "tasksLive"), Json.GetInt(after, "tasksLive"), "", false);
+            AddProofRow(L.T("Доменов телеметрии не отвечает"), Json.GetInt(before, "dnsBlocked"), Json.GetInt(after, "dnsBlocked"), "", true);
+            AddProofRow(L.T("Правил брандмауэра против телеметрии"), Json.GetInt(before, "fwRules"), Json.GetInt(after, "fwRules"), "", true);
+
+            int xb = Json.GetInt(before, "xrayPerDay");
+            int xa = Json.GetInt(_lastProof, "xrayNow");
+            if (xb > 0 && xa > 0)
+                AddProofRow(L.T("Событий телеметрии в сутки"), xb, xa, "", false);
+        }
+
+        // Строка «было → стало». more = «больше значит лучше»
+        private void AddProofRow(string name, int before, int after, string suffix, bool more)
+        {
+            bool better = more ? (after > before) : (after < before);
+            bool same = (after == before);
+            string arrow = before + " → " + after + suffix;
+            _auditGroups.Controls.Add(new KvRow(name, arrow, !same && !better) { Font = this.Font });
         }
 
         private StatTile Tile(string cap, string val, string sub, Color accent)
@@ -2902,7 +2982,7 @@ namespace Win11Privacy
                     foreach (object io2 in items)
                     {
                         Dictionary<string, object> it = Json.Obj(io2);
-                        SubOptionRow r = new SubOptionRow(Json.GetStr(it, "id"), Json.GetStr(it, "name"));
+                        SubOptionRow r = new SubOptionRow(Json.GetStr(it, "id"), L.T(Json.GetStr(it, "name")));
                         r.Font = Font;
                         m.Subs.Add(r);
                         _settingsList.Controls.Add(r);
