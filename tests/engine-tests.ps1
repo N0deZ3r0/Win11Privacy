@@ -165,6 +165,58 @@ if ($found.Count -eq $wanted.Count) {
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
+Write-Host 'Форма ответов: список из одного элемента обязан остаться списком'
+$rawSnap = Run-Engine @('-SnapshotList')
+$lineSnap = @($rawSnap -split "`n" | Where-Object { $_.TrimStart().StartsWith('###JSON###') })[0]
+Check 'снимки приходят списком' ($lineSnap -match '"snapshots"\s*:\s*\[') $lineSnap
+$rawApps = Run-Engine @('-ListApps')
+$lineApps = @($rawApps -split "`n" | Where-Object { $_.TrimStart().StartsWith('###JSON###') })[0]
+Check 'приложения приходят списком' ($lineApps -match '"apps"\s*:\s*\[')
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Проверка вместе с доказательством результата (один прогон вместо двух)'
+$withProof = Get-EngineJson @('-Audit', '-WithProof')
+Check 'аудит с доказательством отвечает' ($null -ne $withProof -and $null -ne $withProof.proof)
+if ($withProof -and $withProof.proof) {
+    Check 'снимок «после» есть' ($null -ne $withProof.proof.after)
+    Check 'числа снимка совпадают с аудитом' ([int]$withProof.proof.after.ok -eq [int]$withProof.ok) `
+          ("аудит " + $withProof.ok + ", снимок " + $withProof.proof.after.ok)
+    Check 'в снимке есть автозапуск' ($null -ne $withProof.proof.after.startupOn)
+}
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Запрет выхода в сеть'
+$noPath = Get-EngineJson @('-BlockApp')
+Check 'без пути к программе — понятная ошибка' ($null -ne $noPath -and "$($noPath.error)".Length -gt 0)
+
+$devFns = @('ConvertFrom-DevicePath')
+$devFound = @()
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($devFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $devFound += $fn.Name }
+}
+Check 'разбор пути ядра найден в движке' ($devFound.Count -eq 1)
+if ($devFound.Count -eq 1) {
+    $exe = (Get-Command powershell.exe).Source
+    Check 'обычный путь остаётся как есть' ((ConvertFrom-DevicePath $exe) -eq $exe)
+    $kernel = '\device\harddiskvolume999\' + $exe.Substring(3)
+    Check 'путь ядра превращается в путь с буквой диска' ((ConvertFrom-DevicePath $kernel) -eq $exe) `
+          ("получено: " + (ConvertFrom-DevicePath $kernel))
+    Check 'сетевой путь не выдаётся за локальный' ((ConvertFrom-DevicePath '\device\mup\srv\share\x.exe') -eq '')
+}
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Порядок объявлений в движке'
+$engineText = Get-Content -LiteralPath $engine -Raw -Encoding UTF8
+$posStartup = $engineText.IndexOf('function Get-StartupList')
+$posGuard = $engineText.IndexOf('function Run-Guard')
+Check 'функции автозагрузки объявлены выше стража' ($posStartup -gt 0 -and $posStartup -lt $posGuard) `
+      ("Get-StartupList на " + $posStartup + ", Run-Guard на " + $posGuard)
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
 Write-Host 'Применение (тестовый прогон, ничего не меняется)'
 if ($isAdmin) {
     $mods = 'telemetry,errors,activity,input,edge,ads,copilot'

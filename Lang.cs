@@ -40,7 +40,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(752, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(821, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -793,6 +793,75 @@ namespace Win11Privacy
             _map["удалённый доступ: ждёт подключения при каждом входе"] = "remote access: waits for connections at every sign-in";
             _map["торрент-клиент стартует вместе с Windows"] = "torrent client starts with Windows";
             _map["помощник Microsoft"] = "Microsoft assistant";
+            _map["Базовый"] = "Basic";
+            _map["Строгий"] = "Strict";
+            _map["Максимум"] = "Maximum";
+            _map["Набор «"] = "Preset \"";
+            _map["»: отмечено разделов — "] = "\": sections selected — ";
+            _map["Кто отправляет — можно закрыть выход в сеть"] = "Who is sending — you can cut their network access";
+            _map["Отклонено"] = "Rejected";
+            _map["попыток срезал брандмауэр"] = "attempts cut by the firewall";
+            _map["Заблокировано"] = "Blocked";
+            _map["Запретить сеть"] = "Block network";
+            _map["Запрет выхода в сеть"] = "Blocking network access";
+            _map["Запрет выхода в сеть…"] = "Blocking network access…";
+            _map["Возврат доступа в сеть…"] = "Restoring network access…";
+            _map["Программе будет запрещён выход в интернет:\n\n"] = "This program will be denied internet access:\n\n";
+            _map["\n\nПравило создаётся в брандмауэре Windows и снимается\n"] = "\n\nThe rule is created in Windows Firewall and removed by\n";
+            _map["этой же кнопкой или общим откатом. Программа останется\n"] = "the same button or by the full rollback. The program stays\n";
+            _map["на месте, но потеряет связь с сетью.\n\nПродолжить?"] = "installed but loses its network connection.\n\nContinue?";
+            _map["Не удалось изменить правило брандмауэра."] = "Could not change the firewall rule.";
+            _map["движок не ответил"] = "the engine did not answer";
+            _map["Выход в сеть закрыт."] = "Network access blocked.";
+            _map["Выход в сеть возвращён."] = "Network access restored.";
+            _map["\n\nПродолжить?"] = "\n\nContinue?";
+            _map["\nСлужба DiagTrack: "] = "\nDiagTrack service: ";
+            _map["\nБрандмауэр (правил): "] = "\nFirewall (rules): ";
+            _map["\nБлок hosts: "] = "\nhosts block: ";
+            _map["запускается"] = "running";
+            _map["<title>Отчёт о приватности Windows 11</title><style>"] = "<title>Windows 11 privacy report</title><style>";
+            _map["<h1>Отчёт о приватности Windows 11</h1>"] = "<h1>Windows 11 privacy report</h1>";
+            _map["<div class=\"sub\">Составлен "] = "<div class=\"sub\">Compiled ";
+            _map["<h2>Проверка настроек</h2><div class=\"grid\">"] = "<h2>Settings check</h2><div class=\"grid\">";
+            _map["<div class=\"tile\"><div class=\"c\">Индекс приватности</div><div class=\"v\">"] = "<div class=\"tile\"><div class=\"c\">Privacy index</div><div class=\"v\">";
+            _map[" настроек подтверждено</div></div>"] = " settings confirmed</div></div>";
+            _map["<div class=\"tile\"><div class=\"c\">Не применено</div><div class=\"v\">"] = "<div class=\"tile\"><div class=\"c\">Not applied</div><div class=\"v\">";
+            _map["</div><div class=\"s\">требуют внимания</div></div></div>"] = "</div><div class=\"s\">need attention</div></div></div>";
+            _map["<table><tr><th>Раздел</th><th>Применено</th></tr>"] = "<table><tr><th>Section</th><th>Applied</th></tr>";
+            _map["<h2>Обращения к доменам телеметрии (кэш DNS)</h2><table><tr><th>Домен</th><th>Состояние</th></tr>"] = "<h2>Telemetry domains contacted (DNS cache)</h2><table><tr><th>Domain</th><th>State</th></tr>";
+            _map["<h2>Рентген телеметрии — что было собрано</h2><div class=\"grid\">"] = "<h2>Telemetry X-ray — what was collected</h2><div class=\"grid\">";
+            _map["<div class=\"tile\"><div class=\"c\">Событий в сутки</div><div class=\"v\">"] = "<div class=\"tile\"><div class=\"c\">Events per day</div><div class=\"v\">";
+            _map[" МБ данных</div></div>"] = " MB of data</div></div>";
+            _map["<div class=\"tile\"><div class=\"c\">Прогноз за год</div><div class=\"v\">"] = "<div class=\"tile\"><div class=\"c\">Forecast for a year</div><div class=\"v\">";
+            _map[" МБ в год</div></div>"] = " MB per year</div></div>";
+            _map["<div class=\"tile\"><div class=\"c\">Было до настройки</div><div class=\"v\">"] = "<div class=\"tile\"><div class=\"c\">Before the changes</div><div class=\"v\">";
+            _map["</div><div class=\"s\">событий в сутки</div></div>"] = "</div><div class=\"s\">events per day</div></div>";
+            _map["<table><tr><th>Категория данных</th><th>Событий</th><th>Доля</th><th>Что это</th></tr>"] = "<table><tr><th>Data category</th><th>Events</th><th>Share</th><th>What it is</th></tr>";
+            _map["<h2>Пример настоящего события: "] = "<h2>A real event as sent: ";
+            _map["<h2>Монитор исходящих соединений</h2><div class=\"grid\">"] = "<h2>Outgoing connections monitor</h2><div class=\"grid\">";
+            _map["<div class=\"tile\"><div class=\"c\">Соединений</div><div class=\"v\">"] = "<div class=\"tile\"><div class=\"c\">Connections</div><div class=\"v\">";
+            _map["</div><div class=\"s\">за 24 часа</div></div>"] = "</div><div class=\"s\">over 24 hours</div></div>";
+            _map["<div class=\"tile\"><div class=\"c\">К телеметрии</div><div class=\"v\">"] = "<div class=\"tile\"><div class=\"c\">To telemetry</div><div class=\"v\">";
+            _map["</div><div class=\"s\">распознано по домену</div></div></div>"] = "</div><div class=\"s\">recognised by domain</div></div></div>";
+            _map["<h2>Автозапуск: что стартует вместе с Windows</h2><div class=\"grid\">"] = "<h2>Startup: what starts with Windows</h2><div class=\"grid\">";
+            _map["<div class=\"tile\"><div class=\"c\">Записей всего</div><div class=\"v\">"] = "<div class=\"tile\"><div class=\"c\">Entries in total</div><div class=\"v\">";
+            _map["</div><div class=\"s\">в реестре, папках и планировщике</div></div>"] = "</div><div class=\"s\">registry, folders and task scheduler</div></div>";
+            _map["<div class=\"tile\"><div class=\"c\">Запускается</div><div class=\"v\">"] = "<div class=\"tile\"><div class=\"c\">Running</div><div class=\"v\">";
+            _map["</div><div class=\"s\">из них лишних: "] = "</div><div class=\"s\">of them not needed: ";
+            _map["<table><tr><th>Программа</th><th>Что это</th><th>Откуда</th><th>Состояние</th></tr>"] = "<table><tr><th>Program</th><th>What it is</th><th>Where from</th><th>State</th></tr>";
+            _map["<h2>Предустановленные приложения</h2>"] = "<h2>Preinstalled apps</h2>";
+            _map["<table><tr><th>Приложение</th><th>Идентификатор</th></tr>"] = "<table><tr><th>App</th><th>Identifier</th></tr>";
+            _map["<h2>Досье: кто включал камеру, микрофон и геолокацию</h2>"] = "<h2>Dossier: who turned on the camera, microphone and location</h2>";
+            _map["<table><tr><th>Программа</th><th>Датчик</th><th>Когда</th><th>Длительность</th></tr>"] = "<table><tr><th>Program</th><th>Sensor</th><th>When</th><th>Duration</th></tr>";
+            _map["<span class=\"bad\">прямо сейчас</span>"] = "<span class=\"bad\">right now</span>";
+            _map["<h2>Цифровой след на диске</h2>"] = "<h2>Digital footprint on disk</h2>";
+            _map["<table><tr><th>Что хранится</th><th>Сколько</th></tr>"] = "<table><tr><th>What is stored</th><th>How much</th></tr>";
+            _map["<div class=\"note\"><b>Честно о пределах.</b> Полностью прекратить обмен данными с Microsoft "] = "<div class=\"note\"><b>Honestly about the limits.</b> Data exchange with Microsoft cannot be stopped ";
+            _map["это ограничение редакции, а не программы.</div>"] = "that is a limit of the edition, not of this program.</div>";
+            _map["<footer>Отчёт сформирован программой «Приватность Windows 11». "] = "<footer>Report produced by \"Windows 11 Privacy\". ";
+            _map["и встроенного механизма диагностики Windows.</footer></body></html>"] = "and the built-in Windows diagnostics.</footer></body></html>";
+            _map["Win11Privacy.exe --profile \"C:\\путь\\profile.json\" --silent   тихо применить профиль\n"] = "Win11Privacy.exe --profile \"C:\\path\\profile.json\" --silent   apply a profile silently\n";
+            _map["Win11Privacy.exe --audit                                        проверка (код возврата = число несоответствий)\n"] = "Win11Privacy.exe --audit                                        check (exit code = number of mismatches)\n";
         }
     }
 }

@@ -89,6 +89,7 @@ namespace Win11Privacy
         private ModernButton _btnXrayRec, _btnXrayScan, _btnXrayBase, _btnXrayWipe, _btnReport;
         private bool _xrayRecording;
         private Dictionary<string, object> _lastXray, _lastAudit, _lastMonitor;
+        private Dictionary<string, object> _lastStartup, _lastApps;   // для отчёта
 
         // состояние из -Detect
         private Dictionary<string, object> _detect;
@@ -575,10 +576,13 @@ namespace Win11Privacy
 
             FlowLayoutPanel quick = new FlowLayoutPanel();
             quick.AutoSize = true; quick.WrapContents = false; quick.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
-            ModernButton a1 = Ghost(L.T("Выбрать всё")); a1.Click += delegate { SetAll(true); };
+            ModernButton p1 = Ghost(L.T("Базовый")); p1.Click += delegate { ApplyPreset("base"); };
+            ModernButton p2 = Ghost(L.T("Строгий")); p2.Click += delegate { ApplyPreset("strict"); };
+            ModernButton p3 = Ghost(L.T("Максимум")); p3.Click += delegate { ApplyPreset("max"); };
             ModernButton a2 = Ghost(L.T("Снять всё")); a2.Click += delegate { SetAll(false); };
             ModernButton a3 = Ghost(L.T("По умолчанию")); a3.Click += delegate { ResetDefaults(); };
-            quick.Controls.Add(a1); quick.Controls.Add(a2); quick.Controls.Add(a3);
+            quick.Controls.Add(p1); quick.Controls.Add(p2); quick.Controls.Add(p3);
+            quick.Controls.Add(a2); quick.Controls.Add(a3);
             head.Controls.Add(quick, 2, 0);
             page.Controls.Add(head, 0, 0);
 
@@ -1473,6 +1477,35 @@ namespace Win11Privacy
                 });
         }
 
+        // Закрыть программе выход в сеть прямо из списка «кто отправляет»
+        private void OnToggleAppBlock(object sender, EventArgs e)
+        {
+            NetAppRow r = sender as NetAppRow;
+            if (r == null || r.AppPath.Length == 0) return;
+            bool want = !r.Blocked;
+            if (want && MessageBox.Show(this,
+                    L.T("Программе будет запрещён выход в интернет:\n\n") + r.AppPath +
+                    L.T("\n\nПравило создаётся в брандмауэре Windows и снимается\n") +
+                    L.T("этой же кнопкой или общим откатом. Программа останется\n") +
+                    L.T("на месте, но потеряет связь с сетью.\n\nПродолжить?"),
+                    L.T("Запрет выхода в сеть"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            RunJson((want ? "-BlockApp" : "-UnblockApp") + " -AppPath \"" + r.AppPath + "\"",
+                want ? L.T("Запрет выхода в сеть…") : L.T("Возврат доступа в сеть…"),
+                delegate(Dictionary<string, object> d)
+                {
+                    string err = d != null ? Json.GetStr(d, "error") : L.T("движок не ответил");
+                    if (d == null || err.Length > 0)
+                    {
+                        MessageBox.Show(this, L.T("Не удалось изменить правило брандмауэра.") + (err.Length > 0 ? "\n\n" + err : ""),
+                            L.T("Запрет выхода в сеть"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    r.Blocked = Json.GetBool(d, "blocked");
+                    r.Invalidate();
+                    _status.Text = r.Blocked ? L.T("Выход в сеть закрыт.") : L.T("Выход в сеть возвращён.");
+                });
+        }
+
         private void OnDossierWipe(object sender, EventArgs e)
         {
             List<string> ids = new List<string>();
@@ -1639,7 +1672,8 @@ namespace Win11Privacy
                     { L.T("Сборщиков трассировки выключено"), "etwOff" },
                     { L.T("Задач телеметрии ещё работает"), "tasksLive" },
                     { L.T("Доменов телеметрии не отвечает"), "dnsBlocked" },
-                    { L.T("Правил брандмауэра против телеметрии"), "fwRules" }
+                    { L.T("Правил брандмауэра против телеметрии"), "fwRules" },
+                    { L.T("Программ стартует вместе с Windows"), "startupOn" }
                 };
                 for (int i = 0; i < rows.GetLength(0); i++)
                     h.Append("<tr><td>").Append(Esc(rows[i, 0])).Append("</td><td>")
@@ -1652,6 +1686,52 @@ namespace Win11Privacy
                 h.Append("</table>");
                 h.Append("<div class=\"sub\">").Append(Esc(L.T("Снимок «до» сделан "))).Append(Esc(Json.GetStr(pb, "time")))
                  .Append(Esc(L.T(", текущее состояние — "))).Append(Esc(Json.GetStr(pa, "time"))).Append("</div>");
+            }
+
+            // Автозапуск
+            if (_lastStartup != null)
+            {
+                h.Append(L.T("<h2>Автозапуск: что стартует вместе с Windows</h2><div class=\"grid\">"));
+                h.Append(L.T("<div class=\"tile\"><div class=\"c\">Записей всего</div><div class=\"v\">"))
+                 .Append(Json.GetInt(_lastStartup, "total")).Append(L.T("</div><div class=\"s\">в реестре, папках и планировщике</div></div>"));
+                h.Append(L.T("<div class=\"tile\"><div class=\"c\">Запускается</div><div class=\"v\">"))
+                 .Append(Json.GetInt(_lastStartup, "on")).Append(L.T("</div><div class=\"s\">из них лишних: "))
+                 .Append(Json.GetInt(_lastStartup, "advise")).Append("</div></div></div>");
+                h.Append(L.T("<table><tr><th>Программа</th><th>Что это</th><th>Откуда</th><th>Состояние</th></tr>"));
+                foreach (object o in Json.GetArr(_lastStartup, "items"))
+                {
+                    Dictionary<string, object> it = Json.Obj(o);
+                    bool on = Json.GetBool(it, "enabled");
+                    h.Append("<tr><td>").Append(Esc(Json.GetStr(it, "name"))).Append("</td><td>")
+                     .Append(Esc(L.T(Json.GetStr(it, "note")))).Append("</td><td>")
+                     .Append(Esc(L.T(Json.GetStr(it, "source")))).Append("</td><td class=\"")
+                     .Append(on ? (Json.GetBool(it, "advise") ? "bad" : "") : "ok").Append("\">")
+                     .Append(on ? L.T("запускается") : L.T("отключено")).Append("</td></tr>");
+                }
+                h.Append("</table>");
+            }
+
+            // Предустановленные приложения
+            if (_lastApps != null)
+            {
+                List<object> appItems = Json.GetArr(_lastApps, "apps");
+                int bloatCount = 0;
+                foreach (object o in appItems) if (Json.GetBool(Json.Obj(o), "bloat")) bloatCount++;
+                h.Append(L.T("<h2>Предустановленные приложения</h2>"));
+                h.Append("<div class=\"sub\">").Append(Esc(L.T("Найдено приложений: "))).Append(appItems.Count)
+                 .Append(Esc(L.T(", из них лишних: "))).Append(bloatCount).Append("</div>");
+                if (bloatCount > 0)
+                {
+                    h.Append(L.T("<table><tr><th>Приложение</th><th>Идентификатор</th></tr>"));
+                    foreach (object o in appItems)
+                    {
+                        Dictionary<string, object> a = Json.Obj(o);
+                        if (!Json.GetBool(a, "bloat")) continue;
+                        h.Append("<tr><td>").Append(Esc(L.T(Json.GetStr(a, "title")))).Append("</td><td>")
+                         .Append(Esc(Json.GetStr(a, "name"))).Append("</td></tr>");
+                    }
+                    h.Append("</table>");
+                }
             }
 
             // Досье
@@ -1907,6 +1987,7 @@ namespace Win11Privacy
                     SectionHeader sh = new SectionHeader(L.T("Не удалось получить список")); sh.Font = Font;
                     _appsList.Controls.Add(sh); _appsList.Restack(); return;
                 }
+                _lastApps = d;
                 List<object> apps = Json.GetArr(d, "apps");
                 int bloat = 0;
                 bool headBloat = false, headRest = false;
@@ -1939,11 +2020,14 @@ namespace Win11Privacy
 
         private void SelectBloat()
         {
+            // сравниваем с полным заголовком раздела: сравнение по первому слову
+            // держалось на отдельной записи в словаре и молча ломалось от правки
+            string head = L.T("Можно убрать — ставится без спроса").ToUpperInvariant();
             bool inBloat = false;
             foreach (Control c in _appsList.Controls)
             {
                 SectionHeader sh = c as SectionHeader;
-                if (sh != null) { inBloat = sh.Text.StartsWith(L.T("МОЖНО")); continue; }
+                if (sh != null) { inBloat = (sh.Text == head); continue; }
                 WipeRow r = c as WipeRow;
                 if (r != null) r.Checked = inBloat;
             }
@@ -2040,6 +2124,7 @@ namespace Win11Privacy
 
         private void RenderStartup(Dictionary<string, object> d)
         {
+            _lastStartup = d;
             _startupList.Controls.Clear();
             if (d == null)
             {
@@ -2500,6 +2585,34 @@ namespace Win11Privacy
         //  Логика выбора
         // ================================================================== //
         private void SetAll(bool on) { foreach (ModuleDef m in _mods) if (m.Row != null && (m.Installed || !m.App)) m.Row.Checked = on; }
+
+        // ================================================================== //
+        //  Готовые наборы. Выбрать «насколько жёстко» проще, чем разобраться
+        //  в двух десятках разделов: «Базовый» — то, что никому не мешает,
+        //  «Строгий» — плюс службы, домены и геолокация, «Максимум» — всё.
+        // ================================================================== //
+        private void ApplyPreset(string kind)
+        {
+            string[] baseMods = { "telemetry", "errors", "activity", "input", "edge", "delivery",
+                                  "ads", "search", "copilot", "ai", "cleanup" };
+            string[] strictAdd = { "widgets", "location", "onedrive", "defender", "services", "hosts" };
+            int n = 0;
+            foreach (ModuleDef m in _mods)
+            {
+                if (m.Row == null) continue;
+                bool on;
+                if (kind == "max") on = true;
+                else if (m.App) on = true;                       // телеметрия программ — если они есть
+                else on = Array.IndexOf(baseMods, m.Id) >= 0 ||
+                          (kind == "strict" && Array.IndexOf(strictAdd, m.Id) >= 0);
+                on = on && (m.Installed || !m.App);
+                m.Row.Checked = on;
+                if (on) n++;
+            }
+            string title = kind == "max" ? L.T("Максимум") : (kind == "strict" ? L.T("Строгий") : L.T("Базовый"));
+            _status.Text = L.T("Набор «") + title + L.T("»: отмечено разделов — ") + n + ".";
+            if (_settingsList != null) _settingsList.Invalidate(true);
+        }
         private void ResetDefaults() { foreach (ModuleDef m in _mods) if (m.Row != null) m.Row.Checked = m.DefaultOn && (m.Installed || !m.App); }
         private void UpdateApplyText() { if (_btnApply != null && _optDry != null) _btnApply.Text = _optDry.Checked ? L.T("Проверить") : L.T("Применить"); }
 
@@ -2864,14 +2977,12 @@ namespace Win11Privacy
         // ================================================================== //
         private void RunAudit()
         {
+            // один прогон вместо двух: -Audit сам отдаёт блок «до и после»,
+            // иначе все 191 проверка выполнялись дважды (около 30 секунд)
             List<string> skipAudit = SkippedItems();
-            string auditArgs = "-Audit";
+            string auditArgs = "-Audit -WithProof";
             if (skipAudit.Count > 0) auditArgs += " -SkipItems " + string.Join(",", skipAudit.ToArray());
-            RunJson("-Proof", L.T("Проверка состояния системы…"), delegate(Dictionary<string, object> pf)
-            {
-                _lastProof = pf;
-                RunAuditInner(auditArgs);
-            });
+            RunAuditInner(auditArgs);
         }
 
         private void RunAuditInner(string auditArgs)
@@ -2880,6 +2991,8 @@ namespace Win11Privacy
             {
                 if (d == null) { _auditWhen.Text = L.T("Не удалось получить данные."); return; }
                 _lastAudit = d;
+                Dictionary<string, object> pf = Json.GetObj(d, "proof");
+                if (pf != null) _lastProof = pf;
                 RenderAudit(d);
                 RefreshHome();
             });
@@ -3003,14 +3116,23 @@ namespace Win11Privacy
                 _monitorTiles.Controls.Clear();
                 _monitorTiles.Controls.Add(Tile(L.T("Исходящих соединений"), total.ToString(), L.T("за 24 часа"), Theme.Accent));
                 _monitorTiles.Controls.Add(Tile(L.T("К телеметрии"), tele.ToString(), L.T("распознано по имени домена"), tele == 0 ? Theme.Ok : Theme.Warn));
+                _monitorTiles.Controls.Add(Tile(L.T("Отклонено"), Json.GetInt(d, "blocked").ToString(), L.T("попыток срезал брандмауэр"), Theme.Ok));
                 _monitorTiles.Controls.Add(Tile(L.T("Правил брандмауэра"), Json.GetInt(d, "firewallRules").ToString(), _monitorEnabled ? L.T("монитор включён") : L.T("монитор выключен"), _monitorEnabled ? Theme.Ok : Theme.TextFaint));
 
                 _monitorList.Controls.Clear();
                 List<object> procs = Json.GetArr(d, "byProcess");
                 if (procs.Count > 0)
                 {
-                    SectionHeader sh = new SectionHeader(L.T("Кто отправляет (программы)")); sh.Font = Font; _monitorList.Controls.Add(sh);
-                    foreach (object o in procs) { Dictionary<string, object> pr = Json.Obj(o); _monitorList.Controls.Add(new KvRow(Json.GetStr(pr, "name"), Json.GetInt(pr, "count") + L.T(" соед."), false) { Font = this.Font }); }
+                    SectionHeader sh = new SectionHeader(L.T("Кто отправляет — можно закрыть выход в сеть")); sh.Font = Font; _monitorList.Controls.Add(sh);
+                    foreach (object o in procs)
+                    {
+                        Dictionary<string, object> pr = Json.Obj(o);
+                        NetAppRow r = new NetAppRow(Json.GetStr(pr, "name"), Json.GetInt(pr, "count") + L.T(" соед."),
+                                                    Json.GetStr(pr, "path"), Json.GetBool(pr, "blocked"));
+                        r.Font = Font;
+                        r.ToggleBlock += OnToggleAppBlock;
+                        _monitorList.Controls.Add(r);
+                    }
                 }
                 List<object> dests = Json.GetArr(d, "byDest");
                 if (dests.Count > 0)
@@ -3474,8 +3596,12 @@ namespace Win11Privacy
                 "\"buffer\":{\"mb\":\"4.7\",\"files\":9},\"edition\":{\"kind\":\"home\"},\"monitorEnabled\":true,\"hostsBlocked\":true}";
             RenderAudit(Json.ParseObject(audit));
 
-            string mon = "{\"enabled\":true,\"hours\":24,\"total\":146,\"telemetryHits\":23,\"firewallRules\":6,\"byProcess\":[" +
-                "{\"name\":\"svchost.exe\",\"count\":54},{\"name\":\"MoUsoCoreWorker.exe\",\"count\":22},{\"name\":\"chrome.exe\",\"count\":18},{\"name\":\"CompatTelRunner.exe\",\"count\":12},{\"name\":\"NvTelemetry.exe\",\"count\":9}]," +
+            string mon = "{\"enabled\":true,\"hours\":24,\"total\":146,\"telemetryHits\":23,\"firewallRules\":6,\"blocked\":31,\"byProcess\":[" +
+                "{\"name\":\"svchost.exe\",\"count\":54,\"path\":\"C:\\Windows\\System32\\svchost.exe\",\"blocked\":false}," +
+                "{\"name\":\"MoUsoCoreWorker.exe\",\"count\":22,\"path\":\"C:\\Windows\\UUS\\amd64\\MoUsoCoreWorker.exe\",\"blocked\":false}," +
+                "{\"name\":\"chrome.exe\",\"count\":18,\"path\":\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\",\"blocked\":false}," +
+                "{\"name\":\"CompatTelRunner.exe\",\"count\":12,\"path\":\"C:\\Windows\\System32\\CompatTelRunner.exe\",\"blocked\":true}," +
+                "{\"name\":\"NvTelemetry.exe\",\"count\":9,\"path\":\"C:\\Program Files\\NVIDIA Corporation\\NvTelemetry\\NvTelemetry.exe\",\"blocked\":true}]," +
                 "\"byDest\":[{\"ip\":\"20.42.65.90\",\"domain\":\"v20.events.data.microsoft.com\",\"count\":31,\"port\":\"443\"}," +
                 "{\"ip\":\"13.89.178.26\",\"domain\":\"self.events.data.microsoft.com\",\"count\":14,\"port\":\"443\"}," +
                 "{\"ip\":\"142.250.150.100\",\"domain\":\"clients4.google.com\",\"count\":11,\"port\":\"443\"}," +

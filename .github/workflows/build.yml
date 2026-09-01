@@ -39,13 +39,53 @@ jobs:
           python tools/gen_lang.py
           git diff --exit-code -- Lang.cs
           if ($LASTEXITCODE -ne 0) { throw "Lang.cs разошёлся с lang-en*.txt — перегенерируйте: python tools/gen_lang.py" }
-          Write-Host "Перевод: Lang.cs собран из словарей"
+          python tools/check_lang.py
+          if ($LASTEXITCODE -ne 0) { throw "есть строки интерфейса без английского перевода — добавьте их в lang-en4.txt" }
+          Write-Host "Перевод: Lang.cs собран из словарей, непереведённых строк нет"
 
       - name: Проверки поведения движка
         shell: powershell
         run: |
           .\tests\engine-tests.ps1
           if ($LASTEXITCODE -ne 0) { throw "проверки поведения не прошли" }
+
+      - name: Прогнать страницы интерфейса
+        shell: pwsh
+        run: |
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          & $csc /nologo /target:winexe /define:UITEST /out:uitest.exe `
+              /reference:System.dll /reference:System.Core.dll `
+              /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
+              /resource:Win11-Privacy-Engine.ps1,engine.ps1 `
+              /resource:app.ico,app.ico /resource:app.png,app.png `
+              MainForm.cs Ui.cs Ui2.cs Ui3.cs Ui4.cs Lang.cs Json.cs
+          if ($LASTEXITCODE -ne 0) { throw "тестовая сборка интерфейса не удалась" }
+          $env:WIN11_TEST_MOCK = '1'
+          $env:WIN11_TEST_DELAY = '1500'
+          $pages = @('home','settings','xray','dossier','audit','monitor','apps','startup','guard','log','about')
+          $bad = 0
+          foreach ($lang in @('ru','en')) {
+              if ($lang -eq 'en') { $env:WIN11_TEST_EN = '1' } else { Remove-Item Env:WIN11_TEST_EN -ErrorAction SilentlyContinue }
+              foreach ($page in $pages) {
+                  $env:WIN11_TEST_PAGE = $page
+                  $shot = "shot-$lang-$page.png"
+                  $env:WIN11_TEST_SHOT = $shot
+                  $out = (& .\uitest.exe 2>&1 | Out-String)
+                  if ($out -notmatch 'UITEST ok') {
+                      Write-Host "::error::страница $page ($lang) не открылась"
+                      Write-Host $out
+                      $bad++
+                  } elseif (-not (Test-Path $shot)) {
+                      Write-Host "::error::страница $page ($lang) не дала снимок"
+                      $bad++
+                  } else {
+                      Write-Host ("  ok: {0} ({1})" -f $page, $lang)
+                  }
+              }
+          }
+          Remove-Item uitest.exe, shot-*.png -Force -ErrorAction SilentlyContinue
+          if ($bad -gt 0) { throw "страниц с ошибками: $bad" }
+          Write-Host "Интерфейс: все страницы открылись на двух языках"
 
       - name: Собрать Win11Privacy.exe
         shell: pwsh

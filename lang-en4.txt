@@ -47,3 +47,74 @@ OneDrive: синхронизация в облако	OneDrive: syncing to the cl
 удалённый доступ: ждёт подключения при каждом входе	remote access: waits for connections at every sign-in
 торрент-клиент стартует вместе с Windows	torrent client starts with Windows
 помощник Microsoft	Microsoft assistant
+# Наборы настроек, запрет выхода в сеть, монитор
+Базовый	Basic
+Строгий	Strict
+Максимум	Maximum
+Набор «	Preset "
+»: отмечено разделов — 	": sections selected — 
+Кто отправляет — можно закрыть выход в сеть	Who is sending — you can cut their network access
+Отклонено	Rejected
+попыток срезал брандмауэр	attempts cut by the firewall
+Заблокировано	Blocked
+Запретить сеть	Block network
+Запрет выхода в сеть	Blocking network access
+Запрет выхода в сеть…	Blocking network access…
+Возврат доступа в сеть…	Restoring network access…
+Программе будет запрещён выход в интернет:\n\n	This program will be denied internet access:\n\n
+\n\nПравило создаётся в брандмауэре Windows и снимается\n	\n\nThe rule is created in Windows Firewall and removed by\n
+этой же кнопкой или общим откатом. Программа останется\n	the same button or by the full rollback. The program stays\n
+на месте, но потеряет связь с сетью.\n\nПродолжить?	installed but loses its network connection.\n\nContinue?
+Не удалось изменить правило брандмауэра.	Could not change the firewall rule.
+движок не ответил	the engine did not answer
+Выход в сеть закрыт.	Network access blocked.
+Выход в сеть возвращён.	Network access restored.
+\n\nПродолжить?	\n\nContinue?
+\nСлужба DiagTrack: 	\nDiagTrack service: 
+\nБрандмауэр (правил): 	\nFirewall (rules): 
+\nБлок hosts: 	\nhosts block: 
+запускается	running
+# HTML-отчёт: разметку оставляем как есть, переводим только текст
+<title>Отчёт о приватности Windows 11</title><style>	<title>Windows 11 privacy report</title><style>
+<h1>Отчёт о приватности Windows 11</h1>	<h1>Windows 11 privacy report</h1>
+<div class="sub">Составлен 	<div class="sub">Compiled 
+<h2>Проверка настроек</h2><div class="grid">	<h2>Settings check</h2><div class="grid">
+<div class="tile"><div class="c">Индекс приватности</div><div class="v">	<div class="tile"><div class="c">Privacy index</div><div class="v">
+ настроек подтверждено</div></div>	 settings confirmed</div></div>
+<div class="tile"><div class="c">Не применено</div><div class="v">	<div class="tile"><div class="c">Not applied</div><div class="v">
+</div><div class="s">требуют внимания</div></div></div>	</div><div class="s">need attention</div></div></div>
+<table><tr><th>Раздел</th><th>Применено</th></tr>	<table><tr><th>Section</th><th>Applied</th></tr>
+<h2>Обращения к доменам телеметрии (кэш DNS)</h2><table><tr><th>Домен</th><th>Состояние</th></tr>	<h2>Telemetry domains contacted (DNS cache)</h2><table><tr><th>Domain</th><th>State</th></tr>
+<h2>Рентген телеметрии — что было собрано</h2><div class="grid">	<h2>Telemetry X-ray — what was collected</h2><div class="grid">
+<div class="tile"><div class="c">Событий в сутки</div><div class="v">	<div class="tile"><div class="c">Events per day</div><div class="v">
+ МБ данных</div></div>	 MB of data</div></div>
+<div class="tile"><div class="c">Прогноз за год</div><div class="v">	<div class="tile"><div class="c">Forecast for a year</div><div class="v">
+ МБ в год</div></div>	 MB per year</div></div>
+<div class="tile"><div class="c">Было до настройки</div><div class="v">	<div class="tile"><div class="c">Before the changes</div><div class="v">
+</div><div class="s">событий в сутки</div></div>	</div><div class="s">events per day</div></div>
+<table><tr><th>Категория данных</th><th>Событий</th><th>Доля</th><th>Что это</th></tr>	<table><tr><th>Data category</th><th>Events</th><th>Share</th><th>What it is</th></tr>
+<h2>Пример настоящего события: 	<h2>A real event as sent: 
+<h2>Монитор исходящих соединений</h2><div class="grid">	<h2>Outgoing connections monitor</h2><div class="grid">
+<div class="tile"><div class="c">Соединений</div><div class="v">	<div class="tile"><div class="c">Connections</div><div class="v">
+</div><div class="s">за 24 часа</div></div>	</div><div class="s">over 24 hours</div></div>
+<div class="tile"><div class="c">К телеметрии</div><div class="v">	<div class="tile"><div class="c">To telemetry</div><div class="v">
+</div><div class="s">распознано по домену</div></div></div>	</div><div class="s">recognised by domain</div></div></div>
+<h2>Автозапуск: что стартует вместе с Windows</h2><div class="grid">	<h2>Startup: what starts with Windows</h2><div class="grid">
+<div class="tile"><div class="c">Записей всего</div><div class="v">	<div class="tile"><div class="c">Entries in total</div><div class="v">
+</div><div class="s">в реестре, папках и планировщике</div></div>	</div><div class="s">registry, folders and task scheduler</div></div>
+<div class="tile"><div class="c">Запускается</div><div class="v">	<div class="tile"><div class="c">Running</div><div class="v">
+</div><div class="s">из них лишних: 	</div><div class="s">of them not needed: 
+<table><tr><th>Программа</th><th>Что это</th><th>Откуда</th><th>Состояние</th></tr>	<table><tr><th>Program</th><th>What it is</th><th>Where from</th><th>State</th></tr>
+<h2>Предустановленные приложения</h2>	<h2>Preinstalled apps</h2>
+<table><tr><th>Приложение</th><th>Идентификатор</th></tr>	<table><tr><th>App</th><th>Identifier</th></tr>
+<h2>Досье: кто включал камеру, микрофон и геолокацию</h2>	<h2>Dossier: who turned on the camera, microphone and location</h2>
+<table><tr><th>Программа</th><th>Датчик</th><th>Когда</th><th>Длительность</th></tr>	<table><tr><th>Program</th><th>Sensor</th><th>When</th><th>Duration</th></tr>
+<span class="bad">прямо сейчас</span>	<span class="bad">right now</span>
+<h2>Цифровой след на диске</h2>	<h2>Digital footprint on disk</h2>
+<table><tr><th>Что хранится</th><th>Сколько</th></tr>	<table><tr><th>What is stored</th><th>How much</th></tr>
+<div class="note"><b>Честно о пределах.</b> Полностью прекратить обмен данными с Microsoft 	<div class="note"><b>Honestly about the limits.</b> Data exchange with Microsoft cannot be stopped 
+это ограничение редакции, а не программы.</div>	that is a limit of the edition, not of this program.</div>
+<footer>Отчёт сформирован программой «Приватность Windows 11». 	<footer>Report produced by "Windows 11 Privacy". 
+и встроенного механизма диагностики Windows.</footer></body></html>	and the built-in Windows diagnostics.</footer></body></html>
+Win11Privacy.exe --profile "C:\\путь\\profile.json" --silent   тихо применить профиль\n	Win11Privacy.exe --profile "C:\\path\\profile.json" --silent   apply a profile silently\n
+Win11Privacy.exe --audit                                        проверка (код возврата = число несоответствий)\n	Win11Privacy.exe --audit                                        check (exit code = number of mismatches)\n

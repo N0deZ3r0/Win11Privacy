@@ -308,6 +308,9 @@ namespace Win11Privacy
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             Id = id; _title = title; _what = what; _value = value; _glyph = glyph; CanWipe = canWipe;
             BackColor = Theme.CardBg;
+            // строку можно отметить и с клавиатуры: Tab доводит до неё, пробел ставит галочку
+            SetStyle(ControlStyles.Selectable, canWipe);
+            TabStop = canWipe;
             if (canWipe) Cursor = Cursors.Hand;
         }
 
@@ -324,7 +327,25 @@ namespace Win11Privacy
         protected override void OnClick(EventArgs e)
         {
             base.OnClick(e);
-            if (CanWipe) { _checked = !_checked; Invalidate(); }
+            if (CanWipe) { Focus(); _checked = !_checked; Invalidate(); }
+        }
+
+        protected override void OnEnter(EventArgs e) { base.OnEnter(e); Invalidate(); }
+        protected override void OnLeave(EventArgs e) { base.OnLeave(e); Invalidate(); }
+
+        // пробел и Enter переключают галочку — иначе страница только для мыши
+        protected override bool IsInputKey(Keys keyData)
+        {
+            if (keyData == Keys.Space || keyData == Keys.Enter) return true;
+            return base.IsInputKey(keyData);
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (!CanWipe) return;
+            if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter)
+            { _checked = !_checked; Invalidate(); e.Handled = true; }
         }
 
         private void Relayout()
@@ -361,6 +382,11 @@ namespace Win11Privacy
             {
                 using (GraphicsPath p = Theme.RoundRect(new RectangleF(0.5F, 0.5F, Width - 1, Height - 1), 6))
                 using (SolidBrush b = new SolidBrush(Theme.RowHover)) g.FillPath(b, p);
+            }
+            if (Focused && CanWipe)      // видно, на какой строке клавиатура
+            {
+                using (GraphicsPath p = Theme.RoundRect(new RectangleF(0.5F, 0.5F, Width - 1, Height - 1), 6))
+                using (Pen pen = new Pen(Theme.Accent)) g.DrawPath(pen, p);
             }
 
             int padY = (int)(u * 0.5F);
@@ -411,6 +437,131 @@ namespace Win11Privacy
                 new Rectangle(Width - _valueW - (int)(u * 0.5F), padY, _valueW, _titleH + (int)(u * 0.2F)),
                 CanWipe ? Theme.Accent : Theme.TextDim,
                 TextFormatFlags.Right | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+        }
+    }
+
+    // ================================================================== //
+    //  Строка «кто отправляет» на странице «Монитор»: имя программы,
+    //  сколько соединений и кнопка запрета выхода в сеть — видно, кто
+    //  стучится, и тут же можно закрыть ему дорогу.
+    // ================================================================== //
+    internal class NetAppRow : Control
+    {
+        public readonly string AppPath;
+        public bool Blocked;
+        public event EventHandler ToggleBlock;
+
+        private readonly string _name, _count;
+        private bool _hover, _btnHover;
+        private Rectangle _btnRect;
+        private Font _bold;
+
+        public NetAppRow(string name, string count, string path, bool blocked)
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            _name = name; _count = count; AppPath = path ?? ""; Blocked = blocked;
+            BackColor = Theme.CardBg;
+            SetStyle(ControlStyles.Selectable, HasButton);
+            TabStop = HasButton;
+        }
+
+        private bool HasButton { get { return AppPath.Length > 0; } }
+
+        protected override void OnFontChanged(EventArgs e)
+        { base.OnFontChanged(e); _bold = new Font(Font, FontStyle.Bold); Height = (int)(Font.Height * 2.4F); }
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; _btnHover = false; Invalidate(); }
+        protected override void OnEnter(EventArgs e) { base.OnEnter(e); Invalidate(); }
+        protected override void OnLeave(EventArgs e) { base.OnLeave(e); Invalidate(); }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            bool over = HasButton && _btnRect.Contains(e.Location);
+            if (over != _btnHover) { _btnHover = over; Cursor = over ? Cursors.Hand : Cursors.Default; Invalidate(); }
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (!HasButton || !_btnRect.Contains(e.Location)) return;
+            Focus();
+            if (ToggleBlock != null) ToggleBlock(this, EventArgs.Empty);
+        }
+
+        // кнопку видно и с клавиатуры: Tab доводит до строки, пробел нажимает
+        protected override bool IsInputKey(Keys keyData)
+        {
+            if (keyData == Keys.Space || keyData == Keys.Enter) return true;
+            return base.IsInputKey(keyData);
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (!HasButton) return;
+            if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter)
+            { if (ToggleBlock != null) ToggleBlock(this, EventArgs.Empty); e.Handled = true; }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            int u = Font.Height;
+            if (_bold == null) _bold = new Font(Font, FontStyle.Bold);
+
+            if (_hover)
+            {
+                using (GraphicsPath p = Theme.RoundRect(new RectangleF(0.5F, 0.5F, Width - 1, Height - 1), 6))
+                using (SolidBrush b = new SolidBrush(Theme.RowHover)) g.FillPath(b, p);
+            }
+            if (Focused && HasButton)
+            {
+                using (GraphicsPath p = Theme.RoundRect(new RectangleF(0.5F, 0.5F, Width - 1, Height - 1), 6))
+                using (Pen pen = new Pen(Theme.Accent)) g.DrawPath(pen, p);
+            }
+
+            int rightEdge = Width - (int)(u * 0.6F);
+
+            // рамку под число берём с запасом: при точной ширине правое
+            // выравнивание срезает первую цифру
+            Size cs = TextRenderer.MeasureText(g, _count, Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
+            int cw = cs.Width + (int)(u * 0.4F);
+            TextRenderer.DrawText(g, _count, Font, new Rectangle(rightEdge - cw, 0, cw, Height),
+                Theme.TextDim, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+            rightEdge -= cw + (int)(u * 0.6F);
+
+            if (HasButton)
+            {
+                string cap = Blocked ? L.T("Заблокировано") : L.T("Запретить сеть");
+                using (Font bf = new Font(Font.FontFamily, Font.Size * 0.9F, FontStyle.Regular))
+                {
+                    Size bs = TextRenderer.MeasureText(g, cap, bf, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
+                    int bw = bs.Width + (int)(u * 1.1F), bh = (int)(u * 1.5F);
+                    _btnRect = new Rectangle(rightEdge - bw, (Height - bh) / 2, bw, bh);
+                    RectangleF br = new RectangleF(_btnRect.X + 0.5F, _btnRect.Y + 0.5F, _btnRect.Width - 1, _btnRect.Height - 1);
+                    Color face = Blocked ? Theme.Mix(Theme.CardBg, Theme.Ok, 0.22F)
+                                         : (_btnHover ? Theme.ButtonHover : Theme.ButtonBg);
+                    Color edge = Blocked ? Theme.Ok : (_btnHover ? Theme.Accent : Theme.ButtonBorder);
+                    using (GraphicsPath p = Theme.RoundRect(br, bh / 2F))
+                    {
+                        using (SolidBrush b = new SolidBrush(face)) g.FillPath(b, p);
+                        using (Pen pen = new Pen(edge)) g.DrawPath(pen, p);
+                    }
+                    TextRenderer.DrawText(g, cap, bf, _btnRect, Blocked ? Theme.Ok : Theme.Text,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                    rightEdge -= bw + (int)(u * 0.5F);
+                }
+            }
+            else _btnRect = Rectangle.Empty;
+
+            int left = (int)(u * 0.6F);
+            TextRenderer.DrawText(g, _name, _bold, new Rectangle(left, 0, Math.Max(20, rightEdge - left), Height),
+                Theme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
+                            TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
         }
     }
 }
