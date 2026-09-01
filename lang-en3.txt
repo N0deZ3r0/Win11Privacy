@@ -250,7 +250,6 @@ Wi-Fi Sense: автоподключение к чужим точкам — вы�
 телеметрия Bing и виджетов	Bing and widgets telemetry
 лента активности	activity feed
 функциональные события	functional events
-проверка связи (NCSI)	connectivity check (NCSI)
 <h2>Проба связи: отвечают ли адреса сбора данных</h2><div class="grid">	<h2>Connection probe: do the data-collection addresses answer</h2><div class="grid">
 <div class="tile"><div class="c">Не отвечают</div><div class="v">	<div class="tile"><div class="c">Not answering</div><div class="v">
 </div><div class="s">адресов сбора данных молчит</div></div></div>	</div><div class="s">data-collection addresses are silent</div></div></div>
@@ -323,3 +322,8 @@ Recall раз в несколько секунд снимает экран и х
 \nСлужба DiagTrack: 	\nDiagTrack service: 
 Win11Privacy.exe --audit                                        проверка (код возврата = число несоответствий)\n	Win11Privacy.exe --audit                                        check (exit code = number of mismatches)\n
 Win11Privacy.exe --profile "C:\путь\profile.json" --silent   тихо применить профиль\n	Win11Privacy.exe --profile "C:\path\profile.json" --silent   apply a profile silently\n
+
+# --- проба связи: случай «компьютер без сети» ---
+проверить не удалось: нет сети	check failed: no network
+Проверить не удалось: компьютер сейчас без сети — это не значит, что канал закрыт	Check failed: this PC is offline right now — that does not mean the channel is closed
+<div class="note">Во время пробы компьютер был без сети: ни одно имя не разрешилось. Это не значит, что канал закрыт.</div>	<div class="note">The PC was offline during the probe: not a single name resolved. That does not mean the channel is closed.</div>

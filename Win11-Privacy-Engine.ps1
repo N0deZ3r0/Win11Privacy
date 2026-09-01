@@ -124,6 +124,12 @@ $script:AuditGuid      = '{0CCE9226-69AE-11D9-BED3-505054503030}'   # Filtering 
 $script:DiagDir        = Join-Path $env:ProgramData 'Microsoft\Diagnosis'
 $script:Changes = 0
 $script:Failures = 0
+# Ветки, в подключах которых Windows держит историю пользователя: RecentDocs,
+# RunMRU, TypedPaths, WordWheelQuery, UserAssist, ComDlg32. reg.exe export
+# выгружает ключ вместе со всеми подключами — резервная копия на рабочем столе
+# превратилась бы в то самое досье, которое эта программа обещает стереть.
+# Наши собственные значения в таких ветках возвращает журнал отката.
+$script:NoExportKeys = @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer')
 $script:Already = 0
 # Журнал изменений реестра: что было до нашего вмешательства.
 # Без него откат требовал ручного импорта .reg-файлов.
@@ -214,6 +220,22 @@ function Split-TaskPath {
 }
 
 function Ensure-DataDir { if (-not (Test-Path -LiteralPath $script:DataDir)) { New-Item -ItemType Directory -Path $script:DataDir -Force | Out-Null } }
+
+# Журнал отката дописывается к прежнему. Вызывается и после применения, и после
+# стража: иначе то, что вернул на место страж, «Откат» просто не увидит.
+function Save-Journal {
+    if ($DryRun -or $script:Journal.Count -eq 0) { return 0 }
+    try {
+        $prev = Load-Json 'changes.json'
+        $all = New-Object System.Collections.Generic.List[object]
+        if ($prev -and $prev.items) { foreach ($e in @($prev.items)) { $all.Add($e) } }
+        foreach ($e in $script:Journal) { $all.Add($e) }
+        Save-Json 'changes.json' @{ items = $all.ToArray(); updated = (Get-Date).ToString('s') }
+        $n = $script:Journal.Count
+        $script:Journal.Clear()
+        return $n
+    } catch { return 0 }
+}
 
 function Save-Json { param([string]$Name, $Object) Ensure-DataDir; ($Object | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $script:DataDir $Name) -Encoding UTF8 }
 function Load-Json { param([string]$Name) $p = Join-Path $script:DataDir $Name; if (Test-Path -LiteralPath $p) { try { return (Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null } } return $null }
@@ -569,7 +591,7 @@ Def 'app_vs' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\VisualStudio\Feedback' 'Di
 Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' 'EnableMulticast' 0 'DWord' 'LLMNR: имя компьютера не рассылается по сети'
 Def 'network' 'reg' 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' 'EnableMDNS' 0 'DWord' 'mDNS: многоадресные запросы имён — выкл'
 Def 'network' 'reg' 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters' 'NodeType' 2 'DWord' 'NetBIOS: без широковещательных запросов имён'
-Def 'network' 'reg' 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\Wpad' 'WpadOverride' 1 'DWord' 'WPAD: автопоиск прокси в сети — выкл'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp' 'DisableWpad' 1 'DWord' 'WPAD: автопоиск прокси в сети — выкл'
 Def 'network' 'reg' 'HKLM:\SYSTEM\CurrentControlSet\Services\NlaSvc\Parameters\Internet' 'EnableActiveProbing' 0 'DWord' 'проверка связи через сервер Microsoft — выкл'
 Def 'network' 'reg' 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\WiFi\AllowWiFiHotSpotReporting' 'value' 0 'DWord' 'Wi-Fi Sense: отчёты о точках доступа — выкл'
 Def 'network' 'reg' 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\WiFi\AllowAutoConnectToWiFiSenseHotspots' 'value' 0 'DWord' 'Wi-Fi Sense: автоподключение к чужим точкам — выкл'
@@ -1089,14 +1111,16 @@ $script:ProbeHosts = @(
     @{ h='nexusrules.officeapps.live.com';       w='телеметрия Office' },
     @{ h='telemetry.appex.bing.net';             w='телеметрия Bing и виджетов' },
     @{ h='activity.windows.com';                 w='лента активности' },
-    @{ h='functional.events.data.microsoft.com'; w='функциональные события' },
-    @{ h='www.msftconnecttest.com';              w='проверка связи (NCSI)' }
+    @{ h='functional.events.data.microsoft.com'; w='функциональные события' }
 )
 
 function Invoke-Probe {
     param([int]$TimeoutMs = 1500)
     $done = New-Object System.Collections.Generic.List[object]
     $wait = New-Object System.Collections.Generic.List[object]
+    # Сколько имён вообще разрешилось. Если ни одного — компьютер без сети, и
+    # «никто не отвечает» означает не закрытый канал, а отсутствие проверки.
+    $resolved = 0
 
     foreach ($e in $script:ProbeHosts) {
         $r = @{ host = [string]$e.h; what = [string]$e.w; ip = ''; state = ''; blocked = $true }
@@ -1105,6 +1129,7 @@ function Invoke-Probe {
         $v4 = @($ips | Where-Object { $_ -notmatch ':' })
         if ($v4.Count -gt 0) { $ips = $v4 }
         if ($ips.Count -eq 0) { $r.state = 'имя не разрешается'; $done.Add($r); continue }
+        $resolved++
         $r.ip = [string]$ips[0]
         if ($r.ip -eq '0.0.0.0' -or $r.ip -eq '127.0.0.1' -or $r.ip -eq '::' -or $r.ip -eq '::1') {
             $r.state = 'заблокирован в hosts'; $done.Add($r); continue
@@ -1134,6 +1159,7 @@ function Invoke-Probe {
     $open = @($items | Where-Object { -not $_.blocked }).Count
     return @{ time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); items = $items
               total = $items.Count; open = $open; blocked = ($items.Count - $open)
+              noNetwork = ($resolved -eq 0)
               hostsBlocked = (Test-HostsBlock)
               fwRules = @(Get-NetFirewallRule -Group $script:FwGroup -ErrorAction SilentlyContinue).Count }
 }
@@ -1282,6 +1308,8 @@ function Run-Guard {
             Write-Section ($script:ModuleTitles[$m])
             foreach ($d in $script:Defs) { if ($d.M -eq $m) { Apply-Def $d; $fixed++ } }
         }
+        # без этого всё, что вернул страж, проходит мимо журнала и не откатывается
+        $null = Save-Journal
     }
     $kbs = Get-RecentHotfixes -Since $lastTime
     $summary = @{
@@ -2155,7 +2183,7 @@ function Invoke-FootprintWipe {
                     try { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop; $n++ } catch { $locked++ }
                 }
                 if ($n -gt 0) { Write-Log ("   [+] кэш эскизов стёрт: {0} файлов" -f $n); $script:Changes++ }
-                if ($locked -gt 0) { Write-Log ("   [-] занято Проводником: {0} файлов — стираются после перезагрузки" -f $locked) }
+                if ($locked -gt 0) { Write-Log ("   [-] занято Проводником: {0} файлов — закройте окна Проводника и повторите" -f $locked) }
                 if ($n -eq 0 -and $locked -eq 0) { Write-Log '   [-] кэша эскизов нет' }
             }
             'recall' {
@@ -2615,7 +2643,11 @@ if ($Probe) {
     }
     Write-Log ''
     Write-Log ("   отвечает адресов: {0} из {1}" -f $pr.open, $pr.total)
-    if ($pr.open -eq 0) { Write-Log '   Ни один адрес сбора данных не отвечает — канал закрыт.' }
+    if ($pr.noNetwork) {
+        Write-Log '   Проверить не удалось: не разрешилось ни одно имя — похоже, компьютер сейчас без сети.'
+        Write-Log '   Это НЕ значит, что канал закрыт. Подключитесь к сети и повторите пробу.'
+    }
+    elseif ($pr.open -eq 0) { Write-Log '   Ни один адрес сбора данных не отвечает — канал закрыт.' }
     else { Write-Log '   Через отвечающие адреса телеметрия ещё может уходить: включите модули «Блокировка доменов» и «Блокировка адресов телеметрии».' }
     Emit-Json $pr
     Write-Log '###DONE###'
@@ -2773,7 +2805,9 @@ if (-not $NoBackup -and -not $DryRun) {
     Write-Section 'Резервная копия реестра'
     $root = if ($BackupRoot) { $BackupRoot } else { [Environment]::GetFolderPath('Desktop') }
     $script:BackupDir = Join-Path $root ('Win11Privacy-Backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
-    $keys = @($script:Defs | Where-Object { $_.T -eq 'reg' -and $Modules -contains $_.M } | ForEach-Object { $_.P } | Select-Object -Unique)
+    $allKeys = @($script:Defs | Where-Object { $_.T -eq 'reg' -and $Modules -contains $_.M } | ForEach-Object { $_.P } | Select-Object -Unique)
+    $wideKeys = @($allKeys | Where-Object { $script:NoExportKeys -contains $_ })
+    $keys = @($allKeys | Where-Object { $script:NoExportKeys -notcontains $_ })
     try {
         New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null
         $n = 0
@@ -2786,6 +2820,11 @@ if (-not $NoBackup -and -not $DryRun) {
             }
         }
         Write-Log ("   [+] сохранено веток: {0} -> {1}" -f $n, $script:BackupDir)
+        foreach ($w in $wideKeys) {
+            Write-Log ("   [-] не выгружена целиком: {0}" -f $w)
+            Write-Log '       в её подключах лежит ваша история (недавние документы, Win+R, поиск) — копия стала бы досье'
+            Write-Log '       наши значения из неё возвращает «Откат» по журналу изменений'
+        }
     } catch { Write-Log "   [!] не удалось создать резервную копию: $($_.Exception.Message)" }
 }
 
@@ -2908,16 +2947,8 @@ if (Use-Module 'startup') {
 # --- Итог ------------------------------------------------------------------- #
 Write-Section 'Итог'
 # журнал для отката — дописываем к тому, что было раньше
-if (-not $DryRun -and $script:Journal.Count -gt 0) {
-    try {
-        $prev = Load-Json 'changes.json'
-        $all = New-Object System.Collections.Generic.List[object]
-        if ($prev -and $prev.items) { foreach ($e in @($prev.items)) { $all.Add($e) } }
-        foreach ($e in $script:Journal) { $all.Add($e) }
-        Save-Json 'changes.json' @{ items = $all.ToArray(); updated = (Get-Date).ToString('s') }
-        Write-Log ("Записано в журнал отката: {0}" -f $script:Journal.Count)
-    } catch { }
-}
+$journalSaved = Save-Journal
+if ($journalSaved -gt 0) { Write-Log ("Записано в журнал отката: {0}" -f $journalSaved) }
 
 Write-Log ("Изменений применено : {0}" -f $script:Changes)
 Write-Log ("Было уже настроено : {0}" -f $script:Already)

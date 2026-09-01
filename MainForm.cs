@@ -1530,7 +1530,7 @@ namespace Win11Privacy
                 {
                     Dictionary<string, object> g = Json.Obj(o);
                     int go = Json.GetInt(g, "ok"), gt = Json.GetInt(g, "total");
-                    h.Append("<tr><td>").Append(Esc(Json.GetStr(g, "title"))).Append("</td><td class=\"")
+                    h.Append("<tr><td>").Append(Esc(L.T(Json.GetStr(g, "title")))).Append("</td><td class=\"")
                      .Append(go == gt ? "ok" : "bad").Append("\">").Append(go).Append(" / ").Append(gt).Append("</td></tr>");
                 }
                 h.Append("</table>");
@@ -1554,6 +1554,8 @@ namespace Win11Privacy
             {
                 int popen = Json.GetInt(_lastProbe, "open"), ptotal = Json.GetInt(_lastProbe, "total");
                 h.Append(L.T("<h2>Проба связи: отвечают ли адреса сбора данных</h2><div class=\"grid\">"));
+                if (Json.GetBool(_lastProbe, "noNetwork"))
+                    h.Append(L.T("<div class=\"note\">Во время пробы компьютер был без сети: ни одно имя не разрешилось. Это не значит, что канал закрыт.</div>"));
                 h.Append(L.T("<div class=\"tile\"><div class=\"c\">Не отвечают</div><div class=\"v\">"))
                  .Append(ptotal - popen).Append(" / ").Append(ptotal).Append(L.T("</div><div class=\"s\">адресов сбора данных молчит</div></div></div>"));
                 h.Append(L.T("<table><tr><th>Адрес</th><th>Что это</th><th>Состояние</th></tr>"));
@@ -1587,9 +1589,9 @@ namespace Win11Privacy
                 foreach (object o in Json.GetArr(_lastXray, "categories"))
                 {
                     Dictionary<string, object> c = Json.Obj(o);
-                    h.Append("<tr><td>").Append(Esc(Json.GetStr(c, "name"))).Append("</td><td>").Append(Json.GetInt(c, "count"))
+                    h.Append("<tr><td>").Append(Esc(L.T(Json.GetStr(c, "name")))).Append("</td><td>").Append(Json.GetInt(c, "count"))
                      .Append("</td><td>").Append(Esc(Json.GetStr(c, "share"))).Append("%</td><td>")
-                     .Append(Esc(Json.GetStr(c, "what"))).Append("</td></tr>");
+                     .Append(Esc(L.T(Json.GetStr(c, "what")))).Append("</td></tr>");
                 }
                 h.Append("</table>");
                 foreach (object o in Json.GetArr(_lastXray, "categories"))
@@ -1597,7 +1599,7 @@ namespace Win11Privacy
                     Dictionary<string, object> c = Json.Obj(o);
                     Dictionary<string, object> sm = Json.GetObj(c, "sample");
                     if (sm == null) continue;
-                    h.Append(L.T("<h2>Пример настоящего события: ")).Append(Esc(Json.GetStr(c, "name"))).Append("</h2>");
+                    h.Append(L.T("<h2>Пример настоящего события: ")).Append(Esc(L.T(Json.GetStr(c, "name")))).Append("</h2>");
                     h.Append("<div class=\"sub\">").Append(Esc(Json.GetStr(sm, "name"))).Append(" · ").Append(Esc(Json.GetStr(sm, "time"))).Append("</div>");
                     h.Append("<pre>").Append(Esc(Json.GetStr(sm, "payload"))).Append("</pre>");
                     break;   // одного примера в отчёте достаточно
@@ -1650,7 +1652,7 @@ namespace Win11Privacy
                 foreach (object co in Json.GetArr(_lastSpy, "caps"))
                 {
                     Dictionary<string, object> c = Json.Obj(co);
-                    string capTitle = Json.GetStr(c, "title");
+                    string capTitle = L.T(Json.GetStr(c, "title"));
                     int n = 0;
                     foreach (object io in Json.GetArr(c, "items"))
                     {
@@ -1674,8 +1676,8 @@ namespace Win11Privacy
                 foreach (object o in Json.GetArr(_lastFoot, "items"))
                 {
                     Dictionary<string, object> it = Json.Obj(o);
-                    h.Append("<tr><td>").Append(Esc(Json.GetStr(it, "title"))).Append("</td><td>")
-                     .Append(Esc(Json.GetStr(it, "value"))).Append("</td></tr>");
+                    h.Append("<tr><td>").Append(Esc(L.T(Json.GetStr(it, "title")))).Append("</td><td>")
+                     .Append(Esc(L.T(Json.GetStr(it, "value")))).Append("</td></tr>");
                 }
                 h.Append("</table>");
             }
@@ -2735,9 +2737,12 @@ namespace Win11Privacy
             if (_lastProbe != null)
             {
                 int popen = Json.GetInt(_lastProbe, "open"), ptotal = Json.GetInt(_lastProbe, "total");
-                _auditTiles.Controls.Add(Tile(L.T("Адреса сбора данных"), (ptotal - popen) + " / " + ptotal,
-                    popen == 0 ? L.T("не отвечают — канал закрыт") : popen + L.T(" ещё отвечают"),
-                    popen == 0 ? Theme.Ok : Theme.Err));
+                bool pnone = Json.GetBool(_lastProbe, "noNetwork");
+                // без сети «никто не отвечает» — это не закрытый канал, а несостоявшаяся проверка
+                _auditTiles.Controls.Add(Tile(L.T("Адреса сбора данных"),
+                    pnone ? "—" : (ptotal - popen) + " / " + ptotal,
+                    pnone ? L.T("проверить не удалось: нет сети") : (popen == 0 ? L.T("не отвечают — канал закрыт") : popen + L.T(" ещё отвечают")),
+                    pnone ? Theme.Warn : (popen == 0 ? Theme.Ok : Theme.Err)));
             }
             else
                 _auditTiles.Controls.Add(Tile(L.T("Обращения к телеметрии"), dns.Count.ToString(), leaked + L.T(" не заблокировано (из кэша DNS)"), leaked == 0 ? Theme.Ok : Theme.Err));
@@ -2818,11 +2823,17 @@ namespace Win11Privacy
         {
             if (_lastProbe == null || _auditGroups == null) return;
             int open = Json.GetInt(_lastProbe, "open"), total = Json.GetInt(_lastProbe, "total");
+            bool none = Json.GetBool(_lastProbe, "noNetwork");
             SectionHeader sh = new SectionHeader(L.T("Проба связи: отвечают ли адреса сбора данных")
                                                  + " — " + Json.GetStr(_lastProbe, "time"));
             sh.Font = Font; _auditGroups.Controls.Add(sh);
-            _auditGroups.Controls.Add(new KvRow(L.T("Отвечает адресов"),
-                open + " " + L.T("из") + " " + total, open > 0) { Font = this.Font });
+            if (none)
+                _auditGroups.Controls.Add(new KvRow(
+                    L.T("Проверить не удалось: компьютер сейчас без сети — это не значит, что канал закрыт"),
+                    "", true) { Font = this.Font });
+            else
+                _auditGroups.Controls.Add(new KvRow(L.T("Отвечает адресов"),
+                    open + " " + L.T("из") + " " + total, open > 0) { Font = this.Font });
             foreach (object o in Json.GetArr(_lastProbe, "items"))
             {
                 Dictionary<string, object> it = Json.Obj(o);

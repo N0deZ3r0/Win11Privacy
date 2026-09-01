@@ -40,7 +40,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(844, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(846, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -817,7 +817,6 @@ namespace Win11Privacy
             _map["телеметрия Bing и виджетов"] = "Bing and widgets telemetry";
             _map["лента активности"] = "activity feed";
             _map["функциональные события"] = "functional events";
-            _map["проверка связи (NCSI)"] = "connectivity check (NCSI)";
             _map["<h2>Проба связи: отвечают ли адреса сбора данных</h2><div class=\"grid\">"] = "<h2>Connection probe: do the data-collection addresses answer</h2><div class=\"grid\">";
             _map["<div class=\"tile\"><div class=\"c\">Не отвечают</div><div class=\"v\">"] = "<div class=\"tile\"><div class=\"c\">Not answering</div><div class=\"v\">";
             _map["</div><div class=\"s\">адресов сбора данных молчит</div></div></div>"] = "</div><div class=\"s\">data-collection addresses are silent</div></div></div>";
@@ -885,6 +884,9 @@ namespace Win11Privacy
             _map["\nСлужба DiagTrack: "] = "\nDiagTrack service: ";
             _map["Win11Privacy.exe --audit                                        проверка (код возврата = число несоответствий)\n"] = "Win11Privacy.exe --audit                                        check (exit code = number of mismatches)\n";
             _map["Win11Privacy.exe --profile \"C:\\путь\\profile.json\" --silent   тихо применить профиль\n"] = "Win11Privacy.exe --profile \"C:\\path\\profile.json\" --silent   apply a profile silently\n";
+            _map["проверить не удалось: нет сети"] = "check failed: no network";
+            _map["Проверить не удалось: компьютер сейчас без сети — это не значит, что канал закрыт"] = "Check failed: this PC is offline right now — that does not mean the channel is closed";
+            _map["<div class=\"note\">Во время пробы компьютер был без сети: ни одно имя не разрешилось. Это не значит, что канал закрыт.</div>"] = "<div class=\"note\">The PC was offline during the probe: not a single name resolved. That does not mean the channel is closed.</div>";
         }
     }
 }

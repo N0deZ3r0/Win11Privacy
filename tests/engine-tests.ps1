@@ -135,7 +135,9 @@ Check 'список приложений отвечает' ($null -ne $apps -and
 $probe = Get-EngineJson @('-Probe', '-ProbeTimeout', '1500')
 Check 'проба связи отвечает' ($null -ne $probe -and $null -ne $probe.items)
 if ($probe) {
-    Check 'проба проверила все адреса' ([int]$probe.total -ge 12) ("получено: " + $probe.total)
+    Check 'проба проверила все адреса' ([int]$probe.total -ge 11) ("получено: " + $probe.total)
+    Check 'в пробе только те адреса, которые программа умеет блокировать' ($probe.items.host -notcontains 'www.msftconnecttest.com')
+    Check 'проба сообщает, была ли сеть' ($null -ne $probe.noNetwork)
     Check 'открытых плюс закрытых = всего' (([int]$probe.open + [int]$probe.blocked) -eq [int]$probe.total)
     $noState = @($probe.items | Where-Object { -not $_.state })
     Check 'у каждого адреса есть состояние' ($noState.Count -eq 0)
