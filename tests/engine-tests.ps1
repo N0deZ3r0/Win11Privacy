@@ -268,7 +268,7 @@ Check 'возврат без выбора ничего не делает' ($null
 # --------------------------------------------------------------------------- #
 Write-Host ''
 Write-Host 'Запись в реестр: журнал только после удачи'
-$regFns = @('Get-RegValue', 'Set-RegDirect', 'Set-Reg', 'Test-Admin')
+$regFns = @('Get-RegValue', 'Set-RegDirect', 'Set-Reg', 'Test-Admin', 'Test-RegKeyWritable', 'Get-FolderSizeMB')
 $regFound = @()
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($regFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $regFound += $fn.Name }
@@ -294,6 +294,21 @@ if ($regFound.Count -eq $regFns.Count) {
     Check 'значение записано' ((Get-RegValue 'HKCU:\Software\Win11PrivacyProbe' 'x') -eq 7)
     Remove-Item -LiteralPath 'HKCU:\Software\Win11PrivacyProbe' -Recurse -Force -ErrorAction SilentlyContinue
     Check 'служебный ключ убран' (-not (Test-Path 'HKCU:\Software\Win11PrivacyProbe'))
+
+    # проба «пишется ли ключ» не должна оставлять следов
+    Check 'проба видит доступный ключ' (Test-RegKeyWritable 'HKCU:\Software')
+    Check 'проба не оставляет параметр' ($null -eq (Get-RegValue 'HKCU:\Software' '_Win11PrivacyProbe'))
+    Check 'проба видит закрытый ключ' (-not (Test-RegKeyWritable 'HKLM:\SECURITY'))
+
+    # размер папки без файлов раньше сыпал ошибкой Measure-Object в журнал
+    $probeDir = Join-Path $env:TEMP 'w11p-tests-size'
+    Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path (Join-Path $probeDir 'sub') -Force | Out-Null
+    $errBefore = $Error.Count
+    $sz = Get-FolderSizeMB $probeDir
+    Check 'папка без файлов считается молча' (($sz -eq 0) -and ($Error.Count -eq $errBefore)) `
+          ("размер: " + $sz + ", новых ошибок: " + ($Error.Count - $errBefore))
+    Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # Пакета виджетов на машине сборки нет, поэтому проверяем сам отбор, а не

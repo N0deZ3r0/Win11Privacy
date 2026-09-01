@@ -194,6 +194,17 @@ function Set-RegDirect {
     } catch { return @{ ok = $false; error = ("{0}: {1}" -f $_.Exception.GetType().Name, $_.Exception.Message) } }
 }
 
+# Пишет во временный параметр рядом и сразу его убирает. Так видно, закрыт
+# ли ключ целиком или Windows держит только один конкретный параметр.
+function Test-RegKeyWritable {
+    param([string]$Path)
+    $probe = '_Win11PrivacyProbe'
+    $r = Set-RegDirect -Path $Path -Name $probe -Value 1 -Type 'DWord'
+    if (-not $r.ok) { return $false }
+    try { Remove-ItemProperty -LiteralPath $Path -Name $probe -Force -ErrorAction SilentlyContinue } catch { }
+    return $true
+}
+
 function Set-Reg {
     param([string]$Path, [string]$Name, $Value, [string]$Type = 'DWord', [string]$Comment = '')
     $label = if ($Comment) { $Comment } else { "$Path -> $Name" }
@@ -233,10 +244,16 @@ function Set-Reg {
         return
     }
 
-    if ($why -like '*UnauthorizedAccessException*') {
+    if ($why -like '*UnauthorizedAccessException*' -or $why -like '*SecurityException*') {
         Write-Log "   [!] $label -- Windows не отдаёт этот параметр даже администратору"
         Write-Log "       ключ: $Path -> $Name"
         Write-Log "       права администратора у программы: $(if (Test-Admin) { 'есть' } else { 'НЕТ' })"
+        if (Test-RegKeyWritable $Path) {
+            Write-Log "       ключ пишется, но именно этот параметр Windows защищает"
+        } else {
+            Write-Log "       ключ закрыт целиком: менять его может только сама система"
+        }
+        Write-Log "       подробности: $why"
     } else {
         Write-Log "   [!] не удалось: $label -- $why"
     }
@@ -246,7 +263,9 @@ function Set-Reg {
 function Get-FolderSizeMB {
     param([string]$FolderPath)
     if (-not (Test-Path -LiteralPath $FolderPath)) { return 0 }
-    $sum = (Get-ChildItem -LiteralPath $FolderPath -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+    # только файлы: у каталогов нет Length, и Measure-Object сыпал ошибкой в журнал
+    $sum = (Get-ChildItem -LiteralPath $FolderPath -Recurse -Force -File -ErrorAction SilentlyContinue |
+            Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
     if (-not $sum) { return 0 }
     return [math]::Round($sum / 1MB, 1)
 }
@@ -3364,6 +3383,11 @@ if ($junkFound.Count -gt 0) {
     $null = Remove-JunkValues
 }
 
+# Что делать, если настройки модуля не поддались: обходной путь тем же результатом
+$script:ModuleHints = @{
+    widgets = 'Ключи политики виджетов Windows не отдаёт. Тот же результат даёт удаление пакета «Виджеты и лента Microsoft Start» на странице «Приложения».'
+}
+
 # --- Модули по определениям ------------------------------------------------- #
 foreach ($m in $script:ModuleOrder) {
     if (-not (Use-Module $m)) { continue }
@@ -3373,9 +3397,13 @@ foreach ($m in $script:ModuleOrder) {
     $modDefs = @($script:Defs | Where-Object { $_.M -eq $m })
     if ($modDefs.Count -eq 0) { continue }
     Write-Section $script:ModuleTitles[$m]
+    $failBefore = $script:Failures
     foreach ($d in $modDefs) {
         if ($SkipItems -contains $d.Id) { Write-Log ("   [п] {0} -- пропущено по вашему выбору" -f $d.C); continue }
         Apply-Def $d
+    }
+    if ($script:Failures -gt $failBefore -and $script:ModuleHints.ContainsKey($m)) {
+        Write-Log ("   [i] {0}" -f $script:ModuleHints[$m])
     }
 }
 
