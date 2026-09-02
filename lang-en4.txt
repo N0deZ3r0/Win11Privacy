@@ -230,3 +230,12 @@ Win11Privacy.exe --audit                                     проверка (�
 , вернул: 	, repaired: 
 Телеметрия выросла: было 	Telemetry grew: it was 
  событий в сутки, стало 	 events per day, now 
+# индекс: что Windows не отдаёт; заголовки таблиц отчёта
+ Windows не отдаёт	 withheld by Windows
+Windows не отдаёт	Withheld by Windows
+не считаются в индексе	not counted in the index
+Что	What
+Сколько	How many
+Примеры	Examples
+Дата	Date
+Событие	Event

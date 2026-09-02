@@ -961,8 +961,10 @@ namespace Win11Privacy
                 _verdictTitle.Text = pct >= 85 ? L.T("Система хорошо закрыта")
                     : (pct >= 50 ? L.T("Защита настроена не полностью") : L.T("Система почти не защищена"));
                 int fails = total - ok;
+                int blockedN = Json.GetInt(_lastAudit, "blocked");
                 _verdictSub.Text = ok + L.T(" из ") + total + L.T(" применено") +
-                    (fails > 0 ? "  ·  " + fails + L.T(" требуют внимания") : L.T("  ·  всё на месте"));
+                    (fails > 0 ? "  ·  " + fails + L.T(" требуют внимания") : L.T("  ·  всё на месте")) +
+                    (blockedN > 0 ? "  ·  " + blockedN + L.T(" Windows не отдаёт") : "");
                 int blocked = 0;
                 foreach (object o in Json.GetArr(_lastAudit, "dns")) if (Json.GetBool(Json.Obj(o), "blocked")) blocked++;
                 _msBlocked.SetValue(blocked.ToString());
@@ -1694,6 +1696,44 @@ namespace Win11Privacy
                     h.Append("<pre>").Append(Esc(Json.GetStr(sm, "payload"))).Append("</pre>");
                     break;   // одного примера в отчёте достаточно
                 }
+            }
+
+            // Что о вас узнали — из тех же событий
+            if (_lastXray != null && Json.GetArr(_lastXray, "facts").Count > 0)
+            {
+                h.Append("<h2>").Append(Esc(L.T("Что о вас узнали — вытащено из самих событий"))).Append("</h2>");
+                h.Append("<table><tr><th>").Append(Esc(L.T("Что"))).Append("</th><th>").Append(Esc(L.T("Сколько")))
+                 .Append("</th><th>").Append(Esc(L.T("Примеры"))).Append("</th></tr>");
+                foreach (object o in Json.GetArr(_lastXray, "facts"))
+                {
+                    Dictionary<string, object> f = Json.Obj(o);
+                    List<object> ex = Json.GetArr(f, "examples");
+                    string[] arr = new string[ex.Count];
+                    for (int i = 0; i < ex.Count; i++) arr[i] = ex[i] == null ? "" : ex[i].ToString();
+                    h.Append("<tr><td>").Append(Esc(L.T(Json.GetStr(f, "title")))).Append("</td><td>")
+                     .Append(Json.GetInt(f, "distinct")).Append("</td><td>").Append(Esc(string.Join(", ", arr))).Append("</td></tr>");
+                }
+                h.Append("</table>");
+            }
+
+            // Хронология: что случилось за месяц
+            if (_lastTimeline != null && Json.GetArr(_lastTimeline, "notes").Count > 0)
+            {
+                h.Append("<h2>").Append(Esc(L.T("Хронология приватности"))).Append("</h2>");
+                h.Append("<table><tr><th>").Append(Esc(L.T("Дата"))).Append("</th><th>").Append(Esc(L.T("Событие"))).Append("</th></tr>");
+                List<object> notes = Json.GetArr(_lastTimeline, "notes");
+                for (int i = notes.Count - 1; i >= 0; i--)
+                {
+                    Dictionary<string, object> n = Json.Obj(notes[i]);
+                    string kind = Json.GetStr(n, "kind");
+                    string text;
+                    if (kind == "update") text = L.T("Обновление Windows: ") + Json.GetStr(n, "list");
+                    else if (kind == "drift") text = L.T("Страж нашёл сбитых настроек: ") + Json.GetInt(n, "a") + L.T(", вернул: ") + Json.GetInt(n, "b");
+                    else text = L.T("Телеметрия выросла: было ") + Json.GetInt(n, "a") + L.T(" событий в сутки, стало ") + Json.GetInt(n, "b");
+                    h.Append("<tr><td>").Append(Esc(Json.GetStr(n, "date"))).Append("</td><td class=\"")
+                     .Append(kind == "update" ? "" : "bad").Append("\">").Append(Esc(text)).Append("</td></tr>");
+                }
+                h.Append("</table>");
             }
 
             // Монитор
@@ -2514,9 +2554,12 @@ namespace Win11Privacy
             });
         }
 
+        private Dictionary<string, object> _lastTimeline;
+
         private void RenderTimeline(Dictionary<string, object> d)
         {
             if (d == null) { _timelineState.Text = L.T("Не удалось собрать хронологию."); return; }
+            _lastTimeline = d;
             List<object> days = Json.GetArr(d, "days");
             _timeline.SetData(days);
 
@@ -3504,6 +3547,9 @@ namespace Win11Privacy
             int fails = total - ok;
             _auditTiles.Controls.Add(Tile(L.T("Применено"), ok + " / " + total, L.T("настроек подтверждено"), fails == 0 ? Theme.Ok : Theme.Accent));
             _auditTiles.Controls.Add(Tile(L.T("Не применено"), fails.ToString(), fails == 0 ? L.T("всё на месте") : L.T("требуют внимания"), fails == 0 ? Theme.Ok : Theme.Warn));
+            int blockedTiles = Json.GetInt(d, "blocked");
+            if (blockedTiles > 0)
+                _auditTiles.Controls.Add(Tile(L.T("Windows не отдаёт"), blockedTiles.ToString(), L.T("не считаются в индексе"), Theme.TextFaint));
             Dictionary<string, object> buf = Json.GetObj(d, "buffer");
             if (buf != null) { string mb = Json.GetStr(buf, "mb"); _auditTiles.Controls.Add(Tile(L.T("Буфер телеметрии"), (mb == "-1" ? L.T("нет") : mb + L.T(" МБ")), Json.GetInt(buf, "files") + L.T(" файлов ждут отправки"), Theme.Accent)); }
             List<object> dns = Json.GetArr(d, "dns");

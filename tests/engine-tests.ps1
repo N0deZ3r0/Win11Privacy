@@ -82,7 +82,14 @@ if ($two) {
 
 $all = Get-EngineJson @('-Audit')
 Check 'полный аудит отвечает' ($null -ne $all)
-if ($all) { Check 'настроек в аудите больше 150' ([int]$all.total -gt 150) ("получено: " + $all.total) }
+if ($all) {
+    Check 'настроек в аудите больше 150' ([int]$all.total -gt 150) ("получено: " + $all.total)
+    Check 'аудит отдаёт число недоступных настроек' ($null -ne $all.blocked)
+    $blockedItems = @()
+    foreach ($g in @($all.groups)) { foreach ($i in @($g.items)) { if ($i.blocked) { $blockedItems += $i } } }
+    Check 'недоступные не входят в итог' ([int]$all.blocked -eq $blockedItems.Count) `
+          ("blocked=" + $all.blocked + ", помечено: " + $blockedItems.Count)
+}
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
@@ -214,6 +221,15 @@ $posStartup = $engineText.IndexOf('function Get-StartupList')
 $posGuard = $engineText.IndexOf('function Run-Guard')
 Check 'функции автозагрузки объявлены выше стража' ($posStartup -gt 0 -and $posStartup -lt $posGuard) `
       ("Get-StartupList на " + $posStartup + ", Run-Guard на " + $posGuard)
+# страж и сканирование зовут Save-XrayDay, страж — ещё и Invoke-XrayScan: объявления обязаны быть раньше вызовов
+$posXray = $engineText.IndexOf('function Invoke-XrayScan')
+$posSaveDay = $engineText.IndexOf('function Save-XrayDay')
+$posScanCmd = $engineText.IndexOf('if ($XrayScan) {')
+$posGuardCmd = $engineText.IndexOf('if ($Guard) {')
+Check 'дневной замер объявлен раньше команды сканирования' ($posSaveDay -gt 0 -and $posSaveDay -lt $posScanCmd) `
+      ("Save-XrayDay на " + $posSaveDay + ", -XrayScan на " + $posScanCmd)
+Check 'рентген объявлен раньше команды стража' ($posXray -gt 0 -and $posXray -lt $posGuardCmd) `
+      ("Invoke-XrayScan на " + $posXray + ", -Guard на " + $posGuardCmd)
 
 # --------------------------------------------------------------------------- #
 Write-Host ''

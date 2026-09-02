@@ -1208,8 +1208,10 @@ namespace Win11Privacy
                 {
                     Dictionary<string, object> it = Json.Obj(o);
                     bool ok = Json.GetBool(it, "ok");
+                    bool blocked = Json.GetBool(it, "blocked");
                     if (!all && ok) continue;   // при несоответствиях показываем только их
-                    Color dot = ok ? Theme.Ok : Theme.Err;
+                    // «Windows не разрешает» — не наша вина и не красное: серым
+                    Color dot = ok ? Theme.Ok : (blocked ? Theme.TextFaint : Theme.Err);
                     using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, u * 1.9F, y + (u * 1.7F - u * 0.45F) / 2F, u * 0.45F, u * 0.45F);
                     string nm = L.T(Json.GetStr(it, "name")); string act = L.T(Json.GetStr(it, "actual"));
                     Size acs = TextRenderer.MeasureText(act, Font);

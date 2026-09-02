@@ -152,6 +152,11 @@ $script:Changes = 0
 $script:Failures = 0
 $script:Already = 0
 $script:Blocked = 0
+# Настройки, которые Windows не отдала при применении. Запоминаются в
+# blocked.json, чтобы проверка не считала их «не применёнными» вечно:
+# индекс на Home иначе никогда не дошёл бы до 100 %.
+$script:BlockedIds = @{}
+$script:UnblockedIds = @{}
 # Журнал изменений реестра: что было до нашего вмешательства.
 # Без него откат требовал ручного импорта .reg-файлов.
 $script:Journal = New-Object System.Collections.Generic.List[object]
@@ -217,7 +222,7 @@ function Test-RegKeyWritable {
 
 function Set-Reg {
     param([string]$Path, [string]$Name, $Value, [string]$Type = 'DWord', [string]$Comment = '',
-          [switch]$Policy)
+          [switch]$Policy, [string]$DefId = '')
     $label = if ($Comment) { $Comment } else { "$Path -> $Name" }
     if ($DryRun) { Write-Log "   [тест] $label"; return }
 
@@ -247,6 +252,7 @@ function Set-Reg {
     }
 
     if ($done) {
+        if ($Policy -and $DefId) { $script:UnblockedIds[$DefId] = $true }   # отдала — снимаем пометку
         try {
             $script:Journal.Add(@{ kind = 'reg'; path = $Path; name = $Name; type = $Type
                                    existed = $existed; old = $oldValue
@@ -262,6 +268,7 @@ function Set-Reg {
         if ($Policy) {
             Write-Log "   [-] $label -- Windows этой редакции не разрешает менять этот параметр"
             $script:Blocked++
+            if ($DefId) { $script:BlockedIds[$DefId] = $true }
             return
         }
         Write-Log "   [!] $label -- Windows не отдаёт этот параметр даже администратору"
@@ -911,7 +918,7 @@ function Apply-Def {
     param($d)
     switch ($d.T) {
         'reg' { Set-Reg -Path $d.P -Name $d.N -Value $d.V -Type $d.Type -Comment $d.C }
-        'regpol' { Set-Reg -Path $d.P -Name $d.N -Value $d.V -Type $d.Type -Comment $d.C -Policy }
+        'regpol' { Set-Reg -Path $d.P -Name $d.N -Value $d.V -Type $d.Type -Comment $d.C -Policy -DefId $d.Id }
         'regif' {
             # сессия трассировки есть не на каждой сборке Windows — чего нет, то не создаём
             if (Test-Path -LiteralPath $d.P) { Set-Reg -Path $d.P -Name $d.N -Value $d.V -Type $d.Type -Comment $d.C }
@@ -1737,6 +1744,16 @@ function Run-Guard {
     }
     $kbs = Get-RecentHotfixes -Since $lastTime
     $newStartup = @(Find-NewStartup)
+    # дневной замер телеметрии для хронологии — если запись рентгена включена
+    try {
+        if ((Test-XrayModule) -and (Get-XrayViewingEnabled)) {
+            $xs = Invoke-XrayScan -Hours 24 -Max 4000
+            if ($xs -and -not $xs.error) {
+                Save-XrayDay $xs
+                Save-Json 'xray-last.json' @{ time = $xs.time; perDay = $xs.perDay; mbPerDay = $xs.mbPerDay }
+            }
+        }
+    } catch { }
     $summary = @{
         time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); checked = $mods; drifted = @($drifted | ForEach-Object { $_.name })
         driftModules = @($driftModules | ForEach-Object { $script:ModuleTitles[$_] }); fixed = $fixed; hotfixes = $kbs
@@ -1818,20 +1835,6 @@ if ($RemoveGuard) {
     exit 0
 }
 
-if ($Guard) {
-    if (-not (Test-Admin)) { exit 1 }
-    $null = Run-Guard -Verbose $false
-    exit 0
-}
-
-if ($GuardNow) {
-    if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
-    Write-Section 'Страж: проверка сейчас'
-    $s = Run-Guard -Verbose $true
-    Emit-Json $s
-    Write-Log '###DONE###'
-    exit 0
-}
 
 # =========================================================================== #
 #  Purge buffer (отдельная команда)
@@ -2151,6 +2154,146 @@ if ($XrayDisable) {
     exit 0
 }
 
+# =========================================================================== #
+#  ХРОНОЛОГИЯ ПРИВАТНОСТИ
+#  Программа копит историю: сколько событий телеметрии уходило в день, кто
+#  трогал датчики, что она сама меняла, что возвращал страж и когда приезжали
+#  обновления Windows. Собранные на одной оси, эти ряды показывают то, чего не
+#  видно в моменте: как система отыгрывает настройки назад после обновлений.
+# =========================================================================== #
+function Save-XrayDay {
+    param($Scan)
+    if (-not $Scan -or -not $Scan.perDay) { return }
+    try {
+        $hist = Load-Json 'xray-history.json'
+        $days = @{}
+        if ($hist -and $hist.days) {
+            foreach ($d in @($hist.days)) { $days["$($d.date)"] = $d }
+        }
+        $today = (Get-Date).ToString('yyyy-MM-dd')
+        $days[$today] = @{ date = $today; perDay = [int]$Scan.perDay; mbPerDay = "$($Scan.mbPerDay)" }
+        $list = @($days.Values | Sort-Object { "$($_.date)" } | Select-Object -Last 400)
+        Save-Json 'xray-history.json' @{ days = $list; updated = (Get-Date).ToString('s') }
+    } catch { }
+}
+
+function Get-GuardDays {
+    $byDay = @{}
+    $log = Join-Path $script:DataDir 'guard.log'
+    if (-not (Test-Path -LiteralPath $log)) { return $byDay }
+    try {
+        foreach ($line in @(Get-Content -LiteralPath $log -Encoding UTF8 -ErrorAction Stop)) {
+            $m = [regex]::Match($line, '^(\d{4}-\d{2}-\d{2}).*?сбито:\s*(\d+).*?исправлено:\s*(\d+)')
+            if (-not $m.Success) { continue }
+            $ds = $m.Groups[1].Value
+            if (-not $byDay.ContainsKey($ds)) { $byDay[$ds] = @{ drifted = 0; fixed = 0; checks = 0 } }
+            $byDay[$ds].drifted += [int]$m.Groups[2].Value
+            $byDay[$ds].fixed += [int]$m.Groups[3].Value
+            $byDay[$ds].checks++
+        }
+    } catch { }
+    return $byDay
+}
+
+function Get-Timeline {
+    param([int]$Days = 30)
+    if ($Days -lt 7) { $Days = 7 }
+    if ($Days -gt 180) { $Days = 180 }
+
+    # рентген по дням
+    $xray = @{}
+    $xh = Load-Json 'xray-history.json'
+    if ($xh -and $xh.days) { foreach ($d in @($xh.days)) { $xray["$($d.date)"] = [int]$d.perDay } }
+
+    # датчики по дням
+    $sensors = @{}
+    $hist = Load-Json 'sensor-history.json'
+    if ($hist -and $hist.events) {
+        foreach ($e in @($hist.events)) {
+            $ds = "$($e.time)"
+            if ($ds.Length -lt 10) { continue }
+            $ds = $ds.Substring(0, 10)
+            if (-not $sensors.ContainsKey($ds)) { $sensors[$ds] = 0 }
+            $sensors[$ds]++
+        }
+    }
+
+    # что меняла сама программа
+    $changes = @{}
+    $j = Load-Json 'changes.json'
+    if ($j -and $j.items) {
+        foreach ($e in @($j.items)) {
+            $ds = "$($e.time)"
+            if ($ds.Length -lt 10) { continue }
+            $ds = $ds.Substring(0, 10)
+            if (-not $changes.ContainsKey($ds)) { $changes[$ds] = 0 }
+            $changes[$ds]++
+        }
+    }
+
+    $guard = Get-GuardDays
+
+    # обновления Windows
+    $updates = @{}
+    try {
+        foreach ($h in @(Get-HotFix -ErrorAction SilentlyContinue)) {
+            if (-not $h.InstalledOn) { continue }
+            $ds = ([datetime]$h.InstalledOn).ToString('yyyy-MM-dd')
+            if (-not $updates.ContainsKey($ds)) { $updates[$ds] = @() }
+            $updates[$ds] += [string]$h.HotFixID
+        }
+    } catch { }
+
+    $rows = @()
+    $peak = 0
+    for ($i = $Days - 1; $i -ge 0; $i--) {
+        $d = (Get-Date).Date.AddDays(-$i)
+        $ds = $d.ToString('yyyy-MM-dd')
+        $ev = $(if ($xray.ContainsKey($ds)) { $xray[$ds] } else { 0 })
+        if ($ev -gt $peak) { $peak = $ev }
+        $g = $(if ($guard.ContainsKey($ds)) { $guard[$ds] } else { $null })
+        $rows += @{
+            date     = $ds
+            label    = $d.ToString('dd.MM')
+            events   = $ev
+            sensors  = $(if ($sensors.ContainsKey($ds)) { $sensors[$ds] } else { 0 })
+            changes  = $(if ($changes.ContainsKey($ds)) { $changes[$ds] } else { 0 })
+            drifted  = $(if ($g) { [int]$g.drifted } else { 0 })
+            fixed    = $(if ($g) { [int]$g.fixed } else { 0 })
+            updates  = @($(if ($updates.ContainsKey($ds)) { $updates[$ds] } else { @() }))
+        }
+    }
+
+    # что из этого стоит сказать словами
+    $notes = @()
+    for ($i = 1; $i -lt $rows.Count; $i++) {
+        $prev = $rows[$i - 1]; $cur = $rows[$i]
+        # ВАЖНО: словами это становится в интерфейсе — движок отдаёт числа,
+        # иначе в английской версии заметки остались бы русскими
+        if ($cur.updates.Count -gt 0) {
+            $notes += @{ date = $cur.label; kind = 'update'; a = 0; b = 0; list = (@($cur.updates) -join ', ') }
+        }
+        if ($cur.drifted -gt 0) {
+            $notes += @{ date = $cur.label; kind = 'drift'; a = [int]$cur.drifted; b = [int]$cur.fixed; list = '' }
+        }
+        if ($prev.events -gt 0 -and $cur.events -gt ($prev.events * 1.5) -and $cur.events -gt 100) {
+            $notes += @{ date = $cur.label; kind = 'grow'; a = [int]$prev.events; b = [int]$cur.events; list = '' }
+        }
+    }
+
+    return @{
+        days = $rows; peak = $peak; count = $rows.Count
+        notes = @($notes | Select-Object -Last 12)
+        hasXray = [bool]($xray.Count -gt 0)
+        time = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+    }
+}
+
+if ($Timeline) {
+    Emit-Json (Get-Timeline -Days $TimelineDays)
+    exit 0
+}
+
 if ($XrayScan) {
     $r = Invoke-XrayScan -Hours $XrayHours -Max $XrayMax
     if (-not $r.error) {
@@ -2179,6 +2322,22 @@ if ($XrayWipe) {
     if ($was -and $svc.StartType -ne 'Disabled') { Start-Service DiagTrack -ErrorAction SilentlyContinue }
     Write-Log ("   [+] удалено файлов: {0} (было {1} МБ)" -f $n, $before)
     Emit-Json (Get-XrayDbInfo)
+    Write-Log '###DONE###'
+    exit 0
+}
+
+# --- Страж запускается после объявления рентгена: он делает дневной замер --- #
+if ($Guard) {
+    if (-not (Test-Admin)) { exit 1 }
+    $null = Run-Guard -Verbose $false
+    exit 0
+}
+
+if ($GuardNow) {
+    if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
+    Write-Section 'Страж: проверка сейчас'
+    $s = Run-Guard -Verbose $true
+    Emit-Json $s
     Write-Log '###DONE###'
     exit 0
 }
@@ -2931,146 +3090,6 @@ if ($CleanJunk) {
 }
 
 # =========================================================================== #
-#  ХРОНОЛОГИЯ ПРИВАТНОСТИ
-#  Программа копит историю: сколько событий телеметрии уходило в день, кто
-#  трогал датчики, что она сама меняла, что возвращал страж и когда приезжали
-#  обновления Windows. Собранные на одной оси, эти ряды показывают то, чего не
-#  видно в моменте: как система отыгрывает настройки назад после обновлений.
-# =========================================================================== #
-function Save-XrayDay {
-    param($Scan)
-    if (-not $Scan -or -not $Scan.perDay) { return }
-    try {
-        $hist = Load-Json 'xray-history.json'
-        $days = @{}
-        if ($hist -and $hist.days) {
-            foreach ($d in @($hist.days)) { $days["$($d.date)"] = $d }
-        }
-        $today = (Get-Date).ToString('yyyy-MM-dd')
-        $days[$today] = @{ date = $today; perDay = [int]$Scan.perDay; mbPerDay = "$($Scan.mbPerDay)" }
-        $list = @($days.Values | Sort-Object { "$($_.date)" } | Select-Object -Last 400)
-        Save-Json 'xray-history.json' @{ days = $list; updated = (Get-Date).ToString('s') }
-    } catch { }
-}
-
-function Get-GuardDays {
-    $byDay = @{}
-    $log = Join-Path $script:DataDir 'guard.log'
-    if (-not (Test-Path -LiteralPath $log)) { return $byDay }
-    try {
-        foreach ($line in @(Get-Content -LiteralPath $log -Encoding UTF8 -ErrorAction Stop)) {
-            $m = [regex]::Match($line, '^(\d{4}-\d{2}-\d{2}).*?сбито:\s*(\d+).*?исправлено:\s*(\d+)')
-            if (-not $m.Success) { continue }
-            $ds = $m.Groups[1].Value
-            if (-not $byDay.ContainsKey($ds)) { $byDay[$ds] = @{ drifted = 0; fixed = 0; checks = 0 } }
-            $byDay[$ds].drifted += [int]$m.Groups[2].Value
-            $byDay[$ds].fixed += [int]$m.Groups[3].Value
-            $byDay[$ds].checks++
-        }
-    } catch { }
-    return $byDay
-}
-
-function Get-Timeline {
-    param([int]$Days = 30)
-    if ($Days -lt 7) { $Days = 7 }
-    if ($Days -gt 180) { $Days = 180 }
-
-    # рентген по дням
-    $xray = @{}
-    $xh = Load-Json 'xray-history.json'
-    if ($xh -and $xh.days) { foreach ($d in @($xh.days)) { $xray["$($d.date)"] = [int]$d.perDay } }
-
-    # датчики по дням
-    $sensors = @{}
-    $hist = Load-Json 'sensor-history.json'
-    if ($hist -and $hist.events) {
-        foreach ($e in @($hist.events)) {
-            $ds = "$($e.time)"
-            if ($ds.Length -lt 10) { continue }
-            $ds = $ds.Substring(0, 10)
-            if (-not $sensors.ContainsKey($ds)) { $sensors[$ds] = 0 }
-            $sensors[$ds]++
-        }
-    }
-
-    # что меняла сама программа
-    $changes = @{}
-    $j = Load-Json 'changes.json'
-    if ($j -and $j.items) {
-        foreach ($e in @($j.items)) {
-            $ds = "$($e.time)"
-            if ($ds.Length -lt 10) { continue }
-            $ds = $ds.Substring(0, 10)
-            if (-not $changes.ContainsKey($ds)) { $changes[$ds] = 0 }
-            $changes[$ds]++
-        }
-    }
-
-    $guard = Get-GuardDays
-
-    # обновления Windows
-    $updates = @{}
-    try {
-        foreach ($h in @(Get-HotFix -ErrorAction SilentlyContinue)) {
-            if (-not $h.InstalledOn) { continue }
-            $ds = ([datetime]$h.InstalledOn).ToString('yyyy-MM-dd')
-            if (-not $updates.ContainsKey($ds)) { $updates[$ds] = @() }
-            $updates[$ds] += [string]$h.HotFixID
-        }
-    } catch { }
-
-    $rows = @()
-    $peak = 0
-    for ($i = $Days - 1; $i -ge 0; $i--) {
-        $d = (Get-Date).Date.AddDays(-$i)
-        $ds = $d.ToString('yyyy-MM-dd')
-        $ev = $(if ($xray.ContainsKey($ds)) { $xray[$ds] } else { 0 })
-        if ($ev -gt $peak) { $peak = $ev }
-        $g = $(if ($guard.ContainsKey($ds)) { $guard[$ds] } else { $null })
-        $rows += @{
-            date     = $ds
-            label    = $d.ToString('dd.MM')
-            events   = $ev
-            sensors  = $(if ($sensors.ContainsKey($ds)) { $sensors[$ds] } else { 0 })
-            changes  = $(if ($changes.ContainsKey($ds)) { $changes[$ds] } else { 0 })
-            drifted  = $(if ($g) { [int]$g.drifted } else { 0 })
-            fixed    = $(if ($g) { [int]$g.fixed } else { 0 })
-            updates  = @($(if ($updates.ContainsKey($ds)) { $updates[$ds] } else { @() }))
-        }
-    }
-
-    # что из этого стоит сказать словами
-    $notes = @()
-    for ($i = 1; $i -lt $rows.Count; $i++) {
-        $prev = $rows[$i - 1]; $cur = $rows[$i]
-        # ВАЖНО: словами это становится в интерфейсе — движок отдаёт числа,
-        # иначе в английской версии заметки остались бы русскими
-        if ($cur.updates.Count -gt 0) {
-            $notes += @{ date = $cur.label; kind = 'update'; a = 0; b = 0; list = (@($cur.updates) -join ', ') }
-        }
-        if ($cur.drifted -gt 0) {
-            $notes += @{ date = $cur.label; kind = 'drift'; a = [int]$cur.drifted; b = [int]$cur.fixed; list = '' }
-        }
-        if ($prev.events -gt 0 -and $cur.events -gt ($prev.events * 1.5) -and $cur.events -gt 100) {
-            $notes += @{ date = $cur.label; kind = 'grow'; a = [int]$prev.events; b = [int]$cur.events; list = '' }
-        }
-    }
-
-    return @{
-        days = $rows; peak = $peak; count = $rows.Count
-        notes = @($notes | Select-Object -Last 12)
-        hasXray = [bool]($xray.Count -gt 0)
-        time = (Get-Date).ToString('yyyy-MM-dd HH:mm')
-    }
-}
-
-if ($Timeline) {
-    Emit-Json (Get-Timeline -Days $TimelineDays)
-    exit 0
-}
-
-# =========================================================================== #
 #  РЕЗЕРВНЫЕ КОПИИ: показать и вернуть
 #  Копии .reg программа делала и раньше, но импортировать их приходилось
 #  руками. Теперь круг замкнут: снимок -> откат по журналу -> импорт копии.
@@ -3193,6 +3212,7 @@ function Get-ProofSnapshot {
     if ($null -ne $Checked) {
         foreach ($r in @($Checked)) {
             if ($r.module -in @('cleanup', 'startup', 'buffer', 'oem')) { continue }
+            if ($r.blocked) { continue }
             $tot++
             if ($r.ok) { $ok++ }
             if ($r.module -eq 'etw') { $etwTotal++; if ($r.ok) { $etwOff++ } }
@@ -3354,10 +3374,17 @@ if ($Audit) {
     if ($Modules.Count -eq 0) { $Modules = $script:ModuleOrder }
     $items = @()
     $oemInfo = $null
+    $blockedSet = @{}
+    $bj = Load-Json 'blocked.json'
+    if ($bj -and $bj.ids) { foreach ($i in @($bj.ids)) { $blockedSet["$i"] = $true } }
     foreach ($d in $script:Defs) {
         if ($Modules -notcontains $d.M) { continue }
         if ($SkipItems -contains $d.Id) { continue }
-        $items += (Check-Def $d)
+        $r = Check-Def $d
+        $r.id = $d.Id
+        # Windows не отдала этот параметр при применении — это не «не применено»
+        $r.blocked = [bool]((-not $r.ok) -and $blockedSet.ContainsKey($d.Id))
+        $items += $r
     }
     if ($Modules -contains 'oem') {
         $oemInfo = Detect-Oem
@@ -3366,16 +3393,20 @@ if ($Audit) {
             $items += @{ module='oem'; name=("{0}: {1}" -f $(if ($it.type -eq 'svc') { 'служба' } else { 'задача' }), $it.display); ok=$ok; expected='Disabled'; actual=$it.state }
         }
     }
-    $okCount = @($items | Where-Object { $_.ok }).Count
+    $counted = @($items | Where-Object { -not $_.blocked })
+    $okCount = @($counted | Where-Object { $_.ok }).Count
+    $blockedCount = @($items | Where-Object { $_.blocked }).Count
     $groups = @()
     foreach ($m in $script:ModuleOrder) {
         $mi = @($items | Where-Object { $_.module -eq $m })
         if ($mi.Count -eq 0) { continue }
-        $groups += @{ module=$m; title=$script:ModuleTitles[$m]; ok=@($mi | Where-Object { $_.ok }).Count; total=$mi.Count; items=$mi }
+        $mc = @($mi | Where-Object { -not $_.blocked })
+        $groups += @{ module=$m; title=$script:ModuleTitles[$m]; ok=@($mc | Where-Object { $_.ok }).Count; total=$mc.Count
+                      blocked=@($mi | Where-Object { $_.blocked }).Count; items=$mi }
     }
     $dnsList = @(Get-DnsEvidence)
     $result = @{
-        time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); ok = $okCount; total = $items.Count; groups = $groups
+        time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); ok = $okCount; total = $counted.Count; blocked = $blockedCount; groups = $groups
         dns = $dnsList; buffer = (Get-BufferInfo); edition = (Get-Edition); doh = (Get-DohStatus)
         monitorEnabled = (Get-MonitorEnabled); hostsBlocked = (Test-HostsBlock)
         junk = @(Find-JunkValues).Count
@@ -3840,7 +3871,7 @@ if (Use-Module 'cleanup') {
         try { Clear-RecycleBin -Force -ErrorAction Stop; Write-Log ("   {0} корзина очищена" -f $tag) } catch { Write-Log ("   {0} корзина уже пуста" -f $tag) }
         $n++
         $tag = '[{0,3}%] ({1}/{2})' -f [int](100.0 * $n / $steps), $n, $steps
-        try { Delete-DeliveryOptimizationCache -Force -ErrorAction Stop; Write-Log ("   {0} кэш Delivery Optimization очищен" -f $tag) } catch { Write-Log ("   {0} кэш Delivery Optimization пропущен" -f $tag) }
+        try { Delete-DeliveryOptimizationCache -Force -ErrorAction Stop | Out-Null; Write-Log ("   {0} кэш Delivery Optimization очищен" -f $tag) } catch { Write-Log ("   {0} кэш Delivery Optimization пропущен" -f $tag) }
     }
     if ($wuWasRunning -and -not $DryRun) { Start-Service wuauserv -ErrorAction SilentlyContinue }
     Write-Log '   [100%] чистка завершена'
@@ -3870,6 +3901,17 @@ if (Use-Module 'startup') {
 Write-Section 'Итог'
 # журнал для отката — дописываем к тому, что было раньше
 Save-JournalEntries
+# что Windows не отдала — запоминаем для проверки; что отдала — забываем
+if (-not $DryRun -and ($script:BlockedIds.Count -gt 0 -or $script:UnblockedIds.Count -gt 0)) {
+    try {
+        $prevB = Load-Json 'blocked.json'
+        $setB = @{}
+        if ($prevB -and $prevB.ids) { foreach ($i in @($prevB.ids)) { $setB["$i"] = $true } }
+        foreach ($i in $script:BlockedIds.Keys) { $setB[$i] = $true }
+        foreach ($i in $script:UnblockedIds.Keys) { $setB.Remove($i) }
+        Save-Json 'blocked.json' @{ ids = @($setB.Keys); updated = (Get-Date).ToString('s') }
+    } catch { }
+}
 
 Write-Log ("Изменений применено : {0}" -f $script:Changes)
 Write-Log ("Было уже настроено : {0}" -f $script:Already)
@@ -3877,7 +3919,8 @@ Write-Log ("Ошибок              : {0}" -f $script:Failures)
 if ($script:Blocked -gt 0) { Write-Log ("Windows не разрешила: {0} (см. пометки [-] выше)" -f $script:Blocked) }
 if ($script:BackupDir) { Write-Log ("Резервная копия     : {0}" -f $script:BackupDir) }
 Write-Log ''
-Write-Log 'Перезагрузите компьютер, чтобы всё вступило в силу. Нажмите «Проверить» — программа прочитает реальное состояние системы.'
+if ($script:Changes -gt 0) { Write-Log 'Перезагрузите компьютер, чтобы всё вступило в силу. Нажмите «Проверить» — программа прочитает реальное состояние системы.' }
+else { Write-Log 'Менять было нечего — всё уже настроено. Нажмите «Проверить», чтобы увидеть состояние системы.' }
 Emit-Json @{ changes=$script:Changes; already=$script:Already; failures=$script:Failures
              blocked=$script:Blocked; backup=$script:BackupDir }
 Write-Log '###DONE###'

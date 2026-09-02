@@ -40,7 +40,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(925, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(933, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -966,6 +966,14 @@ namespace Win11Privacy
             _map[", вернул: "] = ", repaired: ";
             _map["Телеметрия выросла: было "] = "Telemetry grew: it was ";
             _map[" событий в сутки, стало "] = " events per day, now ";
+            _map[" Windows не отдаёт"] = " withheld by Windows";
+            _map["Windows не отдаёт"] = "Withheld by Windows";
+            _map["не считаются в индексе"] = "not counted in the index";
+            _map["Что"] = "What";
+            _map["Сколько"] = "How many";
+            _map["Примеры"] = "Examples";
+            _map["Дата"] = "Date";
+            _map["Событие"] = "Event";
         }
     }
 }
