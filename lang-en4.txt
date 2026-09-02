@@ -179,3 +179,54 @@ Win11Privacy.exe --audit                                     проверка (�
 Страж будет проверять каждый день. Нажмите «Включить стража».	The guard will check every day. Press "Turn the guard on".
 Страж будет проверять раз в неделю. Нажмите «Включить стража».	The guard will check once a week. Press "Turn the guard on".
 Виджеты и лента Microsoft Start	Widgets and the Microsoft Start feed
+# Хронология, факты рентгена, восстановление из копии, предпросмотр
+Хронология	Timeline
+Хронология приватности	Privacy timeline
+Программа копит историю: события телеметрии по дням, обновления Windows,\n	The program keeps a history: telemetry events per day, Windows updates,\n
+свои правки и возвраты стража. Чем дольше она стоит, тем больше видно.	its own changes and the guard\u2019s repairs. The longer it runs, the more you see.
+Замерить телеметрию	Measure telemetry
+Линии телеметрии пока нет: включите запись на «Рентгене» и нажмите «Замерить».	No telemetry line yet: turn recording on in X-ray and press Measure.
+Сбор хронологии…	Building the timeline…
+Не удалось собрать хронологию.	Could not build the timeline.
+Что случилось за это время	What happened during this period
+Пока ничего примечательного не происходило	Nothing notable has happened yet
+Показано дней: 	Days shown: 
+. Столбики — события телеметрии в сутки.	. Bars are telemetry events per day.
+. Столбики — обращения к датчикам: замера телеметрии ещё не было.	. Bars are sensor accesses: telemetry has not been measured yet.
+Красная черта — обновление Windows, зелёная точка — правка программы, жёлтая — возврат стража.	Red line — a Windows update, green dot — a change by this program, yellow — a repair by the guard.
+Данных пока нет	No data yet
+событий: 	events: 
+датчики: 	sensors: 
+правок: 	changes: 
+сбито: 	reverted by Windows: 
+обновление 	update 
+# факты рентгена
+Что о вас узнали — вытащено из самих событий	What they learned about you — taken from the events themselves
+ шт.	 items
+# восстановление из копии
+Из резервной копии	From a backup
+Поиск резервных копий…	Looking for backups…
+Резервных копий не найдено.\n\n	No backups found.\n\n
+Программа создаёт их на рабочем столе перед первым изменением\n	They are created on the desktop before the first change of\n
+в каждом запуске. Если папку перенесли — верните её на место.	each run. If the folder was moved, put it back.
+Восстановление из копии	Restoring from a backup
+Восстановление из копии…	Restoring from the backup…
+ веток	 branches
+ КБ	 KB
+Выберите копию — её значения вернутся в реестр как были на тот момент.	Pick a backup — its values go back into the registry as they were then.
+Восстановить	Restore
+Из копии будут возвращены все сохранённые ветки реестра:\n\n	Every saved registry branch will be restored from:\n\n
+\n\nТекущие значения этих параметров будут заменены.\n\nПродолжить?	\n\nCurrent values of these settings will be replaced.\n\nContinue?
+# предпросмотр применения
+Что изменится	What will change
+Сверка с текущим состоянием…	Comparing with the current state…
+Не удалось прочитать состояние системы.	Could not read the system state.
+Всё выбранное уже настроено — применять нечего.	Everything selected is already set — nothing to apply.
+Программа поменяет 	The program will change 
+ настроек. Слева — как сейчас, справа — как станет.	 settings. On the left is how it is now, on the right how it will be.
+Отмена	Cancel
+Обновление Windows: 	Windows update: 
+Страж нашёл сбитых настроек: 	The guard found settings reverted by Windows: 
+, вернул: 	, repaired: 
+Телеметрия выросла: было 	Telemetry grew: it was 
+ событий в сутки, стало 	 events per day, now 

@@ -435,6 +435,67 @@ if (Get-Command Ensure-Backup -ErrorAction SilentlyContinue) {
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
+Write-Host 'Хронология приватности'
+$tl = Get-EngineJson @('-Timeline', '-TimelineDays', '30')
+Check 'хронология отвечает' ($null -ne $tl -and $null -ne $tl.days)
+if ($tl) {
+    $tlDays = @($tl.days)
+    Check 'дней ровно столько, сколько просили' ($tlDays.Count -eq 30) ("получено: " + $tlDays.Count)
+    Check 'последний день — сегодня' ("$($tlDays[-1].date)" -eq (Get-Date).ToString('yyyy-MM-dd')) `
+          ("получено: " + $tlDays[-1].date)
+    $noLabel = @($tlDays | Where-Object { -not $_.label })
+    Check 'у каждого дня есть подпись' ($noLabel.Count -eq 0)
+    Check 'обновления Windows попали в ряд' (@($tlDays | Where-Object { @($_.updates).Count -gt 0 }).Count -ge 0)
+}
+$rawTl = Run-Engine @('-Timeline')
+$lineTl = @($rawTl -split "`n" | Where-Object { $_.TrimStart().StartsWith('###JSON###') })[0]
+Check 'дни приходят списком' ($lineTl -match '"days"\s*:\s*\[')
+$tlShort = Get-EngineJson @('-Timeline', '-TimelineDays', '2')
+Check 'слишком короткий период растягивается до недели' (@($tlShort.days).Count -eq 7) `
+      ("получено: " + @($tlShort.days).Count)
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Резервные копии: список и защита от ерунды'
+$bk = Get-EngineJson @('-ListBackups')
+Check 'список копий отвечает' ($null -ne $bk -and $null -ne $bk.count)
+$rawBk = Run-Engine @('-ListBackups')
+$lineBk = @($rawBk -split "`n" | Where-Object { $_.TrimStart().StartsWith('###JSON###') })[0]
+Check 'копии приходят списком' ($lineBk -match '"items"\s*:\s*\[')
+$bad = Get-EngineJson @('-RestoreBackup', '-BackupPath', 'C:\NoSuchFolder\Win11PrivacyNope')
+Check 'несуществующая папка отвергается' ($null -ne $bad -and "$($bad.error)".Length -gt 0)
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Разбор событий телеметрии в факты'
+$factFns = @('Add-FactValue')
+$factFound = @()
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($factFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $factFound += $fn.Name }
+}
+foreach ($asg in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+    $lt = $asg.Left -as [System.Management.Automation.Language.VariableExpressionAst]
+    if ($null -ne $lt -and $lt.VariablePath.UserPath -eq 'script:FactRules') { Invoke-Expression $asg.Extent.Text }
+}
+Check 'правила разбора найдены' ($null -ne $script:FactRules -and @($script:FactRules).Count -ge 5) `
+      ("правил: " + @($script:FactRules).Count)
+if ($factFound.Count -eq 1 -and $script:FactRules) {
+    $payload = '{"ProgramName":"Google Chrome","deviceModel":"HVY-WXX9","localId":"m:A1B2C3D4E5F67890","TimeZone":"Russian Standard Time","Empty":"unknown"}'
+    $store = @{}
+    foreach ($rule in $script:FactRules) {
+        foreach ($m in [regex]::Matches($payload, $rule.re)) { Add-FactValue $store $rule.id $m.Groups[1].Value }
+    }
+    Check 'название программы вытащено' ($store.ContainsKey('apps') -and $store['apps'].ContainsKey('Google Chrome'))
+    Check 'модель устройства вытащена' ($store.ContainsKey('device') -and $store['device'].ContainsKey('HVY-WXX9'))
+    Check 'постоянный идентификатор вытащен' ($store.ContainsKey('ids') -and $store['ids'].ContainsKey('m:A1B2C3D4E5F67890'))
+    Check 'часовой пояс вытащен' ($store.ContainsKey('user') -and $store['user'].ContainsKey('Russian Standard Time'))
+    $hasJunk = $false
+    foreach ($k in $store.Keys) { if ($store[$k].ContainsKey('unknown')) { $hasJunk = $true } }
+    Check 'пустышки вроде unknown отброшены' (-not $hasJunk)
+}
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
 Write-Host 'Применение (тестовый прогон, ничего не меняется)'
 if ($isAdmin) {
     $mods = 'telemetry,errors,activity,input,edge,ads,copilot'

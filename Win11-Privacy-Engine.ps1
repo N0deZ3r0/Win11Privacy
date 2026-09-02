@@ -98,7 +98,13 @@ param(
     # --- как часто проверяет страж ---
     [switch]$GuardDaily,
     # --- уборка мусора от версий со сломанным Def ---
-    [switch]$CleanJunk
+    [switch]$CleanJunk,
+    # --- хронология и резервные копии ---
+    [switch]$Timeline,
+    [int]$TimelineDays = 30,
+    [switch]$ListBackups,
+    [switch]$RestoreBackup,
+    [string]$BackupPath = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -1932,6 +1938,57 @@ function Get-XrayStatusObject {
 }
 
 # --- Основное сканирование ------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+#  ЧТО ИМЕННО О ВАС УЗНАЛИ
+#  Рентген уже читает настоящие события. Здесь их содержимое превращается в
+#  человеческие факты: не «1420 событий инвентаризации», а «названия 47 ваших
+#  программ, модель ноутбука, серийный номер диска». Правило, которое ничего
+#  не нашло, просто не показывается — выдумывать нечего.
+# --------------------------------------------------------------------------- #
+$script:FactRules = @(
+    @{ id = 'apps';    title = 'Названия установленных программ'
+       what = 'Windows перечисляет, что у вас стоит: имя, издатель и версия каждой программы.'
+       re = '"(?:ProgramName|AppName|PackageFullName|ProductName)"\s*:\s*"([^"]{2,90})"' },
+    @{ id = 'files';   title = 'Имена запускавшихся файлов'
+       what = 'В событиях видно, какие исполняемые файлы вы открывали.'
+       re = '"(?:FileName|BinaryName|ImageName|ExeName)"\s*:\s*"([^"]{2,90})"' },
+    @{ id = 'device';  title = 'Модель и производитель компьютера'
+       what = 'Точная модель железа — по ней устройство узнаётся среди прочих.'
+       re = '"(?:deviceMake|deviceModel|SystemManufacturer|SystemProductName|Model|Manufacturer)"\s*:\s*"([^"]{2,80})"' },
+    @{ id = 'ids';     title = 'Идентификаторы, которыми вас метят'
+       what = 'Постоянные номера устройства и учётной записи: по ним события связываются в один профиль.'
+       re = '"(?:localId|deviceId|machineId|userId|globalDeviceId|sqmId)"\s*:\s*"([^"]{6,120})"' },
+    @{ id = 'serial';  title = 'Серийные номера железа'
+       what = 'Серийный номер не меняется никогда — это самая надёжная метка устройства.'
+       re = '"(?:SerialNumber|BaseBoardSerial|BiosSerial|DiskSerial)"\s*:\s*"([^"]{4,80})"' },
+    @{ id = 'hw';      title = 'Начинка компьютера'
+       what = 'Процессор, память, диски и видеокарта — подробная опись железа.'
+       re = '"(?:ProcessorIdentifier|ProcessorManufacturer|TotalPhysicalRAM|PrimaryDiskType|GraphicsAdapter|CpuFamily)"\s*:\s*"?([^",]{2,80})"?' },
+    @{ id = 'net';     title = 'Сетевые адреса и имена сетей'
+       what = 'MAC-адрес и названия сетей говорят, где физически стоит компьютер.'
+       re = '"(?:MacAddress|SSID|NetworkName|BSSID)"\s*:\s*"([^"]{4,80})"' },
+    @{ id = 'user';    title = 'Учётная запись и язык'
+       what = 'Имя пользователя, страна, часовой пояс и раскладка.'
+       re = '"(?:UserName|AccountName|CountryRegion|TimeZone|Locale|UserLocale|KeyboardLayout)"\s*:\s*"([^"]{2,80})"' },
+    @{ id = 'devices'; title = 'Подключённые устройства'
+       what = 'Всё, что вы подключали: принтеры, флешки, наушники, телефоны.'
+       re = '"(?:DeviceName|FriendlyName|DeviceInstanceId|ContainerId)"\s*:\s*"([^"]{4,90})"' },
+    @{ id = 'errors';  title = 'Сбои программ с их именами'
+       what = 'Имена упавших программ и модулей — заодно видно, чем вы пользуетесь.'
+       re = '"(?:FaultingApplicationName|CrashingProcess|ExceptionModule)"\s*:\s*"([^"]{2,90})"' }
+)
+
+function Add-FactValue {
+    param($Store, [string]$Id, [string]$Value)
+    $v = $Value.Trim()
+    if (-not $v) { return }
+    if ($v -match '^[\{\[]') { return }               # GUID-ы и структуры пропускаем
+    if ($v -match '^(?:0|1|true|false|null|unknown|n/a)$') { return }
+    if (-not $Store.ContainsKey($Id)) { $Store[$Id] = @{} }
+    if ($Store[$Id].Count -ge 400) { return }           # памяти ради
+    if ($Store[$Id].ContainsKey($v)) { $Store[$Id][$v]++ } else { $Store[$Id][$v] = 1 }
+}
+
 function Invoke-XrayScan {
     param([int]$Hours, [int]$Max)
 
@@ -1957,6 +2014,7 @@ function Invoke-XrayScan {
     $ids = @{}
     $apps = @{}
     $samples = @{}
+    $facts = @{}
 
     foreach ($ev in $events) {
         $n = [string]$ev.Name
@@ -1976,6 +2034,11 @@ function Invoke-XrayScan {
             $txt = $p
             if ($txt.Length -gt 1800) { $txt = $txt.Substring(0, 1800) + ' …' }
             $samples[$c] = @{ name = $n; time = $ev.Timestamp.ToString('yyyy-MM-dd HH:mm:ss'); payload = $txt }
+        }
+
+        # что именно о вас узнали — по тем же событиям
+        foreach ($rule in $script:FactRules) {
+            foreach ($m in [regex]::Matches($p, $rule.re)) { Add-FactValue $facts $rule.id $m.Groups[1].Value }
         }
 
         # идентификаторы, которыми помечены события
@@ -2024,12 +2087,24 @@ function Invoke-XrayScan {
     $appList = @($apps.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 25 |
                  ForEach-Object { @{ name = $_.Key; count = $_.Value } })
 
+    $factList = @()
+    foreach ($rule in $script:FactRules) {
+        if (-not $facts.ContainsKey($rule.id)) { continue }
+        $vals = @($facts[$rule.id].GetEnumerator() | Sort-Object Value -Descending)
+        if ($vals.Count -eq 0) { continue }
+        $factList += @{
+            id = $rule.id; title = $rule.title; what = $rule.what
+            distinct = $vals.Count
+            examples = @($vals | Select-Object -First 6 | ForEach-Object { [string]$_.Key })
+        }
+    }
+
     $result = @{
         time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); hours = $Hours; recording = $true
         total = $events.Count; distinctNames = $names.Count
         mb = [math]::Round($mbTotal, 2); perDay = $perDay; mbPerDay = $mbDay
         perYear = [math]::Round($perDay * 365, 0); mbPerYear = [math]::Round($mbDay * 365, 1)
-        categories = $catList; identifiers = $idList; apps = $appList
+        categories = $catList; identifiers = $idList; apps = $appList; facts = $factList
         topNames = @($names.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 15 |
                      ForEach-Object { @{ name = $_.Key; count = $_.Value } })
         db = (Get-XrayDbInfo)
@@ -2078,7 +2153,10 @@ if ($XrayDisable) {
 
 if ($XrayScan) {
     $r = Invoke-XrayScan -Hours $XrayHours -Max $XrayMax
-    if (-not $r.error) { try { Save-Json 'xray-last.json' @{ time = $r.time; perDay = $r.perDay; mbPerDay = $r.mbPerDay } } catch { } }
+    if (-not $r.error) {
+        try { Save-Json 'xray-last.json' @{ time = $r.time; perDay = $r.perDay; mbPerDay = $r.mbPerDay } } catch { }
+        Save-XrayDay $r      # дневной замер для хронологии
+    }
     if ($XrayBaseline -and -not $r.error) {
         Save-Json 'xray-baseline.json' @{ time = $r.time; perDay = $r.perDay; mbPerDay = $r.mbPerDay; total = $r.total; hours = $r.hours }
         $r.savedBaseline = $true
@@ -2848,6 +2926,210 @@ if ($CleanJunk) {
     $gone = Remove-JunkValues
     if ($before -eq 0) { Write-Log '   [-] мусорных параметров нет' }
     Emit-Json @{ found = $before; removed = $gone }
+    Write-Log '###DONE###'
+    exit 0
+}
+
+# =========================================================================== #
+#  ХРОНОЛОГИЯ ПРИВАТНОСТИ
+#  Программа копит историю: сколько событий телеметрии уходило в день, кто
+#  трогал датчики, что она сама меняла, что возвращал страж и когда приезжали
+#  обновления Windows. Собранные на одной оси, эти ряды показывают то, чего не
+#  видно в моменте: как система отыгрывает настройки назад после обновлений.
+# =========================================================================== #
+function Save-XrayDay {
+    param($Scan)
+    if (-not $Scan -or -not $Scan.perDay) { return }
+    try {
+        $hist = Load-Json 'xray-history.json'
+        $days = @{}
+        if ($hist -and $hist.days) {
+            foreach ($d in @($hist.days)) { $days["$($d.date)"] = $d }
+        }
+        $today = (Get-Date).ToString('yyyy-MM-dd')
+        $days[$today] = @{ date = $today; perDay = [int]$Scan.perDay; mbPerDay = "$($Scan.mbPerDay)" }
+        $list = @($days.Values | Sort-Object { "$($_.date)" } | Select-Object -Last 400)
+        Save-Json 'xray-history.json' @{ days = $list; updated = (Get-Date).ToString('s') }
+    } catch { }
+}
+
+function Get-GuardDays {
+    $byDay = @{}
+    $log = Join-Path $script:DataDir 'guard.log'
+    if (-not (Test-Path -LiteralPath $log)) { return $byDay }
+    try {
+        foreach ($line in @(Get-Content -LiteralPath $log -Encoding UTF8 -ErrorAction Stop)) {
+            $m = [regex]::Match($line, '^(\d{4}-\d{2}-\d{2}).*?сбито:\s*(\d+).*?исправлено:\s*(\d+)')
+            if (-not $m.Success) { continue }
+            $ds = $m.Groups[1].Value
+            if (-not $byDay.ContainsKey($ds)) { $byDay[$ds] = @{ drifted = 0; fixed = 0; checks = 0 } }
+            $byDay[$ds].drifted += [int]$m.Groups[2].Value
+            $byDay[$ds].fixed += [int]$m.Groups[3].Value
+            $byDay[$ds].checks++
+        }
+    } catch { }
+    return $byDay
+}
+
+function Get-Timeline {
+    param([int]$Days = 30)
+    if ($Days -lt 7) { $Days = 7 }
+    if ($Days -gt 180) { $Days = 180 }
+
+    # рентген по дням
+    $xray = @{}
+    $xh = Load-Json 'xray-history.json'
+    if ($xh -and $xh.days) { foreach ($d in @($xh.days)) { $xray["$($d.date)"] = [int]$d.perDay } }
+
+    # датчики по дням
+    $sensors = @{}
+    $hist = Load-Json 'sensor-history.json'
+    if ($hist -and $hist.events) {
+        foreach ($e in @($hist.events)) {
+            $ds = "$($e.time)"
+            if ($ds.Length -lt 10) { continue }
+            $ds = $ds.Substring(0, 10)
+            if (-not $sensors.ContainsKey($ds)) { $sensors[$ds] = 0 }
+            $sensors[$ds]++
+        }
+    }
+
+    # что меняла сама программа
+    $changes = @{}
+    $j = Load-Json 'changes.json'
+    if ($j -and $j.items) {
+        foreach ($e in @($j.items)) {
+            $ds = "$($e.time)"
+            if ($ds.Length -lt 10) { continue }
+            $ds = $ds.Substring(0, 10)
+            if (-not $changes.ContainsKey($ds)) { $changes[$ds] = 0 }
+            $changes[$ds]++
+        }
+    }
+
+    $guard = Get-GuardDays
+
+    # обновления Windows
+    $updates = @{}
+    try {
+        foreach ($h in @(Get-HotFix -ErrorAction SilentlyContinue)) {
+            if (-not $h.InstalledOn) { continue }
+            $ds = ([datetime]$h.InstalledOn).ToString('yyyy-MM-dd')
+            if (-not $updates.ContainsKey($ds)) { $updates[$ds] = @() }
+            $updates[$ds] += [string]$h.HotFixID
+        }
+    } catch { }
+
+    $rows = @()
+    $peak = 0
+    for ($i = $Days - 1; $i -ge 0; $i--) {
+        $d = (Get-Date).Date.AddDays(-$i)
+        $ds = $d.ToString('yyyy-MM-dd')
+        $ev = $(if ($xray.ContainsKey($ds)) { $xray[$ds] } else { 0 })
+        if ($ev -gt $peak) { $peak = $ev }
+        $g = $(if ($guard.ContainsKey($ds)) { $guard[$ds] } else { $null })
+        $rows += @{
+            date     = $ds
+            label    = $d.ToString('dd.MM')
+            events   = $ev
+            sensors  = $(if ($sensors.ContainsKey($ds)) { $sensors[$ds] } else { 0 })
+            changes  = $(if ($changes.ContainsKey($ds)) { $changes[$ds] } else { 0 })
+            drifted  = $(if ($g) { [int]$g.drifted } else { 0 })
+            fixed    = $(if ($g) { [int]$g.fixed } else { 0 })
+            updates  = @($(if ($updates.ContainsKey($ds)) { $updates[$ds] } else { @() }))
+        }
+    }
+
+    # что из этого стоит сказать словами
+    $notes = @()
+    for ($i = 1; $i -lt $rows.Count; $i++) {
+        $prev = $rows[$i - 1]; $cur = $rows[$i]
+        # ВАЖНО: словами это становится в интерфейсе — движок отдаёт числа,
+        # иначе в английской версии заметки остались бы русскими
+        if ($cur.updates.Count -gt 0) {
+            $notes += @{ date = $cur.label; kind = 'update'; a = 0; b = 0; list = (@($cur.updates) -join ', ') }
+        }
+        if ($cur.drifted -gt 0) {
+            $notes += @{ date = $cur.label; kind = 'drift'; a = [int]$cur.drifted; b = [int]$cur.fixed; list = '' }
+        }
+        if ($prev.events -gt 0 -and $cur.events -gt ($prev.events * 1.5) -and $cur.events -gt 100) {
+            $notes += @{ date = $cur.label; kind = 'grow'; a = [int]$prev.events; b = [int]$cur.events; list = '' }
+        }
+    }
+
+    return @{
+        days = $rows; peak = $peak; count = $rows.Count
+        notes = @($notes | Select-Object -Last 12)
+        hasXray = [bool]($xray.Count -gt 0)
+        time = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+    }
+}
+
+if ($Timeline) {
+    Emit-Json (Get-Timeline -Days $TimelineDays)
+    exit 0
+}
+
+# =========================================================================== #
+#  РЕЗЕРВНЫЕ КОПИИ: показать и вернуть
+#  Копии .reg программа делала и раньше, но импортировать их приходилось
+#  руками. Теперь круг замкнут: снимок -> откат по журналу -> импорт копии.
+# =========================================================================== #
+function Get-BackupList {
+    $roots = @()
+    if ($BackupRoot) { $roots += $BackupRoot }
+    $roots += [Environment]::GetFolderPath('Desktop')
+    $roots += $script:DataDir
+    $seen = @{}
+    $list = @()
+    foreach ($root in $roots) {
+        if (-not $root -or $seen.ContainsKey($root) -or -not (Test-Path -LiteralPath $root)) { continue }
+        $seen[$root] = $true
+        foreach ($dir in @(Get-ChildItem -LiteralPath $root -Directory -Filter 'Win11Privacy-Backup-*' -ErrorAction SilentlyContinue)) {
+            $files = @(Get-ChildItem -LiteralPath $dir.FullName -File -Filter '*.reg' -ErrorAction SilentlyContinue)
+            if ($files.Count -eq 0) { continue }
+            $size = 0
+            foreach ($f in $files) { $size += $f.Length }
+            $list += @{ path = $dir.FullName; name = $dir.Name
+                        when = $dir.CreationTime.ToString('yyyy-MM-dd HH:mm')
+                        branches = $files.Count; kb = [math]::Round($size / 1KB, 1) }
+        }
+    }
+    return @($list | Sort-Object { $_.when } -Descending)
+}
+
+if ($ListBackups) {
+    $bkList = @(Get-BackupList)
+    Emit-Json @{ items = $bkList; count = $bkList.Count }
+    exit 0
+}
+
+if ($RestoreBackup) {
+    if (-not (Test-Admin)) { Emit-Json @{ error = 'нужны права администратора' }; Write-Log '###DONE###'; exit 1 }
+    Write-Section 'Восстановление из резервной копии'
+    if (-not $BackupPath -or -not (Test-Path -LiteralPath $BackupPath)) {
+        Write-Log '   [!] папка копии не найдена'
+        Emit-Json @{ error = 'папка копии не найдена' }; Write-Log '###DONE###'; exit 1
+    }
+    $regFiles = @(Get-ChildItem -LiteralPath $BackupPath -File -Filter '*.reg' -ErrorAction SilentlyContinue)
+    if ($regFiles.Count -eq 0) {
+        Write-Log '   [!] в этой папке нет файлов .reg'
+        Emit-Json @{ error = 'в папке нет файлов .reg' }; Write-Log '###DONE###'; exit 1
+    }
+    Write-Log ("   найдено файлов: {0}" -f $regFiles.Count)
+    $ok = 0; $bad = 0
+    foreach ($f in $regFiles) {
+        if ($DryRun) { Write-Log ("   [тест] {0}" -f $f.Name); continue }
+        # через cmd: у reg.exe свой поток ошибок, и в PowerShell 5.1 он умеет
+        # обрываться терминирующей ошибкой на первом же отказе
+        try { $null = & cmd.exe /c "reg import `"$($f.FullName)`" >nul 2>&1" } catch { }
+        if ($LASTEXITCODE -eq 0) { Write-Log ("   [+] вернули: {0}" -f $f.Name); $ok++; $script:Changes++ }
+        else { Write-Log ("   [!] не удалось: {0}" -f $f.Name); $bad++; $script:Failures++ }
+    }
+    Write-Log ("   возвращено веток: {0}" -f $ok)
+    if ($bad -gt 0) { Write-Log ("   не удалось вернуть: {0}" -f $bad) }
+    Write-Log '   Значения вернулись к состоянию на момент копии. Перезагрузите компьютер.'
+    Emit-Json @{ restored = $ok; failed = $bad; path = $BackupPath }
     Write-Log '###DONE###'
     exit 0
 }

@@ -62,7 +62,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "тестовая сборка интерфейса не удалась" }
           $env:WIN11_TEST_MOCK = '1'
           $env:WIN11_TEST_DELAY = '1500'
-          $pages = @('home','settings','xray','dossier','audit','monitor','apps','startup','guard','changes','log','about')
+          $pages = @('home','settings','xray','dossier','audit','monitor','apps','startup','guard','changes','timeline','log','about')
           $bad = 0
           foreach ($lang in @('ru','en')) {
               if ($lang -eq 'en') { $env:WIN11_TEST_EN = '1' } else { Remove-Item Env:WIN11_TEST_EN -ErrorAction SilentlyContinue }

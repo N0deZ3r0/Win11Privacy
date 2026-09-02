@@ -567,4 +567,198 @@ namespace Win11Privacy
                             TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
         }
     }
+
+    // ================================================================== //
+    //  График хронологии: столбики событий телеметрии по дням, отметки
+    //  обновлений Windows, правок программы и срабатываний стража.
+    //  Здесь видно то, чего не видно в моменте: как система отыгрывает
+    //  настройки назад после очередного обновления.
+    // ================================================================== //
+    internal class TimelineChart : Control
+    {
+        private class Day
+        {
+            public string Label, Date;
+            public int Events, Sensors, Changes, Drifted, Fixed;
+            public string Updates = "";
+        }
+        private readonly List<Day> _days = new List<Day>();
+        private readonly Tween _grow = new Tween(0.12F);
+        private int _hover = -1;
+
+        public TimelineChart()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                     ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
+            _grow.Changed += delegate { Invalidate(); };
+        }
+
+        public string Empty = "";
+
+        public void SetData(List<object> days)
+        {
+            _days.Clear();
+            if (days != null)
+                foreach (object o in days)
+                {
+                    Dictionary<string, object> d = Json.Obj(o);
+                    if (d == null) continue;
+                    Day day = new Day();
+                    day.Label = Json.GetStr(d, "label");
+                    day.Date = Json.GetStr(d, "date");
+                    day.Events = Json.GetInt(d, "events");
+                    day.Sensors = Json.GetInt(d, "sensors");
+                    day.Changes = Json.GetInt(d, "changes");
+                    day.Drifted = Json.GetInt(d, "drifted");
+                    day.Fixed = Json.GetInt(d, "fixed");
+                    List<object> ups = Json.GetArr(d, "updates");
+                    string[] arr = new string[ups.Count];
+                    for (int i = 0; i < ups.Count; i++) arr[i] = ups[i] == null ? "" : ups[i].ToString();
+                    day.Updates = string.Join(", ", arr);
+                    _days.Add(day);
+                }
+            _grow.To(0F, false);
+            _grow.To(1F, IsHandleCreated && Visible);
+            Invalidate();
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            int idx = IndexAt(e.X);
+            if (idx != _hover) { _hover = idx; Invalidate(); }
+        }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = -1; Invalidate(); }
+
+        private int _plotLeft, _plotWidth;
+        private int IndexAt(int x)
+        {
+            if (_days.Count == 0 || _plotWidth <= 0) return -1;
+            float step = (float)_plotWidth / _days.Count;
+            int i = (int)((x - _plotLeft) / step);
+            return (i >= 0 && i < _days.Count) ? i : -1;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            int u = Font.Height;
+            if (Width < 80 || Height < 60) return;
+
+            int maxEv = 0, maxSens = 0;
+            foreach (Day d in _days) { if (d.Events > maxEv) maxEv = d.Events; if (d.Sensors > maxSens) maxSens = d.Sensors; }
+            bool useEvents = maxEv > 0;
+            int max = useEvents ? maxEv : maxSens;
+
+            if (_days.Count == 0 || max == 0)
+            {
+                TextRenderer.DrawText(g, Empty.Length > 0 ? Empty : L.T("Данных пока нет"), Font, ClientRectangle,
+                    Theme.TextFaint, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
+                                     TextFormatFlags.WordBreak);
+                return;
+            }
+
+            int padL = (int)(u * 2.6F), padR = (int)(u * 0.6F);
+            int padT = (int)(u * 1.4F), padB = (int)(u * 2.2F);
+            _plotLeft = padL; _plotWidth = Math.Max(10, Width - padL - padR);
+            int plotH = Math.Max(10, Height - padT - padB);
+            float step = (float)_plotWidth / _days.Count;
+            float barW = Math.Max(2F, step * 0.62F);
+
+            // сетка и подписи шкалы
+            using (Pen grid = new Pen(Theme.Mix(Theme.CardBg, Theme.Text, 0.10F)))
+            using (Font small = new Font(Font.FontFamily, Font.Size * 0.82F))
+            {
+                for (int s = 0; s <= 2; s++)
+                {
+                    int y = padT + plotH - (int)(plotH * s / 2.0);
+                    g.DrawLine(grid, padL, y, padL + _plotWidth, y);
+                    string lbl = FormatShort((int)Math.Round(max * s / 2.0));
+                    TextRenderer.DrawText(g, lbl, small, new Rectangle(0, y - u / 2, padL - (int)(u * 0.3F), u),
+                        Theme.TextFaint, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                }
+            }
+
+            Color barColor = useEvents ? Theme.Accent : Theme.Warn;
+            for (int i = 0; i < _days.Count; i++)
+            {
+                Day d = _days[i];
+                int val = useEvents ? d.Events : d.Sensors;
+                float x = padL + step * i + (step - barW) / 2F;
+                if (val > 0)
+                {
+                    float h = plotH * (val / (float)max) * _grow.Value;
+                    if (h < 2) h = 2;
+                    RectangleF r = new RectangleF(x, padT + plotH - h, barW, h);
+                    using (GraphicsPath p = Theme.RoundRect(r, Math.Min(3F, barW / 2F)))
+                    using (SolidBrush b = new SolidBrush(i == _hover ? Theme.AccentHover : barColor))
+                        g.FillPath(b, p);
+                }
+                // отметка обновления Windows — вертикальная черта во всю высоту
+                if (d.Updates.Length > 0)
+                {
+                    using (Pen up = new Pen(Theme.Mix(Theme.CardBg, Theme.Err, 0.75F), 1.5F))
+                        g.DrawLine(up, x + barW / 2F, padT - (int)(u * 0.4F), x + barW / 2F, padT + plotH);
+                    using (SolidBrush b = new SolidBrush(Theme.Err))
+                        g.FillEllipse(b, x + barW / 2F - 3F, padT - (int)(u * 0.7F), 6F, 6F);
+                }
+                // программа что-то меняла / страж что-то возвращал
+                if (d.Changes > 0)
+                    using (SolidBrush b = new SolidBrush(Theme.Ok))
+                        g.FillEllipse(b, x + barW / 2F - 3F, padT + plotH + (int)(u * 0.25F), 6F, 6F);
+                if (d.Drifted > 0)
+                    using (SolidBrush b = new SolidBrush(Theme.Warn))
+                        g.FillEllipse(b, x + barW / 2F - 3F, padT + plotH + (int)(u * 0.95F), 6F, 6F);
+            }
+
+            // подписи дат — только те, что помещаются
+            using (Font small = new Font(Font.FontFamily, Font.Size * 0.8F))
+            {
+                int everyN = Math.Max(1, (int)Math.Ceiling((u * 2.6F) / Math.Max(1F, step)));
+                for (int i = 0; i < _days.Count; i += everyN)
+                {
+                    float x = padL + step * i;
+                    TextRenderer.DrawText(g, _days[i].Label, small,
+                        new Rectangle((int)x - (int)(step / 2), Height - (int)(u * 1.1F), (int)(step * 2), u),
+                        Theme.TextFaint, TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);
+                }
+            }
+
+            // всплывающая подсказка по дню под курсором
+            if (_hover >= 0 && _hover < _days.Count)
+            {
+                Day d = _days[_hover];
+                List<string> parts = new List<string>();
+                parts.Add(d.Date);
+                if (d.Events > 0) parts.Add(L.T("событий: ") + d.Events);
+                if (d.Sensors > 0) parts.Add(L.T("датчики: ") + d.Sensors);
+                if (d.Changes > 0) parts.Add(L.T("правок: ") + d.Changes);
+                if (d.Drifted > 0) parts.Add(L.T("сбито: ") + d.Drifted);
+                if (d.Updates.Length > 0) parts.Add(L.T("обновление ") + d.Updates);
+                string tip = string.Join("   ·   ", parts.ToArray());
+                using (Font small = new Font(Font.FontFamily, Font.Size * 0.85F))
+                {
+                    Size ts = TextRenderer.MeasureText(g, tip, small, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
+                    int tw = ts.Width + (int)(u * 0.8F), th = (int)(u * 1.5F);
+                    int tx = Math.Max(2, Math.Min(Width - tw - 2, (int)(padL + step * _hover) - tw / 2));
+                    RectangleF tr = new RectangleF(tx, 0, tw, th);
+                    using (GraphicsPath p = Theme.RoundRect(tr, 6))
+                    using (SolidBrush b = new SolidBrush(Theme.Mix(Theme.CardBg, Theme.Text, 0.14F))) g.FillPath(b, p);
+                    TextRenderer.DrawText(g, tip, small, Rectangle.Round(tr), Theme.Text,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                }
+            }
+        }
+
+        private static string FormatShort(int v)
+        {
+            if (v >= 1000000) return (v / 1000000.0).ToString("0.#") + L.T(" млн");
+            if (v >= 1000) return (v / 1000.0).ToString("0.#") + L.T(" тыс");
+            return v.ToString();
+        }
+    }
 }

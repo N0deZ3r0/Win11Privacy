@@ -40,7 +40,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(878, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(925, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -919,6 +919,53 @@ namespace Win11Privacy
             _map["Страж будет проверять каждый день. Нажмите «Включить стража»."] = "The guard will check every day. Press \"Turn the guard on\".";
             _map["Страж будет проверять раз в неделю. Нажмите «Включить стража»."] = "The guard will check once a week. Press \"Turn the guard on\".";
             _map["Виджеты и лента Microsoft Start"] = "Widgets and the Microsoft Start feed";
+            _map["Хронология"] = "Timeline";
+            _map["Хронология приватности"] = "Privacy timeline";
+            _map["Программа копит историю: события телеметрии по дням, обновления Windows,\n"] = "The program keeps a history: telemetry events per day, Windows updates,\n";
+            _map["свои правки и возвраты стража. Чем дольше она стоит, тем больше видно."] = "its own changes and the guard\u2019s repairs. The longer it runs, the more you see.";
+            _map["Замерить телеметрию"] = "Measure telemetry";
+            _map["Линии телеметрии пока нет: включите запись на «Рентгене» и нажмите «Замерить»."] = "No telemetry line yet: turn recording on in X-ray and press Measure.";
+            _map["Сбор хронологии…"] = "Building the timeline…";
+            _map["Не удалось собрать хронологию."] = "Could not build the timeline.";
+            _map["Что случилось за это время"] = "What happened during this period";
+            _map["Пока ничего примечательного не происходило"] = "Nothing notable has happened yet";
+            _map["Показано дней: "] = "Days shown: ";
+            _map[". Столбики — события телеметрии в сутки."] = ". Bars are telemetry events per day.";
+            _map[". Столбики — обращения к датчикам: замера телеметрии ещё не было."] = ". Bars are sensor accesses: telemetry has not been measured yet.";
+            _map["Красная черта — обновление Windows, зелёная точка — правка программы, жёлтая — возврат стража."] = "Red line — a Windows update, green dot — a change by this program, yellow — a repair by the guard.";
+            _map["Данных пока нет"] = "No data yet";
+            _map["событий: "] = "events: ";
+            _map["датчики: "] = "sensors: ";
+            _map["правок: "] = "changes: ";
+            _map["сбито: "] = "reverted by Windows: ";
+            _map["обновление "] = "update ";
+            _map["Что о вас узнали — вытащено из самих событий"] = "What they learned about you — taken from the events themselves";
+            _map[" шт."] = " items";
+            _map["Из резервной копии"] = "From a backup";
+            _map["Поиск резервных копий…"] = "Looking for backups…";
+            _map["Резервных копий не найдено.\n\n"] = "No backups found.\n\n";
+            _map["Программа создаёт их на рабочем столе перед первым изменением\n"] = "They are created on the desktop before the first change of\n";
+            _map["в каждом запуске. Если папку перенесли — верните её на место."] = "each run. If the folder was moved, put it back.";
+            _map["Восстановление из копии"] = "Restoring from a backup";
+            _map["Восстановление из копии…"] = "Restoring from the backup…";
+            _map[" веток"] = " branches";
+            _map[" КБ"] = " KB";
+            _map["Выберите копию — её значения вернутся в реестр как были на тот момент."] = "Pick a backup — its values go back into the registry as they were then.";
+            _map["Восстановить"] = "Restore";
+            _map["Из копии будут возвращены все сохранённые ветки реестра:\n\n"] = "Every saved registry branch will be restored from:\n\n";
+            _map["\n\nТекущие значения этих параметров будут заменены.\n\nПродолжить?"] = "\n\nCurrent values of these settings will be replaced.\n\nContinue?";
+            _map["Что изменится"] = "What will change";
+            _map["Сверка с текущим состоянием…"] = "Comparing with the current state…";
+            _map["Не удалось прочитать состояние системы."] = "Could not read the system state.";
+            _map["Всё выбранное уже настроено — применять нечего."] = "Everything selected is already set — nothing to apply.";
+            _map["Программа поменяет "] = "The program will change ";
+            _map[" настроек. Слева — как сейчас, справа — как станет."] = " settings. On the left is how it is now, on the right how it will be.";
+            _map["Отмена"] = "Cancel";
+            _map["Обновление Windows: "] = "Windows update: ";
+            _map["Страж нашёл сбитых настроек: "] = "The guard found settings reverted by Windows: ";
+            _map[", вернул: "] = ", repaired: ";
+            _map["Телеметрия выросла: было "] = "Telemetry grew: it was ";
+            _map[" событий в сутки, стало "] = " events per day, now ";
         }
     }
 }
