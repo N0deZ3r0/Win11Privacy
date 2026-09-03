@@ -180,9 +180,13 @@ namespace Win11Privacy
     internal class TileGrid : Panel
     {
         public float MinTileWidthU = 13.5F;   // минимальная ширина плитки, в высотах шрифта
-        public float TileHeightU = 5.1F;      // высота плитки
+        public float TileHeightU = 6.0F;      // высота плитки: хватает на две строки подписи
         public float GapU = 0.55F;            // зазор
         public int MaxCols = 4;
+        // Полоса фиксированной высоты вмещает только один ряд: если плитки
+        // не влезли по ширине, они должны сузиться, а не уехать во второй ряд,
+        // где их просто не видно.
+        public bool SingleRow;
         private bool _busy;
 
         public TileGrid()
@@ -198,6 +202,7 @@ namespace Win11Privacy
 
         private int CalcCols(int width, int count)
         {
+            if (SingleRow) return Math.Max(1, count);
             int u = Font.Height;
             int gap = (int)(u * GapU);
             int minW = Math.Max(40, (int)(u * MinTileWidthU));

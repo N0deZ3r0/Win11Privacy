@@ -40,7 +40,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(933, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(934, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -974,6 +974,7 @@ namespace Win11Privacy
             _map["Примеры"] = "Examples";
             _map["Дата"] = "Date";
             _map["Событие"] = "Event";
+            _map[" проходит, по кэшу DNS"] = " leaking, per DNS cache";
         }
     }
 }

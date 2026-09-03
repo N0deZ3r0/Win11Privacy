@@ -941,9 +941,33 @@ namespace Win11Privacy
                     new Rectangle((int)(u * 0.85F), (int)(u * 1.55F), Width - (int)(u * 1.4F), (int)(u * 2.2F)),
                     Accent, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
             if (!string.IsNullOrEmpty(Sub))
-                TextRenderer.DrawText(g, Sub, Font,
-                    new Rectangle((int)(u * 0.9F), Height - (int)(u * 1.7F), Width - (int)(u * 1.5F), (int)(u * 1.6F)),
-                    Theme.TextDim, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+            {
+                // Подпись переносится на вторую строку, а если и так не влезает —
+                // печатается шрифтом поменьше. Раньше она была в одну строку с
+                // обрезкой и на узкой плитке рвалась на полуслове:
+                // «1 не заблокировано (из кэ…».
+                int subL = (int)(u * 0.9F);
+                int subW = Math.Max(20, Width - (int)(u * 1.5F));
+                int subT = (int)(u * 3.9F);
+                int subH = Height - subT - (int)(u * 0.35F);
+                if (subH < u) { subT = Height - (int)(u * 1.7F); subH = (int)(u * 1.6F); }
+                Font sf = Font;
+                Font shrunk = null;
+                Size need = TextRenderer.MeasureText(g, Sub, sf, new Size(subW, 0),
+                                TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
+                foreach (float scale in new[] { 0.85F, 0.72F })
+                {
+                    if (need.Height <= subH || Font.Size * scale < 6.5F) break;
+                    if (shrunk != null) shrunk.Dispose();
+                    shrunk = new Font(Font.FontFamily, Font.Size * scale);
+                    sf = shrunk;
+                    need = TextRenderer.MeasureText(g, Sub, sf, new Size(subW, 0),
+                               TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
+                }
+                TextRenderer.DrawText(g, Sub, sf, new Rectangle(subL, subT, subW, subH), Theme.TextDim,
+                    TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
+                if (shrunk != null) shrunk.Dispose();
+            }
         }
     }
 

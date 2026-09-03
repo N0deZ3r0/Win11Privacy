@@ -1931,7 +1931,8 @@ namespace Win11Privacy
             rightTop.Controls.Add(_auditHint);
             _auditTiles = new TileGrid();
             _auditTiles.Dock = DockStyle.Fill; _auditTiles.Font = Font; _auditTiles.MaxCols = 4;
-            _auditTiles.MinTileWidthU = 11.5F; _auditTiles.TileHeightU = 5.6F;
+            _auditTiles.MinTileWidthU = 11.5F; _auditTiles.TileHeightU = 6.6F;
+            _auditTiles.SingleRow = true;   // полоса одна: плитки сужаются, но не пропадают
             rightTop.Controls.Add(_auditTiles);
             _auditTiles.BringToFront();
             top.Controls.Add(rightTop, 1, 0);
@@ -3554,7 +3555,7 @@ namespace Win11Privacy
             if (buf != null) { string mb = Json.GetStr(buf, "mb"); _auditTiles.Controls.Add(Tile(L.T("Буфер телеметрии"), (mb == "-1" ? L.T("нет") : mb + L.T(" МБ")), Json.GetInt(buf, "files") + L.T(" файлов ждут отправки"), Theme.Accent)); }
             List<object> dns = Json.GetArr(d, "dns");
             int leaked = 0; foreach (object o in dns) if (!Json.GetBool(Json.Obj(o), "blocked")) leaked++;
-            _auditTiles.Controls.Add(Tile(L.T("Обращения к телеметрии"), dns.Count.ToString(), leaked + L.T(" не заблокировано (из кэша DNS)"), leaked == 0 ? Theme.Ok : Theme.Err));
+            _auditTiles.Controls.Add(Tile(L.T("Обращения к телеметрии"), dns.Count.ToString(), leaked + L.T(" проходит, по кэшу DNS"), leaked == 0 ? Theme.Ok : Theme.Err));
 
             _auditGroups.Controls.Clear();
             RenderProof();
@@ -3992,6 +3993,11 @@ namespace Win11Privacy
                 if (shot != null) { try { using (Bitmap bmp = new Bitmap(f.Width, f.Height)) { f.DrawToBitmap(bmp, new Rectangle(0, 0, f.Width, f.Height)); bmp.Save(shot); Console.WriteLine("SHOT " + shot); } } catch (Exception ex) { Console.WriteLine("SHOTERR " + ex.Message); } }
                 // сборке важно не только «окно открылось», но и что на странице что-то есть
                 Console.WriteLine("PAGE " + page + " controls=" + CountControls(f.PageOf(page)));
+                if (Environment.GetEnvironmentVariable("WIN11_TEST_DUMP") == "1")
+                {
+                    Console.WriteLine("CLIENT " + f.ClientSize.Width + "x" + f.ClientSize.Height);
+                    DumpBounds(f.PageOf(page), 0);
+                }
                 Console.WriteLine("UITEST ok"); f.Close();
             };
             f.Shown += delegate {
@@ -4124,6 +4130,19 @@ namespace Win11Privacy
         }
 
 #if UITEST
+        // Печатает дерево с координатами: сразу видно, кто вылез за родителя
+        private static void DumpBounds(Control c, int depth)
+        {
+            if (c == null || depth > 4) return;
+            foreach (Control cc in c.Controls)
+            {
+                string over = (cc.Right > c.ClientSize.Width) ? "  <== ВЫЛЕЗ за " + c.ClientSize.Width : "";
+                Console.WriteLine(new string(' ', depth * 2) + cc.GetType().Name +
+                    " [" + cc.Left + "," + cc.Top + " " + cc.Width + "x" + cc.Height + "]" + over);
+                DumpBounds(cc, depth + 1);
+            }
+        }
+
         private static int CountControls(Control c)
         {
             if (c == null) return 0;

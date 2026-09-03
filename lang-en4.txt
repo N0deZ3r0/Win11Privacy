@@ -239,3 +239,4 @@ Windows не отдаёт	Withheld by Windows
 Примеры	Examples
 Дата	Date
 Событие	Event
+ проходит, по кэшу DNS	 leaking, per DNS cache
