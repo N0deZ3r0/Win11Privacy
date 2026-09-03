@@ -56,7 +56,7 @@ namespace Win11Privacy
         private Card _homeDonutCard, _homeChartCard;
         private Label _verdictTitle, _verdictSub;
         private MiniStat _msEvents, _msYear, _msBlocked;
-        private ActionCard _qcXray, _qcDossier, _qcMonitor, _qcGuard;
+        private ActionCard _qcXray, _qcDossier, _qcMonitor, _qcGuard, _qcStartup, _qcTimeline;
         private ChipLabel _homeSysChip;
         private Panel _homeScroll;
         private Control _pageApps;
@@ -795,18 +795,22 @@ namespace Win11Privacy
             // --- карточки разделов с живыми статусами --------------------------
             TileGrid quick = new TileGrid();
             quick.Dock = DockStyle.Fill; quick.AutoSize = true; quick.Font = Font;
-            quick.MinTileWidthU = 13.0F; quick.TileHeightU = 4.0F; quick.MaxCols = 4;
+            quick.MinTileWidthU = 13.0F; quick.TileHeightU = 4.0F; quick.MaxCols = 3;
             quick.Margin = new Padding(0, 0, 0, (int)(u * 0.7F));
             quick.Resize += delegate { FitHomeHeight(); };
             _qcXray    = new ActionCard(L.T("Рентген"), GXray, Theme.Warn);
             _qcDossier = new ActionCard(L.T("Досье"), GFinger, Theme.Err);
             _qcMonitor = new ActionCard(L.T("Монитор"), GNav3, Theme.Accent);
             _qcGuard   = new ActionCard(L.T("Страж"), GShield, Theme.Ok);
+            _qcStartup = new ActionCard(L.T("Автозапуск"), GPower, Theme.Warn);
+            _qcTimeline= new ActionCard(L.T("Хронология"), GHistory, Theme.Accent);
             _qcXray.Click    += delegate { Navigate("xray"); };
             _qcDossier.Click += delegate { Navigate("dossier"); };
             _qcMonitor.Click += delegate { Navigate("monitor"); };
             _qcGuard.Click   += delegate { Navigate("guard"); };
-            foreach (ActionCard c in new[] { _qcXray, _qcDossier, _qcMonitor, _qcGuard })
+            _qcStartup.Click += delegate { Navigate("startup"); };
+            _qcTimeline.Click+= delegate { Navigate("timeline"); };
+            foreach (ActionCard c in new[] { _qcXray, _qcDossier, _qcMonitor, _qcGuard, _qcStartup, _qcTimeline })
             { c.Font = Font; c.SetStatus(L.T("ожидание данных…"), Theme.TextFaint); quick.Controls.Add(c); }
             page.Controls.Add(quick, 0, 2);
 
@@ -947,6 +951,45 @@ namespace Win11Privacy
         }
 
         // Заполняет главный экран по уже полученным данным
+        private bool _homeExtraAsked;
+
+        // Автозапуск и хронология подтягиваются один раз при первом показе
+        // «Обзора»: держать их в стартовой очереди незачем, а карточка без
+        // цифры бесполезна.
+        private void FillHomeExtras()
+        {
+            if (_homeExtraAsked || _mockMode) return;
+#if UITEST
+            return;
+#pragma warning disable 0162
+#endif
+            _homeExtraAsked = true;
+            RunJson("-ListStartup", L.T("Чтение автозагрузки…"), delegate(Dictionary<string, object> d)
+            {
+                if (d == null) return;
+                _lastStartup = d;
+                int bad = Json.GetInt(d, "advise"), on = Json.GetInt(d, "on");
+                if (_qcStartup != null)
+                    _qcStartup.SetStatus(bad > 0 ? bad + L.T(" лишних из ") + on
+                                                 : on + L.T(" записей, лишних нет"),
+                                         bad > 0 ? Theme.Warn : Theme.Ok);
+                RunJson("-Timeline -TimelineDays 30", L.T("Сбор хронологии…"), delegate(Dictionary<string, object> t)
+                {
+                    if (t == null) return;
+                    _lastTimeline = t;
+                    List<object> notes = Json.GetArr(t, "notes");
+                    if (_qcTimeline == null) return;
+                    if (notes.Count == 0) { _qcTimeline.SetStatus(L.T("пока без событий"), Theme.TextFaint); return; }
+                    Dictionary<string, object> last = Json.Obj(notes[notes.Count - 1]);
+                    string kind = Json.GetStr(last, "kind");
+                    string what = kind == "update" ? L.T("обновление Windows") :
+                                  kind == "drift" ? L.T("Windows сбила настройки") : L.T("телеметрия выросла");
+                    _qcTimeline.SetStatus(Json.GetStr(last, "date") + " — " + what,
+                                          kind == "update" ? Theme.Accent : Theme.Warn);
+                });
+            });
+        }
+
         private void RefreshHome()
         {
             if (_homeRing == null) return;
@@ -2753,7 +2796,28 @@ namespace Win11Privacy
         }
         private Control _aboutEdition, _aboutData;
 #pragma warning disable 0649
-        private bool _mockMode;   // ставится только в тестовой сборке
+        private bool _mockMode;
+        // Переносимый режим: рядом с exe лежит файл portable.txt — тогда все
+        // данные программы хранятся там же, а не в ProgramData, и на чужом
+        // компьютере после себя ничего не остаётся.
+        private static string _portableRoot;
+        private static string PortableRoot()
+        {
+            if (_portableRoot != null) return _portableRoot;
+            _portableRoot = "";
+            try
+            {
+                string dir = Path.GetDirectoryName(Application.ExecutablePath);
+                if (File.Exists(Path.Combine(dir, "portable.txt")))
+                {
+                    string data = Path.Combine(dir, "Win11Privacy-Data");
+                    if (!Directory.Exists(data)) Directory.CreateDirectory(data);
+                    _portableRoot = data;
+                }
+            }
+            catch { }
+            return _portableRoot;
+        }   // ставится только в тестовой сборке
 #pragma warning restore 0649
         private FlowLayoutPanel _aboutFlow;
 
@@ -2978,6 +3042,8 @@ namespace Win11Privacy
         // ================================================================== //
         private static string UiStatePath()
         {
+            string portable = PortableRoot();
+            if (portable.Length > 0) return Path.Combine(portable, "ui.json");
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                                 "Win11Privacy", "ui.json");
         }
@@ -3214,9 +3280,13 @@ namespace Win11Privacy
         private ProcessStartInfo EnginePsi(string extra)
         {
             string script = ExtractEngine();
-            string desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+            string portable = PortableRoot();
+            string backupRoot = (portable.Length > 0)
+                ? portable
+                : Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
             string args = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" " + extra +
-                          " -BackupRoot \"" + desktop + "\"";
+                          " -BackupRoot \"" + backupRoot + "\"";
+            if (portable.Length > 0) args += " -DataRoot \"" + portable + "\"";
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = PowerShellExe(); psi.Arguments = args;
             psi.UseShellExecute = false; psi.CreateNoWindow = true;
@@ -3551,6 +3621,9 @@ namespace Win11Privacy
             int blockedTiles = Json.GetInt(d, "blocked");
             if (blockedTiles > 0)
                 _auditTiles.Controls.Add(Tile(L.T("Windows не отдаёт"), blockedTiles.ToString(), L.T("не считаются в индексе"), Theme.TextFaint));
+            int naTiles = Json.GetInt(d, "notApplicable");
+            if (naTiles > 0)
+                _auditTiles.Controls.Add(Tile(L.T("Нет на этой Windows"), naTiles.ToString(), L.T("не считаются в индексе"), Theme.TextFaint));
             Dictionary<string, object> buf = Json.GetObj(d, "buffer");
             if (buf != null) { string mb = Json.GetStr(buf, "mb"); _auditTiles.Controls.Add(Tile(L.T("Буфер телеметрии"), (mb == "-1" ? L.T("нет") : mb + L.T(" МБ")), Json.GetInt(buf, "files") + L.T(" файлов ждут отправки"), Theme.Accent)); }
             List<object> dns = Json.GetArr(d, "dns");
@@ -3901,9 +3974,8 @@ namespace Win11Privacy
                     LoadDefs();
                     RunJson("-Spy", L.T("Чтение журнала датчиков…"), delegate(Dictionary<string, object> s)
                     {
-                        if (s == null) return;
-                        _lastSpy = s;
-                        RenderDossier();
+                        if (s != null) { _lastSpy = s; RenderDossier(); }
+                        FillHomeExtras();   // очередью, а не четырьмя процессами разом
                     });
                 }
             });
@@ -3998,6 +4070,7 @@ namespace Win11Privacy
                     Console.WriteLine("CLIENT " + f.ClientSize.Width + "x" + f.ClientSize.Height);
                     DumpBounds(f.PageOf(page), 0);
                 }
+                foreach (string clip in ClipWatch.Clipped) Console.WriteLine(clip);
                 Console.WriteLine("UITEST ok"); f.Close();
             };
             f.Shown += delegate {
@@ -4041,7 +4114,19 @@ namespace Win11Privacy
             for (int i = 0; i < argv.Length; i++)
             {
                 string a = argv[i].ToLowerInvariant();
-                if (a == "--profile" && i + 1 < argv.Length) profile = argv[++i];
+                if (a == "--portable")
+                {
+                    // ставим метку рядом с exe: дальше программа хранит всё там же
+                    try
+                    {
+                        string dir = Path.GetDirectoryName(Application.ExecutablePath);
+                        File.WriteAllText(Path.Combine(dir, "portable.txt"),
+                            "Пока этот файл лежит рядом с Win11Privacy.exe, программа хранит свои данные" +
+                            Environment.NewLine + "в папке Win11Privacy-Data рядом с собой, а не в ProgramData." + Environment.NewLine);
+                    }
+                    catch { }
+                }
+                else if (a == "--profile" && i + 1 < argv.Length) profile = argv[++i];
                 else if (a == "--silent" || a == "-silent") silent = true;
                 else if (a == "--audit") audit = true;
             }
@@ -4322,6 +4407,8 @@ namespace Win11Privacy
                 "{\"date\":\"22.08\",\"kind\":\"drift\",\"a\":6,\"b\":6,\"list\":\"\"}," +
                 "{\"date\":\"29.08\",\"kind\":\"update\",\"a\":0,\"b\":0,\"list\":\"KB5070101\"}]}");
             RenderTimeline(Json.ParseObject(tl.ToString()));
+            if (_qcStartup != null) _qcStartup.SetStatus("5 лишних из 8", Theme.Warn);
+            if (_qcTimeline != null) _qcTimeline.SetStatus("29.08 — обновление Windows", Theme.Accent);
 
             SetAboutBody(_aboutData, "Папка: C:\\ProgramData\\Win11Privacy\n" +
                 "• История датчиков по дням: кто включал камеру, микрофон и геолокацию — 9,9 КБ, изменён 2026-09-01 20:03\n" +

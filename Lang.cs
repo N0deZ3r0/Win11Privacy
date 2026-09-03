@@ -40,7 +40,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(934, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(942, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -975,6 +975,14 @@ namespace Win11Privacy
             _map["Дата"] = "Date";
             _map["Событие"] = "Event";
             _map[" проходит, по кэшу DNS"] = " leaking, per DNS cache";
+            _map[" лишних из "] = " not needed of ";
+            _map[" записей, лишних нет"] = " entries, nothing extra";
+            _map["пока без событий"] = "no events yet";
+            _map["обновление Windows"] = "a Windows update";
+            _map["Windows сбила настройки"] = "Windows reverted settings";
+            _map["телеметрия выросла"] = "telemetry grew";
+            _map["Нет на этой Windows"] = "Not on this Windows";
+            _map["нет на этой версии Windows"] = "not on this Windows version";
         }
     }
 }

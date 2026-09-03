@@ -99,6 +99,8 @@ param(
     [switch]$GuardDaily,
     # --- уборка мусора от версий со сломанным Def ---
     [switch]$CleanJunk,
+    # --- где хранить данные: рядом с exe вместо ProgramData ---
+    [string]$DataRoot = '',
     # --- хронология и резервные копии ---
     [switch]$Timeline,
     [int]$TimelineDays = 30,
@@ -140,7 +142,13 @@ $ChangeItems  = Expand-List $ChangeItems
 $script:HostsMarkStart = '# --- Win11Privacy: блокировка телеметрии (начало) ---'
 $script:HostsMarkEnd   = '# --- Win11Privacy: блокировка телеметрии (конец) ---'
 $script:FwGroup        = 'Win11Privacy'
-$script:DataDir        = Join-Path $env:ProgramData 'Win11Privacy'
+# Обычно данные лежат в ProgramData. В переносимом режиме интерфейс
+# передаёт -DataRoot, и всё остаётся рядом с exe — на чужом компьютере
+# программа не оставляет следов.
+$script:DataDir        = $(if ($DataRoot) { $DataRoot } else { Join-Path $env:ProgramData 'Win11Privacy' })
+# Задачам планировщика путь к данным надо передать явно: они запускаются
+# сами по себе и о переносимом режиме иначе не узнают.
+$script:DataArg        = $(if ($DataRoot) { ' -DataRoot "' + $DataRoot + '"' } else { '' })
 $script:GuardTask      = 'Win11Privacy Guard'
 $script:SensorTask     = 'Win11Privacy Sensor'
 $script:AuditGuid      = '{0CCE9226-69AE-11D9-BED3-505054503030}'   # Filtering Platform Connection
@@ -148,6 +156,12 @@ $script:DiagDir        = Join-Path $env:ProgramData 'Microsoft\Diagnosis'
 # Все виды определений, которые пишут в реестр. Список один, потому что
 # забыть про новый вид в резервной копии или уборке — тихая потеря данных.
 $script:RegTypes = @('reg', 'regif', 'regpol')
+# Номер сборки Windows: по нему настройки, которых на этой версии нет вовсе
+# (Copilot, Recall, виджеты — их не было до Windows 11), не считаются
+# «не применёнными». Иначе на Windows 10 индекс был бы низким без вины
+# пользователя.
+$script:OsBuild = 0
+try { $script:OsBuild = [int](Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'CurrentBuildNumber' -ErrorAction Stop).CurrentBuildNumber } catch { }
 $script:Changes = 0
 $script:Failures = 0
 $script:Already = 0
@@ -499,11 +513,12 @@ function Def {
     # раньше звался $n и затирал параметр $N — в реестр вместо AllowTelemetry
     # писалось значение с именем «0». Любая локальная переменная здесь обязана
     # отличаться от имён параметров не только регистром.
-    param($M, $T, $P, $N, $V, $Type = 'DWord', $C = '')
+    param($M, $T, $P, $N, $V, $Type = 'DWord', $C = '', $Min = 0)
     $seq = 0
     if ($script:DefSeq.ContainsKey($M)) { $seq = [int]$script:DefSeq[$M] }
     $script:DefSeq[$M] = $seq + 1
-    $script:Defs.Add(@{ M=$M; T=$T; P=$P; N=$N; V=$V; Type=$Type; C=$C; Id=("{0}#{1}" -f $M, $seq) })
+    $script:Defs.Add(@{ M=$M; T=$T; P=$P; N=$N; V=$V; Type=$Type; C=$C; Min=[int]$Min
+                        Id=("{0}#{1}" -f $M, $seq) })
 }
 
 $dc  = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection'
@@ -578,16 +593,16 @@ Def 'search' 'reg' $sm 'AllowCloudSearch' 0 'DWord' 'облачный поиск
 Def 'search' 'reg' $sm 'EnableDynamicContentInWSB' 0 'DWord' 'рекламные подсказки в поле поиска — выкл'
 
 $ai = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'
-Def 'copilot' 'reg' 'HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 1 'DWord' 'Windows Copilot — выкл'
-Def 'copilot' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 1 'DWord' 'Windows Copilot — выкл для всех'
-Def 'copilot' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'ShowCopilotButton' 0 'DWord' 'кнопка Copilot на панели задач — убрать'
-Def 'copilot' 'reg' $ai 'DisableAIDataAnalysis' 1 'DWord' 'Recall (снимки экрана) — выкл'
-Def 'copilot' 'reg' $ai 'AllowRecallEnablement' 0 'DWord' 'запрет включения Recall'
-Def 'copilot' 'reg' 'HKCU:\Software\Policies\Microsoft\Windows\WindowsAI' 'DisableAIDataAnalysis' 1 'DWord' 'Recall — выкл для пользователя'
+Def 'copilot' 'reg' 'HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 1 'DWord' 'Windows Copilot — выкл' 22000
+Def 'copilot' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 1 'DWord' 'Windows Copilot — выкл для всех' 22000
+Def 'copilot' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'ShowCopilotButton' 0 'DWord' 'кнопка Copilot на панели задач — убрать' 22000
+Def 'copilot' 'reg' $ai 'DisableAIDataAnalysis' 1 'DWord' 'Recall (снимки экрана) — выкл' 26100
+Def 'copilot' 'reg' $ai 'AllowRecallEnablement' 0 'DWord' 'запрет включения Recall' 26100
+Def 'copilot' 'reg' 'HKCU:\Software\Policies\Microsoft\Windows\WindowsAI' 'DisableAIDataAnalysis' 1 'DWord' 'Recall — выкл для пользователя' 26100
 
 # Весь ИИ Windows
-Def 'ai' 'reg' $ai 'DisableClickToDo' 1 'DWord' 'Click to Do — выкл'
-Def 'ai' 'reg' $ai 'TurnOffSavingSnapshots' 1 'DWord' 'сохранение снимков экрана — выкл'
+Def 'ai' 'reg' $ai 'DisableClickToDo' 1 'DWord' 'Click to Do — выкл' 26100
+Def 'ai' 'reg' $ai 'TurnOffSavingSnapshots' 1 'DWord' 'сохранение снимков экрана — выкл' 26100
 Def 'ai' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Notepad' 'DisableAIFeatures' 1 'DWord' 'Copilot в Блокноте — выкл'
 Def 'ai' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Paint' 'DisableCocreator' 1 'DWord' 'Paint Cocreator — выкл'
 Def 'ai' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Paint' 'DisableGenerativeFill' 1 'DWord' 'Paint: генеративная заливка — выкл'
@@ -599,8 +614,8 @@ Def 'ai' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' 'EdgeHistoryAISearchEnab
 Def 'ai' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' 'EdgeEntityExtractionEnabled' 0 'DWord' 'Edge: извлечение сущностей — выкл'
 Def 'ai' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' 'Microsoft365CopilotChatIconEnabled' 0 'DWord' 'Edge: значок Copilot — убрать'
 Def 'ai' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer' 'DisableGraphRecentItems' 1 'DWord' 'Проводник: облачные «недавние» — выкл'
-Def 'ai' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer' 'HideRecommendedSection' 1 'DWord' 'Пуск: раздел «Рекомендуем» — скрыть'
-Def 'ai' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'ShowRecommendations' 0 'DWord' 'Проводник: рекомендации в «Главной» — выкл'
+Def 'ai' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer' 'HideRecommendedSection' 1 'DWord' 'Пуск: раздел «Рекомендуем» — скрыть' 22000
+Def 'ai' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'ShowRecommendations' 0 'DWord' 'Проводник: рекомендации в «Главной» — выкл' 22000
 
 $e = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
 Def 'edge' 'reg' $e 'MetricsReportingEnabled' 0 'DWord' 'статистика использования — выкл'
@@ -622,8 +637,8 @@ Def 'location' 'reg' $loc 'DisableWindowsLocationProvider' 1 'DWord' 'поста
 Def 'location' 'reg' 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location' 'Value' 'Deny' 'String' 'доступ приложений к местоположению — запрещён'
 Def 'location' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\FindMyDevice' 'AllowFindMyDevice' 0 'DWord' '«Поиск устройства» (отправка координат) — выкл'
 
-Def 'widgets' 'regpol' 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests' 0 'DWord' 'виджеты и лента новостей MSN — выкл'
-Def 'widgets' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'TaskbarDa' 0 'DWord' 'кнопка виджетов на панели задач — убрать'
+Def 'widgets' 'regpol' 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests' 0 'DWord' 'виджеты и лента новостей MSN — выкл' 22000
+Def 'widgets' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'TaskbarDa' 0 'DWord' 'кнопка виджетов на панели задач — убрать' 22000
 Def 'widgets' 'regpol' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds' 'EnableFeeds' 0 'DWord' 'лента новостей и интересов — выкл (запасной ключ)'
 
 $dfn = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet'
@@ -989,9 +1004,23 @@ function Apply-Def {
     }
 }
 
+# Настройки, которой на этой версии Windows не существует, не бывает
+# «не применённой»: помечаем na и не считаем ни в плюс, ни в минус.
+function Test-DefApplicable {
+    param($d)
+    $minB = 0
+    try { $minB = [int]$d.Min } catch { }
+    if ($minB -le 0 -or $script:OsBuild -le 0) { return $true }
+    return ($script:OsBuild -ge $minB)
+}
+
 function Check-Def {
     param($d)
     $ok = $false; $actual = ''
+    if (-not (Test-DefApplicable $d)) {
+        return @{ module=$d.M; name=$d.C; ok=$false; na=$true
+                  expected="$($d.V)"; actual='нет на этой версии Windows' }
+    }
     switch ($d.T) {
         'regif' {
             if (-not (Test-Path -LiteralPath $d.P)) { $ok = $true; $actual = 'нет на этой системе' }
@@ -1002,9 +1031,11 @@ function Check-Def {
             }
         }
         'regpol' {
-            # проверяем честно, как обычный параметр: не записано — значит не применено
+            # Проверяем как обычный параметр. «Windows не разрешает» — это факт,
+            # известный только после неудачной записи, и подставляется он в
+            # -Audit по журналу отказов; здесь догадок не строим.
             $v = Get-RegValue $d.P $d.N
-            $actual = if ($null -eq $v) { 'Windows не разрешает' } else { "$v" }
+            $actual = if ($null -eq $v) { 'не задано' } else { "$v" }
             $ok = ($null -ne $v) -and ("$v" -eq "$($d.V)")
         }
         'reg' {
@@ -1730,6 +1761,7 @@ function Run-Guard {
         if ($mods -notcontains $d.M) { continue }
         if ($d.T -in @('taskglob','svcopt')) { continue }
         $r = Check-Def $d
+        if ($r.na) { continue }                      # чего нет на этой Windows — не сбито
         if (-not $r.ok) { $drifted += $r }
     }
     $driftModules = @($drifted | ForEach-Object { $_.module } | Select-Object -Unique)
@@ -1810,7 +1842,7 @@ if ($InstallGuard) {
         Copy-Item -LiteralPath $PSCommandPath -Destination $engineDst -Force
         $mods = @($Modules | Where-Object { $_ -notin @('cleanup','startup','buffer') })
         Save-Json 'profile.json' @{ version=1; modules=$mods; created=(Get-Date).ToString('s') }
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -Guard')
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -Guard' + $script:DataArg)
         $t1 = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
         $t1.Delay = 'PT3M'
         # по умолчанию раз в неделю; -GuardDaily — каждый день в то же время
@@ -2448,7 +2480,7 @@ if ($InstallWatcher) {
         if (-not (Get-MonitorEnabled)) { Set-MonitorEnabled $true | Out-Null }
         foreach ($d in $script:Defs) { if ($d.M -eq 'firewall') { Apply-Def $d } }
 
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -WatcherNotify')
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -WatcherNotify' + $script:DataArg)
         $cls = Get-CimClass -ClassName MSFT_TaskEventTrigger -Namespace Root/Microsoft/Windows/TaskScheduler
         $trigger = New-CimInstance -CimClass $cls -ClientOnly
         $trigger.Subscription = '<QueryList><Query Id="0" Path="Security"><Select Path="Security">*[System[(EventID=5157)]]</Select></Query></QueryList>'
@@ -2895,7 +2927,7 @@ if ($InstallSensorGuard) {
         foreach ($c in @($r0.caps)) { foreach ($it in @($c.items)) { $pairs += ($c.id + '|' + $it.app) } }
         Save-Json 'sensor-apps.json' @{ pairs = $pairs; updated = (Get-Date).ToString('s') }
 
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -SensorGuard')
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -SensorGuard' + $script:DataArg)
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 3650)
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
         $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
@@ -3212,7 +3244,7 @@ function Get-ProofSnapshot {
     if ($null -ne $Checked) {
         foreach ($r in @($Checked)) {
             if ($r.module -in @('cleanup', 'startup', 'buffer', 'oem')) { continue }
-            if ($r.blocked) { continue }
+            if ($r.blocked -or $r.na) { continue }
             $tot++
             if ($r.ok) { $ok++ }
             if ($r.module -eq 'etw') { $etwTotal++; if ($r.ok) { $etwOff++ } }
@@ -3383,7 +3415,11 @@ if ($Audit) {
         $r = Check-Def $d
         $r.id = $d.Id
         # Windows не отдала этот параметр при применении — это не «не применено»
-        $r.blocked = [bool]((-not $r.ok) -and $blockedSet.ContainsKey($d.Id))
+        # «нет на этой версии Windows» важнее записанного отказа: это причина
+        # честнее и не зависит от того, что когда-то не отдалось
+        $r.blocked = [bool]((-not $r.ok) -and (-not $r.na) -and $blockedSet.ContainsKey($d.Id))
+        if ($r.blocked) { $r.actual = 'Windows не разрешает' }
+        if (-not $r.ContainsKey('na')) { $r.na = $false }
         $items += $r
     }
     if ($Modules -contains 'oem') {
@@ -3393,20 +3429,22 @@ if ($Audit) {
             $items += @{ module='oem'; name=("{0}: {1}" -f $(if ($it.type -eq 'svc') { 'служба' } else { 'задача' }), $it.display); ok=$ok; expected='Disabled'; actual=$it.state }
         }
     }
-    $counted = @($items | Where-Object { -not $_.blocked })
+    $counted = @($items | Where-Object { (-not $_.blocked) -and (-not $_.na) })
     $okCount = @($counted | Where-Object { $_.ok }).Count
     $blockedCount = @($items | Where-Object { $_.blocked }).Count
+    $naCount = @($items | Where-Object { $_.na }).Count
     $groups = @()
     foreach ($m in $script:ModuleOrder) {
         $mi = @($items | Where-Object { $_.module -eq $m })
         if ($mi.Count -eq 0) { continue }
-        $mc = @($mi | Where-Object { -not $_.blocked })
+        $mc = @($mi | Where-Object { (-not $_.blocked) -and (-not $_.na) })
         $groups += @{ module=$m; title=$script:ModuleTitles[$m]; ok=@($mc | Where-Object { $_.ok }).Count; total=$mc.Count
                       blocked=@($mi | Where-Object { $_.blocked }).Count; items=$mi }
     }
     $dnsList = @(Get-DnsEvidence)
     $result = @{
-        time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); ok = $okCount; total = $counted.Count; blocked = $blockedCount; groups = $groups
+        time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); ok = $okCount; total = $counted.Count
+        blocked = $blockedCount; notApplicable = $naCount; groups = $groups
         dns = $dnsList; buffer = (Get-BufferInfo); edition = (Get-Edition); doh = (Get-DohStatus)
         monitorEnabled = (Get-MonitorEnabled); hostsBlocked = (Test-HostsBlock)
         junk = @(Find-JunkValues).Count
@@ -3792,6 +3830,7 @@ foreach ($m in $script:ModuleOrder) {
     $failBefore = $script:Failures + $script:Blocked
     foreach ($d in $modDefs) {
         if ($SkipItems -contains $d.Id) { Write-Log ("   [п] {0} -- пропущено по вашему выбору" -f $d.C); continue }
+        if (-not (Test-DefApplicable $d)) { Write-Log ("   [-] {0} -- нет на этой версии Windows" -f $d.C); continue }
         Apply-Def $d
     }
     if (($script:Failures + $script:Blocked) -gt $failBefore -and $script:ModuleHints.ContainsKey($m)) {

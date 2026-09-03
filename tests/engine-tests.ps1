@@ -512,6 +512,67 @@ if ($factFound.Count -eq 1 -and $script:FactRules) {
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
+Write-Host 'Применимость к версии Windows'
+$naItems = @()
+if ($all) { foreach ($g in @($all.groups)) { foreach ($i in @($g.items)) { if ($i.na) { $naItems += $i } } } }
+Check 'аудит отдаёт число неприменимых настроек' ($null -ne $all.notApplicable)
+Check 'неприменимые не входят в итог' ([int]$all.notApplicable -eq $naItems.Count) `
+      ("notApplicable=" + $all.notApplicable + ", помечено: " + $naItems.Count)
+
+# Копия движка, которая считает себя Windows 10: настройки Copilot и Recall
+# должны стать неприменимыми, а индекс — не пострадать.
+$fake = Join-Path $env:TEMP 'w11p-tests-fake10.ps1'
+$engineSrc = Get-Content -LiteralPath $engine -Raw -Encoding UTF8
+$buildLine = '$script:OsBuild = 0'
+Check 'номер сборки Windows читается движком' ($engineSrc.Contains($buildLine))
+if ($engineSrc.Contains($buildLine)) {
+    # подменяем не только присваивание, но и чтение из реестра: иначе оно
+    # тут же вернёт настоящий номер сборки и подделка ничего не проверит
+    $fakeSrc = $engineSrc.Replace($buildLine, '$script:OsBuild = 19045')
+    $fakeSrc = $fakeSrc.Replace('try { $script:OsBuild = [int](Get-ItemProperty', 'try { $null = [int](Get-ItemProperty')
+    $fakeSrc | Set-Content -LiteralPath $fake -Encoding UTF8
+    $old = Get-EngineJson @('-Audit') 2>$null
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = (Get-Command powershell.exe).Source
+    $psi.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $fake + '" -Audit'
+    $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $pr = [System.Diagnostics.Process]::Start($psi)
+    $fakeOut = $pr.StandardOutput.ReadToEnd(); $null = $pr.StandardError.ReadToEnd(); $pr.WaitForExit()
+    $fakeJson = $null
+    foreach ($line in ($fakeOut -split "`n")) {
+        $t = $line.TrimStart()
+        if ($t.StartsWith('###JSON###')) { try { $fakeJson = ($t.Substring(10).Trim() | ConvertFrom-Json) } catch { } }
+    }
+    Check 'аудит «как на Windows 10» отвечает' ($null -ne $fakeJson)
+    if ($fakeJson) {
+        Check 'на Windows 10 часть настроек неприменима' ([int]$fakeJson.notApplicable -ge 10) `
+              ("неприменимо: " + $fakeJson.notApplicable)
+        Check 'неприменимые убраны из знаменателя' ([int]$fakeJson.total -lt [int]$all.total) `
+              ("было " + $all.total + ", стало " + $fakeJson.total)
+        $naNames = @()
+        foreach ($g in @($fakeJson.groups)) { foreach ($i in @($g.items)) { if ($i.na) { $naNames += "$($i.actual)" } } }
+        Check 'у неприменимых честная причина' (@($naNames | Where-Object { $_ -match 'нет на этой версии' }).Count -ge 10)
+    }
+    Remove-Item -LiteralPath $fake -Force -ErrorAction SilentlyContinue
+}
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Переносимый режим: данные там, где сказано'
+$portable = Join-Path $env:TEMP 'w11p-tests-portable'
+Remove-Item -LiteralPath $portable -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $portable -Force | Out-Null
+$dataInfo = Get-EngineJson @('-DataInfo', '-DataRoot', ('"' + $portable + '"'))
+Check 'папка данных берётся из -DataRoot' ($null -ne $dataInfo -and "$($dataInfo.folder)" -eq $portable) `
+      ("получено: " + $dataInfo.folder)
+$dataDefault = Get-EngineJson @('-DataInfo')
+Check 'без ключа данные остаются в ProgramData' ("$($dataDefault.folder)" -like '*ProgramData*') `
+      ("получено: " + $dataDefault.folder)
+Remove-Item -LiteralPath $portable -Recurse -Force -ErrorAction SilentlyContinue
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
 Write-Host 'Применение (тестовый прогон, ничего не меняется)'
 if ($isAdmin) {
     $mods = 'telemetry,errors,activity,input,edge,ads,copilot'

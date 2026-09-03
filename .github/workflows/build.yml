@@ -84,6 +84,10 @@ jobs:
                   } elseif ($count -lt 3) {
                       Write-Host "::error::страница $page ($lang) осталась пустой (контролов: $count)"
                       $bad++
+                  } elseif ($out -match 'ОБРЕЗАНО') {
+                      Write-Host "::error::на странице $page ($lang) обрезан текст"
+                      Write-Host (($out -split "`n" | Where-Object { $_ -match 'ОБРЕЗАНО' }) -join "`n")
+                      $bad++
                   } elseif ($out -match 'ВЫЛЕЗ') {
                       Write-Host "::error::на странице $page ($lang) элемент вылез за родителя"
                       Write-Host (($out -split "`n" | Where-Object { $_ -match 'ВЫЛЕЗ' }) -join "`n")

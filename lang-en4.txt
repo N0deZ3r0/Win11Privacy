@@ -240,3 +240,12 @@ Windows не отдаёт	Withheld by Windows
 Дата	Date
 Событие	Event
  проходит, по кэшу DNS	 leaking, per DNS cache
+# карточки «Обзора» и применимость к версии Windows
+ лишних из 	 not needed of 
+ записей, лишних нет	 entries, nothing extra
+пока без событий	no events yet
+обновление Windows	a Windows update
+Windows сбила настройки	Windows reverted settings
+телеметрия выросла	telemetry grew
+Нет на этой Windows	Not on this Windows
+нет на этой версии Windows	not on this Windows version

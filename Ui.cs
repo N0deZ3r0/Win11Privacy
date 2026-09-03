@@ -216,6 +216,19 @@ namespace Win11Privacy
     // Строка списка, которую можно отфильтровать поиском по странице
     internal interface IFilterable { string FilterText { get; } }
 
+#if UITEST
+    // Обрезанный текст глазами ловил пользователь: подпись плитки уезжала в
+    // многоточие. Теперь элементы сами сообщают о таком, а сборка падает.
+    internal static class ClipWatch
+    {
+        public static readonly List<string> Clipped = new List<string>();
+        public static void Note(string where, string text, int need, int have)
+        {
+            Clipped.Add("ОБРЕЗАНО " + where + ": «" + text + "» нужно " + need + ", есть " + have);
+        }
+    }
+#endif
+
     internal class Card : Panel
     {
         public Card()
@@ -933,6 +946,15 @@ namespace Win11Privacy
             using (SolidBrush b = new SolidBrush(Accent)) g.FillPath(b, p);
 
             int u = Font.Height;
+#if UITEST
+            using (Font cfm = new Font(Font.FontFamily, Font.Size * 0.8F, FontStyle.Bold))
+            {
+                int capW = Width - (int)(u * 1.5F);
+                Size capNeed = TextRenderer.MeasureText(g, Caption.ToUpperInvariant(), cfm,
+                                   new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
+                if (capNeed.Width > capW) ClipWatch.Note("StatTile.Caption", Caption, capNeed.Width, capW);
+            }
+#endif
             TextRenderer.DrawText(g, Caption.ToUpperInvariant(), new Font(Font.FontFamily, Font.Size * 0.8F, FontStyle.Bold),
                 new Rectangle((int)(u * 0.9F), (int)(u * 0.5F), Width - (int)(u * 1.5F), u * 2), Theme.TextFaint,
                 TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
@@ -966,6 +988,9 @@ namespace Win11Privacy
                 }
                 TextRenderer.DrawText(g, Sub, sf, new Rectangle(subL, subT, subW, subH), Theme.TextDim,
                     TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
+#if UITEST
+                if (need.Height > subH) ClipWatch.Note("StatTile.Sub", Sub, need.Height, subH);
+#endif
                 if (shrunk != null) shrunk.Dispose();
             }
         }
