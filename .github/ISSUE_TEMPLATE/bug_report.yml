@@ -1,0 +1,68 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report.
+        Write in English or Russian, whichever you prefer.
+        **Пишите по-русски или по-английски — как удобнее.**
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead? / Что вы ожидали и что получилось.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Шаги для воспроизведения.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: Shown on the "About" page. / Версия программы — на странице «О программе».
+      placeholder: "1.8.0"
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows edition and build
+      description: Run `winver`. / Выполните `winver`.
+      placeholder: "Windows 11 Home 24H2 (26100.2033)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or console output
+      description: |
+        Entries from the app's own log, if relevant.
+        Записи из журнала программы, если есть.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I am running the latest release / У меня последняя версия
+          required: true
+        - label: I searched existing issues / Я поискал среди существующих задач
+          required: true
