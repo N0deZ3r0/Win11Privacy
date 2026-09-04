@@ -1,134 +1,140 @@
 <div align="center">
 
-<img src="app.png" width="96" alt="Приватность Windows 11">
+<img src="app.png" width="96" alt="Win11Privacy">
 
-# Приватность Windows 11
+# Win11Privacy
 
-**Отключает сбор данных Microsoft. Показывает, что о вас уже собрано.
-Следит, чтобы обновления не вернули слежку обратно.**
+**Turns off Microsoft's data collection. Shows you what has already been collected
+about you. Watches so that updates do not quietly turn the tracking back on.**
 
-[![Сборка](https://github.com/N0deZ3r0/Win11Privacy/actions/workflows/build.yml/badge.svg)](https://github.com/N0deZ3r0/Win11Privacy/actions/workflows/build.yml)
-[![Скачать](https://img.shields.io/github/v/release/N0deZ3r0/Win11Privacy?label=%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C)](https://github.com/N0deZ3r0/Win11Privacy/releases/latest)
-[![Лицензия](https://img.shields.io/badge/%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F-MIT-blue)](LICENSE)
+[![Build](https://github.com/N0deZ3r0/Win11Privacy/actions/workflows/build.yml/badge.svg)](https://github.com/N0deZ3r0/Win11Privacy/actions/workflows/build.yml)
+[![Download](https://img.shields.io/github/v/release/N0deZ3r0/Win11Privacy?label=download)](https://github.com/N0deZ3r0/Win11Privacy/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![Windows 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows)
+
+**English** · [Русский](README.ru.md)
 
 </div>
 
-<img src="docs/home.png" alt="Обзор">
+<img src="docs/home.png" alt="Overview">
 
 ---
 
-## Чего нет у других
+## What other tools do not have
 
 | | |
 |---|---|
-| **Досье** | Кто и когда включал вашу камеру, микрофон и геолокацию — с длительностью и меткой «сейчас». Плюс цифровой след на диске: рекламный ID, история сетей Wi-Fi и флешек, история буфера обмена — с выборочным стиранием. |
-| **Рентген телеметрии** | Читает настоящие события, которые Windows собрала об этом компьютере, и показывает их сырое содержимое — тот самый JSON, что уходит в Microsoft. |
-| **Что о вас узнали** | Из этих событий вытаскиваются готовые факты: названия установленных программ, модель и серийные номера железа, подключённые устройства, метки, по которым вас узнают. Не «1420 событий», а что именно из них следует. |
-| **Хронология приватности** | События телеметрии по дням, обновления Windows, правки программы и возвраты стража — на одной оси. Видно, как система отыгрывает настройки назад после очередного обновления. |
-| **Проверка на деле** | Читает реальное состояние системы и считает индекс приватности, а не рисует галочки «сделано». |
-| **Страж** | Крупные обновления Windows тихо возвращают часть настроек — страж проверяет систему по расписанию и возвращает сбитое. |
-| **Слежение за датчиками** | Уведомление в тот момент, когда доступ к камере или микрофону впервые получила новая программа. |
-| **Монитор утечек** | Кто и куда реально отправляет данные — по журналу брандмауэра, отдельно разрешённые соединения и отклонённые попытки. |
-| **Машина времени** | Снимки состояния настроек и сравнение: что и когда сбилось. |
-| **Отзыв доступа на месте** | Увидели, что программа включала камеру, — и запрещаете ей доступ кнопкой в той же строке. |
-| **Удаление предустановленного** | Список приложений, которые Windows ставит без спроса, с пометкой «можно убрать». Системные компоненты в перечень не попадают. |
-| **Запрет выхода в сеть** | Монитор показывает, кто и куда отправляет данные, — и кнопкой в той же строке программе закрывается выход в интернет. Правило создаётся в брандмауэре Windows и снимается тем же нажатием. |
-| **Автозапуск под контролем** | Что стартует вместе с Windows — с ответом «зачем это здесь»: обновлятор, агент телеметрии, помощник производителя. Гасится обратимо, тем же способом, что и в диспетчере задач, и попадает в общий откат. |
-| **Настройка по пунктам** | Модуль раскрывается в список отдельных настроек: можно применить не всё, а выбранное. |
-| **Блокировка адресов** | Брандмауэр режет сами IP сбора данных — через `hosts` телеметрия уходит в обход. |
-| **Предпросмотр изменений** | Кнопка «Что изменится» показывает список до применения: настройка, как сейчас, как станет. |
-| **Возврат из копии** | Резервные копии реестра не просто складываются на диск — программа сама их находит и возвращает выбранную одним нажатием. |
-| **Откат одной кнопкой** | Программа ведёт журнал изменений и возвращает каждый параметр в то значение, что было до неё. Ручной импорт .reg не нужен. |
-| **Видно, что изменено** | Страница «Изменения» показывает каждую правку: что было, что стало и где это лежит. Любую строку можно вернуть отдельно, не откатывая остальное. |
-| **Считает честно** | Индекс не занижается тем, что от программы не зависит: настройки, которых нет на этой версии Windows, и параметры, которые Windows не отдаёт даже администратору, показаны отдельно и в знаменатель не идут. |
-| **Переносимый режим** | Положите рядом с `Win11Privacy.exe` файл `portable.txt` — и программа будет хранить всё в папке рядом с собой, а не в системе. Для флешки и чужого компьютера. |
-| **Убирает и за собой** | Всё, что программа накопила о вас у себя — историю датчиков, журнал, снимки — видно на «О программе» и стирается одной кнопкой. |
-| **Сессии трассировки ETW** | Windows запускает сборщики телеметрии при загрузке, помимо службы DiagTrack — программа выключает и их. |
-| **Доказательство результата** | Не «индекс 92 %», а что было до программы и что стало: сборщики, задачи, домены, события в сутки. |
-| **Все разрешения приложений** | 25 категорий — не только камера и микрофон, но и снимки экрана, уведомления, документы, весь диск. Видно и тех, кто разрешение имеет, но пока не пользовался. |
+| **Dossier** | Who turned on your camera, microphone and location, and when — with duration and a "right now" marker. Plus the digital trace left on disk: advertising ID, the history of Wi-Fi networks and USB sticks, clipboard history — each erasable on its own. |
+| **Telemetry X-ray** | Reads the actual events Windows has collected about this computer and shows their raw contents — the very JSON that goes to Microsoft. |
+| **What they learned about you** | Those events are turned into plain facts: names of installed programs, hardware model and serial numbers, connected devices, the markers you are recognised by. Not "1,420 events", but what follows from them. |
+| **Privacy timeline** | Telemetry events by day, Windows updates, the program's own changes and the guard's reversions — on one axis. You can see the system rolling settings back after an update. |
+| **Verification in practice** | Reads the real state of the system and computes a privacy index, instead of drawing "done" ticks. |
+| **The guard** | Major Windows updates quietly restore some settings — the guard checks the system on a schedule and puts back what was knocked out. |
+| **Sensor watch** | A notification at the moment a new program gains access to the camera or microphone for the first time. |
+| **Leak monitor** | Who is actually sending data and where, from the firewall log — allowed connections and rejected attempts shown separately. |
+| **Time machine** | Snapshots of the settings state, and a comparison: what drifted, and when. |
+| **Revoke access in place** | You saw a program using the camera — you deny it access with a button on the same row. |
+| **Removing preinstalled apps** | The list of apps Windows installs without asking, marked with what is safe to remove. System components do not appear in it. |
+| **Block internet access** | The monitor shows who is sending data where — and a button on the same row cuts that program off from the network. The rule is created in Windows Firewall and removed by the same click. |
+| **Startup under control** | What starts with Windows, with an answer to "why is this here": an updater, a telemetry agent, a vendor's helper. Disabled reversibly, the same way Task Manager does it, and included in the general rollback. |
+| **Setting-by-setting control** | A module expands into a list of individual settings: you can apply some of them rather than all. |
+| **Address blocking** | The firewall cuts off the data-collection IPs themselves — through `hosts` alone telemetry simply goes around. |
+| **Preview of changes** | The "What will change" button shows the list before applying: the setting, how it is now, how it will be. |
+| **Restore from a backup** | Registry backups are not merely dropped on disk — the program finds them itself and restores the one you pick with a single click. |
+| **Rollback in one button** | The program keeps a change log and returns every parameter to the value it had before. No manual `.reg` import needed. |
+| **You can see what was changed** | The "Changes" page shows every edit: what it was, what it became, and where it lives. Any row can be reverted on its own, without rolling back the rest. |
+| **Counts honestly** | The index is not dragged down by things outside the program's control: settings that do not exist on this Windows version, and parameters Windows will not hand over even to an administrator, are shown separately and left out of the denominator. |
+| **Portable mode** | Put a `portable.txt` file next to `Win11Privacy.exe` and the program keeps everything in a folder beside itself rather than in the system. For a USB stick, or someone else's computer. |
+| **Cleans up after itself** | Everything the program has accumulated about you — sensor history, log, snapshots — is visible on the "About" page and erased with one button. |
+| **ETW trace sessions** | Windows starts telemetry collectors at boot beyond the DiagTrack service — the program switches those off too. |
+| **Proof of the result** | Not "index 92%", but what it was before the program and what it is now: collectors, tasks, domains, events per day. |
+| **All app permissions** | 25 categories — not only camera and microphone, but screenshots, notifications, documents, the whole disk. Including apps that hold a permission but have not used it yet. |
 
-Ещё: готовые наборы «Базовый / Строгий / Максимум», телеметрия сторонних программ (Chrome, Edge, Office, VS Code, NVIDIA, PowerShell, Visual Studio),
-слежка производителя ноутбука, блокировка через брандмауэр, стирание накопленного буфера телеметрии,
-профили и тихий запуск из командной строки, диагностика, светлая и тёмная темы.
+Also: ready-made **Basic / Strict / Maximum** presets, third-party telemetry
+(Chrome, Edge, Office, VS Code, NVIDIA, PowerShell, Visual Studio), laptop-vendor
+tracking, firewall blocking, wiping the accumulated telemetry buffer, profiles and
+silent launch from the command line, diagnostics, light and dark themes.
 
 ---
 
-## Переносимый режим
+## Portable mode
 
-Обычно программа держит свои данные в `C:\ProgramData\Win11Privacy`, а размер
-окна и язык — в `%LOCALAPPDATA%`. Если положить рядом с `Win11Privacy.exe` файл
-**`portable.txt`** (или один раз запустить `Win11Privacy.exe --portable`), всё
-переедет в папку `Win11Privacy-Data` рядом с самой программой: журнал изменений,
-история датчиков, снимки, резервные копии реестра и настройки окна. На чужом
-компьютере после себя не остаётся ничего, кроме самих изменений в системе —
-которые по-прежнему можно откатить.
+Normally the program keeps its data in `C:\ProgramData\Win11Privacy`, and the
+window size and language in `%LOCALAPPDATA%`. Put a **`portable.txt`** file next to
+`Win11Privacy.exe` (or run `Win11Privacy.exe --portable` once) and all of it moves
+into a `Win11Privacy-Data` folder beside the program itself: the change log, sensor
+history, snapshots, registry backups and window settings. On someone else's
+computer nothing is left behind except the system changes themselves — which can
+still be rolled back.
 
 ---
 
 ## Windows 10
 
-Программа работает и на Windows 10, но 12 настроек из набора относятся к тому,
-чего там нет вовсе: Copilot, Recall, Click to Do, виджеты. Они помечены
-минимальной версией Windows, не применяются и **не считаются в индексе** —
-на «Проверке» видно плитку «Нет на этой Windows». Политики Edge, Блокнота и
-Paint при этом работают на обеих версиях и применяются как обычно.
+The program works on Windows 10 too, but 12 settings in the set relate to things
+that do not exist there at all: Copilot, Recall, Click to Do, widgets. They are
+marked with a minimum Windows version, are not applied and **do not count towards
+the index** — the Audit page shows a "Not present on this Windows" tile. The Edge,
+Notepad and Paint policies work on both versions and are applied as usual.
 
 ---
 
-## Язык
+## Language
 
-Интерфейс полностью на русском и английском, включая названия всех 191 настройки
-и HTML-отчёт.
-Язык берётся из настроек Windows и переключается кнопкой на странице «О программе».
-
----
-
-## Скачать и запустить
-
-1. Возьмите `Win11Privacy.exe` из [релизов](https://github.com/N0deZ3r0/Win11Privacy/releases/latest).
-2. Правый клик по файлу → **Свойства** → внизу галочка **«Разблокировать»** → ОК.
-   Так убирается предупреждение SmartScreen — оно появляется у любого неподписанного приложения из интернета.
-3. Запустите. Программа попросит права администратора: без них системные настройки не меняются.
-
-Устанавливать ничего не нужно — приложение работает на встроенном в Windows .NET Framework 4.8,
-а движок вшит внутрь exe.
-
-> **Совет:** первым делом нажмите **«Проверить»** — увидите текущее состояние, ничего при этом не меняя.
-> Резервная копия реестра и точка восстановления создаются автоматически перед применением.
+The interface is fully available in Russian and English, including the names of
+all 191 settings and the HTML report. The language is taken from your Windows
+settings and can be switched with a button on the "About" page.
 
 ---
 
-## Как это выглядит
+## Download and run
 
-| Настройки — модуль раскрыт в отдельные пункты | Досье — кто включал камеру и микрофон |
+1. Take `Win11Privacy.exe` from [Releases](https://github.com/N0deZ3r0/Win11Privacy/releases/latest).
+2. Right-click the file → **Properties** → tick **Unblock** at the bottom → OK.
+   That removes the SmartScreen warning, which appears for any unsigned
+   application downloaded from the internet.
+3. Run it. The program will ask for administrator rights: without them system
+   settings cannot be changed.
+
+Nothing needs installing — the application runs on the .NET Framework 4.8 built
+into Windows, and the engine is embedded inside the exe.
+
+> **Tip:** press **Audit** first — you will see the current state without changing
+> anything. A registry backup and a restore point are created automatically before
+> anything is applied.
+
+---
+
+## What it looks like
+
+| Settings — a module expanded into individual items | Dossier — who turned on the camera and microphone |
 |---|---|
-| <img src="docs/settings.png" alt="Настройки"> | <img src="docs/dossier.png" alt="Досье"> |
+| <img src="docs/settings.png" alt="Settings"> | <img src="docs/dossier.png" alt="Dossier"> |
 
-| Приложения — удаление предустановленного | Рентген телеметрии |
+| Apps — removing preinstalled software | Telemetry X-ray |
 |---|---|
-| <img src="docs/apps.png" alt="Приложения"> | <img src="docs/xray.png" alt="Рентген"> |
+| <img src="docs/apps.png" alt="Apps"> | <img src="docs/xray.png" alt="X-ray"> |
 
-| Проверка — индекс, что не применено и чего нет на этой Windows |
+| Audit — the index, what was not applied, and what does not exist on this Windows |
 |---|
-| <img src="docs/audit.png" alt="Проверка"> |
+| <img src="docs/audit.png" alt="Audit"> |
 
-| Автозапуск — что стартует вместе с Windows | Монитор — кто отправляет и кому закрыт выход |
+| Startup — what launches with Windows | Monitor — who is sending, and who is cut off |
 |---|---|
-| <img src="docs/startup.png" alt="Автозапуск"> | <img src="docs/monitor.png" alt="Монитор"> |
+| <img src="docs/startup.png" alt="Startup"> | <img src="docs/monitor.png" alt="Monitor"> |
 
-| Изменения — что программа поменяла и как вернуть | Хронология — телеметрия по дням и обновления Windows |
+| Changes — what the program altered and how to undo it | Timeline — telemetry by day and Windows updates |
 |---|---|
-| <img src="docs/changes.png" alt="Изменения"> | <img src="docs/timeline.png" alt="Хронология"> |
-
+| <img src="docs/changes.png" alt="Changes"> | <img src="docs/timeline.png" alt="Timeline"> |
 
 ---
 
-## Как собрать
+## How to build
 
-Двойной клик по **`build.cmd`**. Через пару секунд рядом появится `Win11Privacy.exe`.
+Double-click **`build.cmd`**. A couple of seconds later `Win11Privacy.exe` appears
+next to it.
 
-Если хочется вручную:
+By hand, if you prefer:
 
 ```
 %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:Win11Privacy.exe ^
@@ -140,161 +146,185 @@ Paint при этом работают на обеих версиях и при�
 
 ---
 
-## Из чего состоит
+## What it is made of
 
-| Файл | Что внутри |
+| File | What is inside |
 |---|---|
-| **Win11-Privacy-Engine.ps1** | Движок. Вся работа с системой: реестр, службы, задачи планировщика, hosts, брандмауэр, рентген телеметрии, досье (датчики и цифровой след), страж, снимки состояния, чистка. Вшивается в exe как ресурс `engine.ps1` и распаковывается во временную папку при запуске. Может работать и сам по себе. |
-| **MainForm.cs** | Окно, тринадцать страниц, запуск движка, разбор его ответов, отчёт HTML, режим командной строки. |
-| **Ui.cs** | Тема (цвета, шрифты), карточки, переключатели, кнопки, строки списков, кольцо индекса, плитки. |
-| **Ui2.cs** | Заголовок окна, градиентная боковая панель, скользящая подсветка навигации, кольцевая диаграмма, плитки главного экрана, анимация значений. |
-| **Ui3.cs** | Строки страницы «Досье»: кто включал камеру/микрофон (SpyRow), цифровой след с чекбоксами стирания (WipeRow), график датчиков по дням (SensorChart). |
-| **Ui4.cs** | Адаптивная вёрстка: сетка плиток, подстраивающаяся под ширину окна (TileGrid), панель содержимого без мерцания. |
-| **Lang.cs** | Английский перевод интерфейса. Собирается из `lang-en*.txt` командой `python tools/gen_lang.py` — правьте словари, а не сам Lang.cs. `python tools/check_lang.py` покажет строки, для которых перевода ещё нет. |
-| **Json.cs** | Разбор JSON без внешних библиотек — движок отвечает строками `###JSON### {...}`. |
-| **app.manifest** | Требование прав администратора, поддержка масштабирования экрана. |
-| **app.res** | Готовый ресурс Win32: манифест + иконка (7 размеров) + версия. Пересобирать не нужно. |
-| **app.ico / app.png** | Иконка приложения. |
-| **tests/engine-tests.ps1** | Проверки поведения движка: их же гоняет сборка на GitHub. |
-| **check-engine.cmd** | Самопроверка движка. Только чтение, ничего не меняет. |
+| **Win11-Privacy-Engine.ps1** | The engine. All the work with the system: registry, services, scheduled tasks, hosts, firewall, telemetry X-ray, dossier (sensors and digital trace), the guard, state snapshots, cleanup. Embedded in the exe as the `engine.ps1` resource and unpacked to a temporary folder at startup. Can also run on its own. |
+| **MainForm.cs** | The window, thirteen pages, launching the engine, parsing its replies, the HTML report, command-line mode. |
+| **Ui.cs** | Theme (colours, fonts), cards, switches, buttons, list rows, the index ring, tiles. |
+| **Ui2.cs** | Window title bar, gradient sidebar, sliding navigation highlight, ring chart, home-screen tiles, value animation. |
+| **Ui3.cs** | Rows of the "Dossier" page: who turned on the camera/microphone (`SpyRow`), the digital trace with erase checkboxes (`WipeRow`), the per-day sensor chart (`SensorChart`). |
+| **Ui4.cs** | Adaptive layout: a tile grid that adjusts to the window width (`TileGrid`), a flicker-free content panel. |
+| **Lang.cs** | The English translation of the interface. Generated from `lang-en*.txt` by `python tools/gen_lang.py` — edit the dictionaries, not `Lang.cs` itself. `python tools/check_lang.py` lists strings that have no translation yet. |
+| **Json.cs** | JSON parsing without external libraries — the engine replies with `###JSON### {...}` lines. |
+| **app.manifest** | The administrator-rights requirement and display-scaling support. |
+| **app.res** | A prebuilt Win32 resource: manifest + icon (7 sizes) + version. No need to rebuild it. |
+| **app.ico / app.png** | The application icon. |
+| **tests/engine-tests.ps1** | Behaviour checks for the engine; the GitHub build runs the same ones. |
+| **check-engine.cmd** | Engine self-check. Read-only, changes nothing. |
 
 ---
 
-## Как программа устроена
+## How the program is built
 
-Интерфейс **ничего не делает сам**. Он собирает список выбранных модулей и
-запускает движок:
+The interface **does nothing itself**. It assembles a list of the selected modules
+and launches the engine:
 
 ```
 powershell.exe -File engine.ps1 -Modules telemetry,ads,cleanup -BackupRoot "C:\...\Desktop"
 ```
 
-Движок печатает ход работы построчно (интерфейс раскрашивает: `[+]` зелёным,
-`[!]` красным) и в конце может выдать структурированный ответ строкой
-`###JSON### {...}` — его разбирает `Json.cs` и рисует на страницах.
+The engine prints its progress line by line (the interface colours it: `[+]` green,
+`[!]` red) and at the end may return a structured reply as a `###JSON### {...}`
+line — which `Json.cs` parses and draws on the pages.
 
-Благодаря этому движок полностью проверяем отдельно от интерфейса.
+Because of that the engine is fully testable separately from the interface.
 
-### Команды движка
+### Engine commands
 
-| Команда | Что делает |
+| Command | What it does |
 |---|---|
-| `-Modules a,b,c` | применить выбранные модули |
-| `-DryRun` | показать что было бы сделано, ничего не меняя |
-| `-Detect` | определить систему, редакцию, установленные программы, слежку производителя |
-| `-Audit` | прочитать реальное состояние всех настроек, вернуть индекс |
-| `-XrayEnable` / `-XrayScan` / `-XrayWipe` | рентген телеметрии |
-| `-Spy` | досье: кто и когда включал камеру, микрофон, геолокацию |
-| `-Footprint` | досье: цифровой след на диске (рекламный ID, сети, флешки, истории) |
-| `-FootprintWipe -WipeItems a,b` | стереть выбранные элементы следа |
-| `-SensorSet -SensorKey k -SensorValue Deny` | запретить программе доступ к камере, микрофону или геолокации |
-| `-Proof` / `-ProofSave` | доказательство результата: снимок «до» и сравнение с текущим |
-| `-ListDefs` | список отдельных настроек внутри модулей |
-| `-SkipItems a#1,b#2` | применить модуль, кроме указанных пунктов |
-| `-ListApps` / `-RemoveApps -AppItems a,b` | предустановленные приложения: список и удаление |
-| `-ListStartup` | автозагрузка: что стартует вместе с Windows |
-| `-ChangeLog` / `-RestoreItems -ChangeItems a,b` | журнал изменений и возврат отдельных записей |
-| `-DataInfo` / `-PurgeData` | что программа хранит о вас у себя и удаление этого |
-| `-DataRoot "C:\...\Win11Privacy-Data"` | держать данные в указанной папке (переносимый режим) |
-| `-Timeline -TimelineDays 30` | хронология: телеметрия по дням, обновления Windows, правки и возвраты |
-| `-ListBackups` / `-RestoreBackup -BackupPath ...` | резервные копии реестра: список и возврат |
-| `-CleanJunk` | убрать параметры, записанные версиями до 1.6 под числовыми именами |
-| `-StartupSet -StartupItems a,b -StartupValue Off` | погасить или вернуть записи автозапуска |
-| `-InstallSensorGuard` / `-RemoveSensorGuard` | слежение за датчиками: каждые 30 минут сверка журнала, уведомление о новой программе |
-| `-SensorGuard` | одна проверка слежения (её запускает планировщик) |
-| `-Monitor` / `-EnableMonitor` | статистика исходящих соединений |
-| `-BlockApp -AppPath "C:\...\app.exe"` | запретить программе выход в сеть (`-UnblockApp` — вернуть) |
-| `-Audit -WithProof` | проверка и доказательство результата одним прогоном |
-| `-InstallGuard` / `-GuardNow` | страж, возвращающий сбитые настройки |
-| `-Snapshot` / `-SnapshotDiff` | машина времени |
-| `-InstallWatcher` | живые уведомления о перехвате |
-| `-Revert` | откат всего |
+| `-Modules a,b,c` | apply the selected modules |
+| `-DryRun` | show what would be done, changing nothing |
+| `-Detect` | identify the system, edition, installed programs, vendor tracking |
+| `-Audit` | read the real state of every setting, return the index |
+| `-XrayEnable` / `-XrayScan` / `-XrayWipe` | telemetry X-ray |
+| `-Spy` | dossier: who turned on the camera, microphone, location, and when |
+| `-Footprint` | dossier: the digital trace on disk (advertising ID, networks, USB sticks, histories) |
+| `-FootprintWipe -WipeItems a,b` | erase the selected trace items |
+| `-SensorSet -SensorKey k -SensorValue Deny` | deny a program access to the camera, microphone or location |
+| `-Proof` / `-ProofSave` | proof of the result: a "before" snapshot and a comparison with the present |
+| `-ListDefs` | list the individual settings inside the modules |
+| `-SkipItems a#1,b#2` | apply a module except for the listed items |
+| `-ListApps` / `-RemoveApps -AppItems a,b` | preinstalled apps: list and removal |
+| `-ListStartup` | startup: what launches with Windows |
+| `-ChangeLog` / `-RestoreItems -ChangeItems a,b` | the change log and reverting individual entries |
+| `-DataInfo` / `-PurgeData` | what the program stores about you, and deleting it |
+| `-DataRoot "C:\...\Win11Privacy-Data"` | keep the data in the given folder (portable mode) |
+| `-Timeline -TimelineDays 30` | timeline: telemetry by day, Windows updates, edits and reversions |
+| `-ListBackups` / `-RestoreBackup -BackupPath ...` | registry backups: list and restore |
+| `-CleanJunk` | remove parameters written under numeric names by versions before 1.6 |
+| `-StartupSet -StartupItems a,b -StartupValue Off` | disable or restore startup entries |
+| `-InstallSensorGuard` / `-RemoveSensorGuard` | sensor watch: check the log every 30 minutes, notify about a new program |
+| `-SensorGuard` | a single watch check (run by the scheduler) |
+| `-Monitor` / `-EnableMonitor` | statistics of outbound connections |
+| `-BlockApp -AppPath "C:\...\app.exe"` | deny a program network access (`-UnblockApp` to restore it) |
+| `-Audit -WithProof` | audit and proof of the result in one run |
+| `-InstallGuard` / `-GuardNow` | the guard that restores settings knocked out of place |
+| `-Snapshot` / `-SnapshotDiff` | the time machine |
+| `-InstallWatcher` | live notifications about interception |
+| `-Revert` | roll everything back |
 
-### Как добавить новую настройку
+### How to add a new setting
 
-Одна строка в движке, рядом с остальными:
+One line in the engine, next to the others:
 
 ```powershell
-Def 'telemetry' 'reg' 'HKLM:\SOFTWARE\Policies\...' 'ИмяПараметра' 0 'DWord' 'человеческое описание'
+Def 'telemetry' 'reg' 'HKLM:\SOFTWARE\Policies\...' 'ParameterName' 0 'DWord' 'human-readable description'
 ```
 
-`Def` описывает **что должно быть**, а не как это сделать. Из одного описания
-работают сразу: применение, проверка, страж и снимки состояния. Поддерживаемые
-типы: `reg`, `regif` (только если ключ уже есть), `regpol` (политика, которую
-Windows может не отдать даже администратору — тогда это не ошибка), `svc`,
-`svcopt`, `task`, `taskglob`, `env`, `vscode`, `firefox`, `hosts`, `fwsvc`,
-`fwapp`.
+`Def` describes **what should be**, not how to achieve it. From a single
+description you get applying, auditing, the guard and state snapshots at once.
+Supported types: `reg`, `regif` (only if the key already exists), `regpol` (a
+policy Windows may withhold even from an administrator — in which case that is not
+an error), `svc`, `svcopt`, `task`, `taskglob`, `env`, `vscode`, `firefox`,
+`hosts`, `fwsvc`, `fwapp`.
 
-Чтобы новый модуль появился в интерфейсе — добавьте строку в `BuildModules()`
-в `MainForm.cs`.
-
----
-
-## Проверка без сборки
-
-**`check-engine.cmd`** запускает движок в режиме только чтения и складывает
-рядом четыре файла с результатами: определение системы, проверка настроек,
-статус рентгена и тестовый прогон. Ничего в системе не меняется.
+To make a new module appear in the interface, add a line to `BuildModules()` in
+`MainForm.cs`.
 
 ---
 
-## Что можно посмотреть в отладке
+## Checking without building
 
-Интерфейс собирается с флагом `UITEST` — тогда окно открывается с тестовыми
-данными и само закрывается через 13 секунд:
+**`check-engine.cmd`** runs the engine in read-only mode and leaves four result
+files next to it: system detection, the settings audit, X-ray status and a test
+run. Nothing in the system is changed.
+
+---
+
+## What you can inspect while debugging
+
+The interface can be built with the `UITEST` flag — the window then opens with test
+data and closes itself after 13 seconds:
 
 ```
 csc ... /define:UITEST ...
 ```
 
-Переменные окружения `WIN11_TEST_PAGE` (какую страницу открыть) и
-`WIN11_TEST_MOCK=1` (подставить тестовые данные). Ещё есть `BIGFONT` —
-имитация экрана со 150% масштабом, и `LIGHTTEST` — светлая тема.
+The environment variables `WIN11_TEST_PAGE` (which page to open) and
+`WIN11_TEST_MOCK=1` (substitute test data) control it. There is also `BIGFONT`,
+which simulates a display at 150% scaling, and `LIGHTTEST` for the light theme.
 
 ---
 
-## Если вы пользовались версиями 1.1–1.5
+## If you used versions 1.1–1.5
 
-В них была ошибка: счётчик внутри функции `Def` затирал имя параметра реестра
-(в PowerShell `$n` и `$N` — одна переменная). Из-за этого настройки записывались
-под числовыми именами — `0`, `1`, `2` вместо `AllowTelemetry` — и **ничего не
-меняли**, а проверка показывала их применёнными, потому что читала то же
-неверное имя.
+They had a bug: a counter inside the `Def` function overwrote the registry
+parameter name (in PowerShell `$n` and `$N` are the same variable). Because of
+that, settings were written under numeric names — `0`, `1`, `2` instead of
+`AllowTelemetry` — and **changed nothing**, while the audit reported them as
+applied, because it read the same wrong name.
 
-Начиная с 1.6 имена восстановлены. Программа сама находит оставшийся мусор
-(кнопка **«Убрать мусор»** на странице «Проверка» или `-CleanJunk`) и удаляет
-только те числовые параметры, которые совпадают и по номеру, и по значению.
-После обновления стоит один раз нажать «Проверить», а затем «Применить».
-
----
-
-## Честно о пределах
-
-Полностью прекратить обмен данными с Microsoft на Windows нельзя: остаются
-проверка обновлений, активация лицензии и проверка сертификатов. На редакциях
-Home и Pro минимальный уровень телеметрии система трактует как «Обязательные
-данные» — это ограничение редакции, а не программы.
-
-Программа не подписана сертификатом, поэтому Windows покажет предупреждение
-SmartScreen при первом запуске скачанного файла: правый клик по файлу →
-Свойства → галочка «Разблокировать». Запрос прав администратора остаётся —
-он нужен, потому что программа меняет системные настройки.
+From 1.6 onwards the names are restored. The program finds the leftover junk
+itself (the **Clean junk** button on the Audit page, or `-CleanJunk`) and deletes
+only those numeric parameters that match both by number and by value. After
+updating it is worth pressing Audit once, then Apply.
 
 ---
 
-## Сборка и релизы
+## Honest about the limits
 
-Локально: двойной клик по **build.cmd** — рядом появится Win11Privacy.exe.
+You cannot completely stop data exchange with Microsoft on Windows: update checks,
+licence activation and certificate validation remain. On the Home and Pro editions
+the system treats the minimum telemetry level as "Required data" — that is a
+limitation of the edition, not of this program.
 
-В репозитории настроена автосборка (GitHub Actions):
+The program is not signed with a certificate, so Windows will show a SmartScreen
+warning the first time you run the downloaded file: right-click the file →
+Properties → tick "Unblock". The administrator-rights prompt stays — it is needed
+because the program changes system settings.
 
-- на каждый коммит в main и каждый pull request — проверяется синтаксис движка,
-  прогоняются проверки его поведения, сверяется перевод, все страницы интерфейса
-  открываются на тестовых данных по-русски и по-английски, собирается exe и
-  проверяется, что движок вшит внутрь и совпадает с исходником, а манифест
-  запрашивает права администратора;
-- на тег вида **v1.0.0** — собранный exe автоматически выкладывается в релиз.
+---
 
-Выпустить новую версию:
+## Building and releases
 
+Locally: double-click **build.cmd** — `Win11Privacy.exe` appears next to it.
 
+The repository has automated builds (GitHub Actions):
+
+- on every commit to `main` and every pull request — the engine's syntax is
+  checked, its behaviour tests are run, the translation is verified, every page of
+  the interface is opened with test data in Russian and English, the exe is built,
+  and it is confirmed that the engine is embedded inside it and matches the source,
+  and that the manifest requests administrator rights;
+- on a tag of the form **v1.0.0** — the built exe is published to a release
+  automatically.
+
+To cut a new version:
+
+1. Update the version number in `app.res` and in the program's title.
+2. Commit the changes to `main` — the build checks the engine, the translation and
+   the interface.
+3. Create the tag and push it:
+
+   ```bash
+   git tag v1.8.1
+   git push origin v1.8.1
+   ```
+
+4. On a `v*` tag the build creates the release itself and attaches
+   `Win11Privacy.exe`, `Win11-Privacy-Engine.ps1` and `SHA256SUMS.txt` to it.
+
+---
+
+## Contributing
+
+Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Found a security problem? [Report it privately](https://github.com/N0deZ3r0/Win11Privacy/security/advisories/new)
+rather than in a public issue.
+
+## License
+
+[MIT](LICENSE).
