@@ -159,7 +159,7 @@ $ChangeItems  = Expand-List $ChangeItems
 # =========================================================================== #
 # Версия. Должна совпадать с MainForm.AppVersion в интерфейсе -- сборка это
 # проверяет, чтобы вшитый движок и окно не рассказывали о себе разное.
-$script:EngineVersion  = '1.9.1'
+$script:EngineVersion  = '1.9.2'
 $script:HostsMarkStart = '# --- Win11Privacy: блокировка телеметрии (начало) ---'
 $script:HostsMarkEnd   = '# --- Win11Privacy: блокировка телеметрии (конец) ---'
 $script:FwGroup        = 'Win11Privacy'
