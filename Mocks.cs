@@ -39,7 +39,7 @@ namespace Win11Privacy
                 "{\"ip\":\"20.190.160.14\",\"domain\":\"login.microsoftonline.com\",\"count\":6,\"port\":\"443\"}]}";
             RenderMonitor(Json.ParseObject(mon));
 
-            string det = "{\"os\":\"Windows 11 Домашняя\",\"build\":\"26100\",\"edition\":\"Core\",\"editionKind\":\"home\",\"guardInstalled\":true,\"monitorEnabled\":true," +
+            string det = "{\"os\":\"" + (L.English ? "Windows 11 Home" : "Windows 11 Домашняя") + "\",\"build\":\"26100\",\"edition\":\"Core\",\"editionKind\":\"home\",\"guardInstalled\":true,\"monitorEnabled\":true," +
                 "\"guardModules\":[\"telemetry\",\"ads\",\"copilot\"],\"guardLast\":{\"time\":\"2026-08-31 12:00\",\"drifted\":[\"AllowTelemetry\",\"ShowCopilotButton\"],\"fixed\":2,\"hotfixes\":[\"KB5054321\"]}," +
                 "\"firewallRules\":6,\"hostsBlocked\":true,\"diagTrack\":\"Disabled\",\"buffer\":{\"mb\":\"4.7\",\"files\":9}," +
                 "\"apps\":[{\"id\":\"app_nvidia\",\"found\":true},{\"id\":\"app_vscode\",\"found\":true},{\"id\":\"app_chrome\",\"found\":true},{\"id\":\"app_firefox\",\"found\":false},{\"id\":\"app_office\",\"found\":false},{\"id\":\"app_devtools\",\"found\":true},{\"id\":\"app_vs\",\"found\":false}]," +
@@ -146,8 +146,8 @@ namespace Win11Privacy
             string changesJson = "{\"count\":4,\"raw\":37,\"updated\":\"2026-09-01T21:14:00\",\"items\":[" +
                 "{\"id\":\"c1\",\"kind\":\"startup\",\"title\":\"GoogleUpdate\",\"where\":\"автозагрузка\",\"was\":\"запускалась\",\"now\":\"отключена\",\"time\":\"2026-09-01T21:14:00\",\"count\":1}," +
                 "{\"id\":\"c2\",\"kind\":\"reg\",\"title\":\"уровень телеметрии — минимальный\",\"where\":\"HKLM:\\\\SOFTWARE\\\\Policies\\\\Microsoft\\\\Windows\\\\DataCollection\",\"was\":\"3\",\"now\":\"0\",\"time\":\"2026-09-01T20:58:00\",\"count\":2}," +
-                "{\"id\":\"c3\",\"kind\":\"reg\",\"title\":\"рекламный идентификатор — выкл\",\"where\":\"HKCU:\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\AdvertisingInfo\",\"was\":\"не было\",\"now\":\"0\",\"time\":\"2026-09-01T20:58:00\",\"count\":1}," +
-                "{\"id\":\"c4\",\"kind\":\"reg\",\"title\":\"Copilot в Windows — выкл\",\"where\":\"HKCU:\\\\SOFTWARE\\\\Policies\\\\Microsoft\\\\Windows\\\\WindowsCopilot\",\"was\":\"не было\",\"now\":\"1\",\"time\":\"2026-09-01T20:58:00\",\"count\":1}]}";
+                "{\"id\":\"c3\",\"kind\":\"reg\",\"title\":\"рекламный ID — выкл\",\"where\":\"HKCU:\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\AdvertisingInfo\",\"was\":\"не было\",\"now\":\"0\",\"time\":\"2026-09-01T20:58:00\",\"count\":1}," +
+                "{\"id\":\"c4\",\"kind\":\"reg\",\"title\":\"Windows Copilot — выкл\",\"where\":\"HKCU:\\\\SOFTWARE\\\\Policies\\\\Microsoft\\\\Windows\\\\WindowsCopilot\",\"was\":\"не было\",\"now\":\"1\",\"time\":\"2026-09-01T20:58:00\",\"count\":1}]}";
             RenderChanges(Json.ParseObject(changesJson));
 
             StringBuilder tl = new StringBuilder();
@@ -174,8 +174,8 @@ namespace Win11Privacy
                 "{\"date\":\"22.08\",\"kind\":\"drift\",\"a\":6,\"b\":6,\"list\":\"\"}," +
                 "{\"date\":\"29.08\",\"kind\":\"update\",\"a\":0,\"b\":0,\"list\":\"KB5070101\"}]}");
             RenderTimeline(Json.ParseObject(tl.ToString()));
-            if (_qcStartup != null) _qcStartup.SetStatus("5 лишних из 8", Theme.Warn);
-            if (_qcTimeline != null) _qcTimeline.SetStatus("29.08 — обновление Windows", Theme.Accent);
+            if (_qcStartup != null) _qcStartup.SetStatus(5 + L.T(" лишних из ") + 8, Theme.Warn);
+            if (_qcTimeline != null) _qcTimeline.SetStatus("29.08 — " + L.T("обновление Windows"), Theme.Accent);
 
             SetAboutBody(_aboutData, "Папка: C:\\ProgramData\\Win11Privacy\n" +
                 "• История датчиков по дням: кто включал камеру, микрофон и геолокацию — 9,9 КБ, изменён 2026-09-01 20:03\n" +
@@ -189,7 +189,7 @@ namespace Win11Privacy
 
             RefreshHome();
             _xrayRecording = true;
-            _btnXrayRec.Text = "Выключить запись"; _btnXrayRec.Primary = false;
+            _btnXrayRec.Text = L.T("Выключить запись"); _btnXrayRec.Primary = false;
             foreach (Control c in _xrayList.Controls) { if (c is XrayCatRow) { ((XrayCatRow)c).Expand(); break; } }
         }
 #endif

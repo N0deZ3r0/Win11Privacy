@@ -16,7 +16,7 @@ about you. Watches so that updates do not quietly turn the tracking back on.**
 
 </div>
 
-<img src="docs/home.png" alt="Overview">
+<img src="docs/en/home.png" alt="Overview">
 
 ---
 
@@ -121,23 +121,23 @@ into Windows, and the engine is embedded inside the exe.
 
 | Settings — a module expanded into individual items | Dossier — who turned on the camera and microphone |
 |---|---|
-| <img src="docs/settings.png" alt="Settings"> | <img src="docs/dossier.png" alt="Dossier"> |
+| <img src="docs/en/settings.png" alt="Settings"> | <img src="docs/en/dossier.png" alt="Dossier"> |
 
 | Apps — removing preinstalled software | Telemetry X-ray |
 |---|---|
-| <img src="docs/apps.png" alt="Apps"> | <img src="docs/xray.png" alt="X-ray"> |
+| <img src="docs/en/apps.png" alt="Apps"> | <img src="docs/en/xray.png" alt="X-ray"> |
 
 | Audit — the index, what was not applied, and what does not exist on this Windows |
 |---|
-| <img src="docs/audit.png" alt="Audit"> |
+| <img src="docs/en/audit.png" alt="Audit"> |
 
 | Startup — what launches with Windows | Monitor — who is sending, and who is cut off |
 |---|---|
-| <img src="docs/startup.png" alt="Startup"> | <img src="docs/monitor.png" alt="Monitor"> |
+| <img src="docs/en/startup.png" alt="Startup"> | <img src="docs/en/monitor.png" alt="Monitor"> |
 
 | Changes — what the program altered and how to undo it | Timeline — telemetry by day and Windows updates |
 |---|---|
-| <img src="docs/changes.png" alt="Changes"> | <img src="docs/timeline.png" alt="Timeline"> |
+| <img src="docs/en/changes.png" alt="Changes"> | <img src="docs/en/timeline.png" alt="Timeline"> |
 
 ---
 

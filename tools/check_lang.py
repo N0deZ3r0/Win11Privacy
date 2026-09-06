@@ -42,6 +42,15 @@ def dicts(root):
 
     return sorted(names, key=num)
 LIT = re.compile(r'L\.T\("((?:[^"\\]|\\.)*)"\)')
+# Движок отдаёт часть подписей данными, а не литералами интерфейса: названия и
+# описания фактов рентгена, категории телеметрии, подписи файлов на странице
+# «О программе». Интерфейс пропускает их через L.T, но найти их можно только
+# в самом движке.
+ENGINE = 'Win11-Privacy-Engine.ps1'
+ENGINE_LIT = [
+    re.compile(r"(?:title|what|was|now|where)\s*=\s*'([^']{3,})'"),   # факты, категории, состояния
+    re.compile(r"^\s*'[^']+'\s*=\s*'([^']{3,})'\s*$", re.M),        # словари вида имя = «человеческое название»
+]
 CYR = re.compile(u'[Ѐ-ӿ]')
 
 
@@ -85,6 +94,16 @@ def main():
                 continue
             seen.add(key)
             missing.append((name, key))
+
+    engine = os.path.join(root, ENGINE)
+    if os.path.exists(engine):
+        text = io.open(engine, encoding='utf-8-sig').read()
+        for rx in ENGINE_LIT:
+            for raw in rx.findall(text):
+                if raw in known or raw in seen or not CYR.search(raw):
+                    continue
+                seen.add(raw)
+                missing.append((ENGINE, raw))
 
     if not missing:
         sys.stdout.write('all translated\n')

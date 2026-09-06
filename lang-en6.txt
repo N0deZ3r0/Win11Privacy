@@ -1,0 +1,103 @@
+# Строки, которые приходят от движка данными, а не литералами интерфейса:
+# названия и описания фактов рентгена, категории телеметрии, подписи файлов
+# на странице «О программе». Их не видел tools/check_lang.py — он читал только
+# исходники C#, — поэтому английский интерфейс оставался наполовину русским.
+# Формат: русский TAB английский.
+
+# --- что о вас узнали: факты рентгена ---
+Названия установленных программ	Names of installed programs
+Windows перечисляет, что у вас стоит: имя, издатель и версия каждой программы.	Windows lists what you have: the name, publisher and version of every program.
+Имена запускавшихся файлов	Names of the files you ran
+В событиях видно, какие исполняемые файлы вы открывали.	The events show which executables you opened.
+Модель и производитель компьютера	Model and maker of the computer
+Точная модель железа — по ней устройство узнаётся среди прочих.	The exact hardware model — it tells this device apart from the rest.
+Идентификаторы, которыми вас метят	The identifiers you are tagged with
+Постоянные номера устройства и учётной записи: по ним события связываются в один профиль.	Permanent device and account numbers: they tie the events into a single profile.
+Серийные номера железа	Hardware serial numbers
+Серийный номер не меняется никогда — это самая надёжная метка устройства.	A serial number never changes — it is the most reliable mark of a device.
+Начинка компьютера	What is inside the computer
+Процессор, память, диски и видеокарта — подробная опись железа.	Processor, memory, drives and graphics card — a detailed hardware inventory.
+Сетевые адреса и имена сетей	Network addresses and network names
+MAC-адрес и названия сетей говорят, где физически стоит компьютер.	The MAC address and network names tell where the computer physically stands.
+Учётная запись и язык	Account and language
+Имя пользователя, страна, часовой пояс и раскладка.	User name, country, time zone and keyboard layout.
+Подключённые устройства	Connected devices
+Всё, что вы подключали: принтеры, флешки, наушники, телефоны.	Everything you have plugged in: printers, USB sticks, headphones, phones.
+Сбои программ с их именами	Program crashes, with their names
+Имена упавших программ и модулей — заодно видно, чем вы пользуетесь.	Names of crashed programs and modules — which also shows what you use.
+
+# --- категории телеметрии ---
+Какие программы стоят на компьютере, их версии и издатели	Which programs are installed, their versions and publishers
+Что открывал, сколько времени провёл, как часто	What you opened, how long you spent there, how often
+Модель ноутбука, процессор, память, диски, серийные номера	Laptop model, processor, memory, drives, serial numbers
+Флешки, наушники, принтеры, мыши — что и когда подключал	USB sticks, headphones, printers, mice — what was plugged in and when
+Какие программы падали, с какими ошибками, имена файлов	Which programs crashed, with what errors, the file names
+Активность в браузере, посещения, проверки сайтов	Browser activity, visits, site checks
+Установка обновлений, версии, ошибки установки	Update installation, versions, installation errors
+Состояние защиты, проверки, обнаружения	Protection status, scans, detections
+Где находится компьютер, окружающие сети	Where the computer is, the networks around it
+Сетевые подключения, качество связи	Network connections, link quality
+Работа с документами и облаком	Working with documents and the cloud
+Установки из магазина, покупки, игровая активность	Store installs, purchases, gaming activity
+Что искал в меню Пуск и как использовался поиск	What you searched for in the Start menu and how search was used
+Входы в систему, привязка к учётной записи Microsoft	Sign-ins and the link to a Microsoft account
+Когда включал и выключал, время работы	When it was switched on and off, and for how long
+Служебные события самой системы сбора данных	Internal events of the data collection system itself
+События, не попавшие в известные категории	Events that did not fall into any known category
+
+# --- что программа хранит о вас у себя ---
+История датчиков по дням: кто включал камеру, микрофон и геолокацию	Sensor history by day: who turned on the camera, microphone and location
+Журнал изменений: что программа поменяла и что было до неё	Change journal: what the program altered and what was there before it
+Снимок «до»: состояние системы перед первым применением	The "before" snapshot: the state of the system prior to the first run
+Последняя проверка стража	The guard's last check
+Журнал работы стража	The guard's log
+Профиль стража: какие разделы он сторожит	The guard's profile: which sections it watches
+Последний результат рентгена телеметрии	The latest telemetry X-ray result
+Эталон рентгена: сколько событий уходило до настройки	X-ray baseline: how many events left before the settings were applied
+Известные записи автозагрузки — по ним страж замечает новые	Known startup entries — the guard spots new ones against them
+Список программ, которым доступ к датчикам уже известен	Programs whose access to the sensors is already known
+Снимок состояния или служебный файл	A state snapshot or an internal file
+
+# --- прочее ---
+NVIDIA (драйвер и GeForce)	NVIDIA (driver and GeForce)
+
+# --- как движок описывает «было / стало / где» на странице «Изменения» ---
+запускалась	used to start
+была отключена	was switched off
+запускается	starts
+отключена	switched off
+не было	not set
+автозагрузка	startup
+на месте	in place
+сбито	knocked out
+
+# --- названия предустановленных приложений ---
+Виджеты и лента Microsoft Start	Widgets and the Microsoft Start feed
+Новости MSN	MSN News
+Погода MSN	MSN Weather
+Поиск Bing в Пуске	Bing search in Start
+Финансы MSN	MSN Money
+Спорт MSN	MSN Sport
+Видеоредактор Clipchamp	Clipchamp video editor
+Приложение Xbox	Xbox app
+Игровая панель Xbox	Xbox Game Bar
+Вход Xbox	Xbox sign-in
+Субтитры Xbox	Xbox captions
+Коллекция пасьянсов	Solitaire Collection
+Промо Microsoft 365	Microsoft 365 promo
+OneNote из магазина	OneNote from the Store
+Teams (личный)	Teams (personal)
+Связь с телефоном	Phone Link
+Люди	People
+Карты	Maps
+Центр отзывов	Feedback Hub
+Справка	Get Help
+Советы	Tips
+Просмотр 3D	3D Viewer
+Портал смешанной реальности	Mixed Reality Portal
+Медиапроигрыватель	Media Player
+Фильмы и ТВ	Movies & TV
+Быстрая помощь	Quick Assist
+Copilot (компонент)	Copilot (component)
+Новый Outlook	New Outlook
+Записки	Sticky Notes

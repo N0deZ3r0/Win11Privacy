@@ -1221,8 +1221,10 @@ namespace Win11Privacy
             foreach (object o in items)
             {
                 Dictionary<string, object> it = Json.Obj(o);
-                string was = Json.GetStr(it, "was"), now = Json.GetStr(it, "now");
-                string what = L.T("было: ") + was + L.T("   ·   стало: ") + now + "   ·   " + Json.GetStr(it, "where");
+                // движок отдаёт эти поля словами, а не числами: «запускалась»,
+                // «не было», «автозагрузка» — их тоже надо переводить
+                string was = L.T(Json.GetStr(it, "was")), now = L.T(Json.GetStr(it, "now"));
+                string what = L.T("было: ") + was + L.T("   ·   стало: ") + now + "   ·   " + L.T(Json.GetStr(it, "where"));
                 WipeRow r = new WipeRow(Json.GetStr(it, "id"), L.T(Json.GetStr(it, "title")), what,
                                         Json.GetStr(it, "time").Replace("T", " "),
                                         Json.GetStr(it, "kind") == "startup" ? GPower : GUndo, true);
