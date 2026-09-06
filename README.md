@@ -239,8 +239,18 @@ Because of that the engine is fully testable separately from the interface.
 | `-Audit -WithProof` | audit and proof of the result in one run |
 | `-InstallGuard` / `-GuardNow` | the guard that restores settings knocked out of place |
 | `-Snapshot` / `-SnapshotDiff` | the time machine |
-| `-InstallWatcher` | live notifications about interception |
+| `-InstallWatcher` / `-RemoveWatcher` | live notifications about interception |
+| `-SelfTest` | engine self-check — the same "Diagnostics" as in the window |
+| `-RestoreAll` | restore every journal entry and touch nothing else |
+| `-PurgeBuffer` | wipe the telemetry that has not been sent yet |
+| `-XrayStatus` / `-XrayDisable` / `-XrayBaseline` | recording status, switching it off, the "before" measurement |
 | `-Revert` | roll everything back |
+
+Qualifying switches: `-NoBackup` and `-NoRestorePoint` (skip the registry backup
+and the restore point), `-GuardDaily` (the guard runs daily instead of weekly),
+`-AllUsers` (remove apps for every user), `-SpyAll` (also show permissions never
+used), `-MonitorHours`, `-XrayHours`, `-XrayMax`, `-TimelineDays` (how far back
+to look and how much to take).
 
 ### How to add a new setting
 
@@ -290,9 +300,19 @@ data and closes itself after 13 seconds:
 csc ... /define:UITEST ...
 ```
 
-The environment variables `WIN11_TEST_PAGE` (which page to open) and
-`WIN11_TEST_MOCK=1` (substitute test data) control it. There is also `BIGFONT`,
+Environment variables: `WIN11_TEST_PAGE` (which page to open),
+`WIN11_TEST_MOCK=1` (substitute test data), `WIN11_TEST_EN=1` (English
+interface), `WIN11_TEST_SHOT=path.png` (capture the window and exit),
+`WIN11_TEST_WELCOME=1` (show the first-run window), `WIN11_TEST_UPDATE=1`
+(press "Check for update"), `WIN11_TEST_DUMP=1` (print the control tree with
+"ВЫЛЕЗ" and "ОБРЕЗАНО" markers). There are also the build flags `BIGFONT`,
 which simulates a display at 150% scaling, and `LIGHTTEST` for the light theme.
+
+The checks for the interface's pure functions build as a separate exe:
+
+```
+csc /define:SELFTEST /main:Win11Privacy.SelfTest ... *.cs
+```
 
 ---
 
@@ -350,7 +370,7 @@ write to someone else's repository. Without the secret the step is quietly skipp
 and the manifest can be sent by hand:
 
 ```
-python tools/submit_winget.py --version 1.9.1
+python tools/submit_winget.py
 ```
 
 The contributor agreement (CLA) is signed once, and the fork of the catalogue is
@@ -358,18 +378,31 @@ created automatically.
 
 To cut a new version:
 
-1. Update the version number in `app.res` and in the program's title.
-2. Commit the changes to `main` — the build checks the engine, the translation and
-   the interface.
-3. Create the tag and push it:
+1. Raise the number in two places — `AppInfo.cs` (`Version`) and the engine
+   (`$script:EngineVersion`) — then write it into the version resource, the one
+   Windows shows in the file properties:
 
    ```bash
-   git tag v1.8.1
-   git push origin v1.8.1
+   python tools/set_version.py
    ```
 
-4. On a `v*` tag the build creates the release itself and attaches
-   `Win11Privacy.exe`, `Win11-Privacy-Engine.ps1` and `SHA256SUMS.txt` to it.
+2. Commit the changes to `main`. The build checks the engine and the interface,
+   verifies the translation and makes sure all three versions agree.
+3. Create a tag with the same version and push it:
+
+   ```bash
+   git tag -a v1.9.3 -m "a line about what changed"
+   git push origin v1.9.3
+   ```
+
+4. The rest happens on its own: the build compares the tag with the version
+   inside the program, applies and reverts the settings on a disposable machine,
+   creates the release with `Win11Privacy.exe`, `Win11-Privacy-Engine.ps1`,
+   `SHA256SUMS.txt` and `winget-manifest.zip`, and then submits the manifest to
+   the winget catalogue as a pull request.
+
+If the tag and the version inside the program disagree, the build stops — a
+release with the wrong number never goes out.
 
 ---
 
