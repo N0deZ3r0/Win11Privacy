@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 using System.IO;
 using System.Net;
@@ -17,7 +17,7 @@ namespace Win11Privacy
     // ====================================================================== //
     internal static class AppInfo
     {
-        internal const string Version = "1.9.0";
+        internal const string Version = "1.9.1";
         internal const string Repo = "N0deZ3r0/Win11Privacy";
         internal const string ReleasesUrl = "https://github.com/N0deZ3r0/Win11Privacy/releases/latest";
 
