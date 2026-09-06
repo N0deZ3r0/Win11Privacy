@@ -447,25 +447,41 @@ function Use-JournalLock {
 # Для отката нужна САМАЯ РАННЯЯ запись про каждый параметр — та, что помнит
 # состояние до нас. Остальные повторы держать незачем: раньше журнал рос без
 # предела и на каждой записи переписывался целиком.
+# Записи журнала бывают двух видов: свежие -- хэш-таблицы, прочитанные из
+# файла -- PSCustomObject. У хэш-таблицы PSObject.Properties перечисляет
+# свойства самой таблицы, а не её ключи, поэтому читать поля надо по-разному.
+function ConvertTo-Fields {
+    param($Entry)
+    $h = @{}
+    if ($null -eq $Entry) { return $h }
+    if ($Entry -is [System.Collections.IDictionary]) {
+        foreach ($k in @($Entry.Keys)) { $h["$k"] = $Entry[$k] }
+    } else {
+        foreach ($p in $Entry.PSObject.Properties) { $h[$p.Name] = $p.Value }
+    }
+    return $h
+}
+
 function Compress-Journal {
     param($Items)
     $order = New-Object System.Collections.Generic.List[string]
     $first = @{}
     foreach ($e in @($Items)) {
-        $key = if ("$($e.kind)" -eq 'startup') { "startup|$($e.id)" } else { ("reg|{0}|{1}" -f "$($e.path)", "$($e.name)").ToLowerInvariant() }
+        $f = ConvertTo-Fields $e
+        if ($f.Count -eq 0) { continue }
+        $key = if ("$($f['kind'])" -eq 'startup') { "startup|$($f['id'])" }
+               else { ("reg|{0}|{1}" -f "$($f['path'])", "$($f['name'])").ToLowerInvariant() }
         if (-not $first.ContainsKey($key)) {
-            $c = @{}
-            foreach ($p in $e.PSObject.Properties) { $c[$p.Name] = $p.Value }
-            if (-not $c.ContainsKey('count') -or [int]$c['count'] -lt 1) { $c['count'] = 1 }
-            $first[$key] = $c
+            if (-not $f.ContainsKey('count') -or [int]$f['count'] -lt 1) { $f['count'] = 1 }
+            $first[$key] = $f
             $order.Add($key)
             continue
         }
         # повтор: помним только чем всё кончилось и сколько раз меняли
         $cur = $first[$key]
-        $cur['count'] = [int]$cur['count'] + [int]$(if ($e.PSObject.Properties['count']) { $e.count } else { 1 })
-        if ($e.PSObject.Properties['newValue']) { $cur['newValue'] = $e.newValue }
-        if ($e.PSObject.Properties['time'] -and "$($e.time)") { $cur['lastTime'] = "$($e.time)" }
+        $cur['count'] = [int]$cur['count'] + [int]$(if ($f.ContainsKey('count') -and [int]$f['count'] -gt 0) { $f['count'] } else { 1 })
+        if ($f.ContainsKey('newValue')) { $cur['newValue'] = $f['newValue'] }
+        if ($f.ContainsKey('time') -and "$($f['time'])") { $cur['lastTime'] = "$($f['time'])" }
     }
     $out = New-Object System.Collections.Generic.List[object]
     foreach ($k in $order) { $out.Add($first[$k]) }

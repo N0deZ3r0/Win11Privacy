@@ -406,7 +406,7 @@ Write-Host ''
 Write-Host 'Резервная копия: только при ручном применении и только по факту'
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($fn.Name -in @('Ensure-Backup', 'Write-Section')) { Invoke-Expression $fn.Extent.Text }
-    if ($fn.Name -eq 'Compress-Journal') { Invoke-Expression $fn.Extent.Text }
+    if ($fn.Name -in @('Compress-Journal', 'ConvertTo-Fields')) { Invoke-Expression $fn.Extent.Text }
 }
 # заглушка: проверяем резервную копию, а не запись журнала
 function Save-JournalEntries { param([switch]$Quiet) }
@@ -625,19 +625,35 @@ Write-Host 'Журнал отката: замок и схлопывание'
 Check 'запись журнала под общим замком' ($engineText -match 'Use-JournalLock\s*\{')
 Check 'замок общесистемный' ($engineText -match "Mutex\(\`$false, 'Global")
 if (Get-Command Compress-Journal -ErrorAction SilentlyContinue) {
-    # три правки одного параметра должны схлопнуться в одну запись: для отката
-    # нужно самое раннее значение, всё остальное — история
-    $sample = @(
-        [pscustomobject]@{ kind='reg'; path='HKLM:\Test'; name='A'; existed=$true;  old='1'; newValue='0'; time='2026-09-01T10:00:00' },
-        [pscustomobject]@{ kind='reg'; path='HKLM:\Test'; name='A'; existed=$true;  old='0'; newValue='2'; time='2026-09-02T10:00:00' },
-        [pscustomobject]@{ kind='reg'; path='HKLM:\Test'; name='B'; existed=$false; old='';  newValue='1'; time='2026-09-02T11:00:00' }
-    )
-    $packed = @(Compress-Journal $sample)
-    Check 'повторы одного параметра схлопнулись' ($packed.Count -eq 2) ("получено записей: " + $packed.Count)
-    $a = @($packed | Where-Object { $_['name'] -eq 'A' })[0]
-    Check 'сохранено самое раннее «было»' ("$($a['old'])" -eq '1') ("получено: " + $a['old'])
-    Check 'сохранено последнее «стало»' ("$($a['newValue'])" -eq '2') ("получено: " + $a['newValue'])
-    Check 'посчитано число правок' ([int]$a['count'] -eq 2) ("получено: " + $a['count'])
+    # Записи бывают двух видов: свежие — хэш-таблицы, прочитанные из файла —
+    # объекты. Проверяем оба: на хэш-таблицах поля однажды уже терялись, и
+    # откат переставал возвращать значения.
+    $kinds = @{
+        'из файла' = @(
+            [pscustomobject]@{ kind='reg'; path='HKLM:\Test'; name='A'; type='DWord'; existed=$true;  old='1'; newValue='0'; time='2026-09-01T10:00:00' },
+            [pscustomobject]@{ kind='reg'; path='HKLM:\Test'; name='A'; type='DWord'; existed=$true;  old='0'; newValue='2'; time='2026-09-02T10:00:00' },
+            [pscustomobject]@{ kind='reg'; path='HKLM:\Test'; name='B'; type='DWord'; existed=$false; old='';  newValue='1'; time='2026-09-02T11:00:00' }
+        )
+        'свежие' = @(
+            @{ kind='reg'; path='HKLM:\Test'; name='A'; type='DWord'; existed=$true;  old='1'; newValue='0'; time='2026-09-01T10:00:00' },
+            @{ kind='reg'; path='HKLM:\Test'; name='A'; type='DWord'; existed=$true;  old='0'; newValue='2'; time='2026-09-02T10:00:00' },
+            @{ kind='reg'; path='HKLM:\Test'; name='B'; type='DWord'; existed=$false; old='';  newValue='1'; time='2026-09-02T11:00:00' }
+        )
+    }
+    foreach ($kindName in @('из файла', 'свежие')) {
+        $packed = @(Compress-Journal $kinds[$kindName])
+        Check ("повторы схлопнулись ($kindName)") ($packed.Count -eq 2) ("получено записей: " + $packed.Count)
+        $a = @($packed | Where-Object { "$($_['name'])" -eq 'A' })
+        Check ("запись не потеряла имя параметра ($kindName)") ($a.Count -eq 1)
+        if ($a.Count -ne 1) { continue }
+        $a = $a[0]
+        Check ("путь на месте ($kindName)") ("$($a['path'])" -eq 'HKLM:\Test') ("получено: " + $a['path'])
+        Check ("тип значения на месте ($kindName)") ("$($a['type'])" -eq 'DWord') ("получено: " + $a['type'])
+        Check ("сохранено самое раннее «было» ($kindName)") ("$($a['old'])" -eq '1') ("получено: " + $a['old'])
+        Check ("отметка «параметр существовал» на месте ($kindName)") ([bool]$a['existed'])
+        Check ("сохранено последнее «стало» ($kindName)") ("$($a['newValue'])" -eq '2') ("получено: " + $a['newValue'])
+        Check ("посчитано число правок ($kindName)") ([int]$a['count'] -eq 2) ("получено: " + $a['count'])
+    }
 } else {
     Check 'функция схлопывания журнала найдена' $false
 }
