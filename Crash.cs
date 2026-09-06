@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -81,6 +81,13 @@ namespace Win11Privacy
         private static void Report(Exception ex, bool fatal)
         {
             string path = Save(ex, fatal);
+#if UITEST
+            Console.WriteLine("CRASH " + (ex == null ? "(неизвестно)" : ex.GetType().Name + ": " + ex.Message));
+            Console.WriteLine("CRASH файл " + path);
+            Console.Out.Flush();
+            return;
+#pragma warning disable 0162
+#endif
             if (_shown) return;
             _shown = true;
             try
@@ -100,6 +107,9 @@ namespace Win11Privacy
             }
             catch { }
             _shown = false;
+#if UITEST
+#pragma warning restore 0162
+#endif
         }
     }
 }

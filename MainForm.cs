@@ -2078,6 +2078,9 @@ namespace Win11Privacy
             // Раньше закрытое окно ничего не останавливало: движок продолжал
             // менять реестр уже без интерфейса, а распакованный скрипт
             // оставался во временной папке навсегда.
+#if UITEST
+            StopEngine(false);          // в тестовой сборке спрашивать некого
+#else
             if (EngineAlive())
             {
                 string ask = _procWrites
@@ -2087,6 +2090,7 @@ namespace Win11Privacy
                 { e.Cancel = true; return; }
                 StopEngine(false);
             }
+#endif
             SaveUiState();
             EngineFile.Remove();
             base.OnFormClosing(e);
@@ -2257,6 +2261,9 @@ namespace Win11Privacy
         {
             Process p = _proc;
             if (!EngineAlive()) return true;
+#if UITEST
+            ask = false;                // тестовая сборка не открывает окон
+#endif
             if (ask && _procWrites)
             {
                 string warn = L.T("Движок сейчас меняет настройки системы.\n\n") +
@@ -2638,6 +2645,19 @@ namespace Win11Privacy
             int delayMs = shot != null ? 2500 : 13000;
             string delayEnv = Environment.GetEnvironmentVariable("WIN11_TEST_DELAY");
             if (!string.IsNullOrEmpty(delayEnv)) { int dv; if (int.TryParse(delayEnv, out dv) && dv > 500) delayMs = dv; }
+            // Сторож на случай, если выход что-то задержит: сборка должна
+            // получить внятный признак зависания, а не ждать шесть часов.
+            int guardMs = delayMs + 20000;
+            System.Threading.Thread watchdog = new System.Threading.Thread(delegate()
+            {
+                System.Threading.Thread.Sleep(guardMs);
+                Console.WriteLine("UITEST завис: выходим принудительно через " + guardMs + " мс");
+                Console.Out.Flush();
+                Environment.Exit(9);
+            });
+            watchdog.IsBackground = true;
+            watchdog.Start();
+
             Timer t = new Timer(); t.Interval = delayMs;
             t.Tick += delegate {
                 t.Stop();

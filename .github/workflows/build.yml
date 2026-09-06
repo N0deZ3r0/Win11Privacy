@@ -57,6 +57,7 @@ jobs:
           }
 
       - name: Проверки поведения движка
+        timeout-minutes: 20
         shell: powershell
         run: |
           .\tests\engine-tests.ps1
@@ -66,6 +67,7 @@ jobs:
       # настройки применяются на живой системе, а потом каждое значение
       # сверяется с тем, что было до. Машина здесь одноразовая.
       - name: Применить и откатить на живой системе
+        timeout-minutes: 25
         shell: powershell
         env:
           WIN11_ROUNDTRIP: '1'
@@ -74,6 +76,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "откат не вернул систему в исходное состояние" }
 
       - name: Прогнать страницы интерфейса
+        timeout-minutes: 20
         shell: pwsh
         run: |
           $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
