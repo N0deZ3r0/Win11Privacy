@@ -84,3 +84,12 @@ GitHub не ответил номером версии.	GitHub did not return a 
 На GitHub пока 	GitHub still has 
  — ваша сборка новее.	 — your build is newer.
 Версия программы: 	Program version: 
+
+# --- журнал выполнения: выгрузка в файл ---
+Сохранить журнал	Save the log
+Очистить	Clear
+Журнал пока пуст.	The log is still empty.
+Сохранение журнала	Saving the log
+Текстовый файл (*.txt)|*.txt	Text file (*.txt)|*.txt
+Приватность Windows 11, версия 	Windows 11 Privacy, version 
+Журнал сохранён: 	Log saved: 

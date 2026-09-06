@@ -25,10 +25,13 @@ namespace Win11Privacy
             StatusColor = Theme.TextDim;
             BackColor = Theme.WindowBg;
             Cursor = Cursors.Hand;
+            AccessibleRole = AccessibleRole.PushButton;
+            AccessibleName = title;
         }
 
         public void SetStatus(string text, Color color)
         {
+            AccessibleDescription = text;
             Status = text; StatusColor = color; Invalidate();
         }
 
@@ -285,6 +288,8 @@ namespace Win11Privacy
             Id = id; _name = name;
             BackColor = Theme.CardBg;
             Cursor = Cursors.Hand;
+            AccessibleRole = AccessibleRole.CheckButton;
+            AccessibleName = name;
         }
 
         public bool Checked { get { return _checked; } set { _checked = value; Invalidate(); } }

@@ -40,7 +40,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(1009, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1016, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -1050,6 +1050,13 @@ namespace Win11Privacy
             _map["На GitHub пока "] = "GitHub still has ";
             _map[" — ваша сборка новее."] = " — your build is newer.";
             _map["Версия программы: "] = "Program version: ";
+            _map["Сохранить журнал"] = "Save the log";
+            _map["Очистить"] = "Clear";
+            _map["Журнал пока пуст."] = "The log is still empty.";
+            _map["Сохранение журнала"] = "Saving the log";
+            _map["Текстовый файл (*.txt)|*.txt"] = "Text file (*.txt)|*.txt";
+            _map["Приватность Windows 11, версия "] = "Windows 11 Privacy, version ";
+            _map["Журнал сохранён: "] = "Log saved: ";
         }
     }
 }

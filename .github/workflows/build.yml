@@ -47,11 +47,16 @@ jobs:
 
       - name: Сверить версии
         shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           $ui = (Select-String -Path AppInfo.cs -Pattern 'Version = "([0-9.]+)"').Matches[0].Groups[1].Value
           $eng = (Select-String -Path Win11-Privacy-Engine.ps1 -Pattern "EngineVersion\s*=\s*'([0-9.]+)'").Matches[0].Groups[1].Value
           Write-Host "интерфейс: $ui, движок: $eng"
           if ($ui -ne $eng) { throw "версии разошлись: AppInfo.cs = $ui, движок = $eng" }
+          # ту же версию Windows показывает в свойствах файла
+          python tools/set_version.py --check
+          if ($LASTEXITCODE -ne 0) { throw "версия в app.res отстала — запустите python tools/set_version.py" }
           if ($env:GITHUB_REF -like 'refs/tags/v*') {
               $tag = $env:GITHUB_REF -replace '^refs/tags/v', ''
               if ($tag -ne $ui) { throw "тег $tag не совпадает с версией в программе ($ui)" }
@@ -76,6 +81,23 @@ jobs:
         run: |
           .\tests\roundtrip.ps1
           if ($LASTEXITCODE -ne 0) { throw "откат не вернул систему в исходное состояние" }
+
+      - name: Проверки интерфейса
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          & $csc /nologo /target:exe /define:SELFTEST /main:Win11Privacy.SelfTest /out:selftest.exe `
+              /reference:System.dll /reference:System.Core.dll `
+              /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
+              /resource:Win11-Privacy-Engine.ps1,engine.ps1 `
+              /resource:app.ico,app.ico /resource:app.png,app.png `
+              *.cs
+          if ($LASTEXITCODE -ne 0) { throw "сборка проверок интерфейса не удалась" }
+          .\selftest.exe
+          $code = $LASTEXITCODE
+          Remove-Item selftest.exe -Force -ErrorAction SilentlyContinue
+          if ($code -ne 0) { throw "проверки интерфейса не прошли" }
 
       - name: Прогнать страницы интерфейса
         timeout-minutes: 20

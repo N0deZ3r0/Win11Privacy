@@ -54,6 +54,11 @@ about you. Watches so that updates do not quietly turn the tracking back on.**
 | **The undo journal is written as it goes** | It used to be saved once, at the very end: an interrupted run left the changes in the system with nothing to revert them with. Now it hits the disk after every module and at least once every ten edits. |
 | **The engine lives where nothing writes without administrator rights** | The script runs with full rights, so in the user's temp folder any process could have swapped it. The folder in ProgramData is created with explicit permissions, and before every launch the file is checked against the SHA-256 of what is embedded in the exe. |
 | **A clear error instead of the .NET dialog** | When the program trips over something, it explains what happened and writes `crash.log` you can attach to a bug report. |
+| **The guard comes right after an update** | A Windows update is what knocks the settings out, and a schedule could wait until Sunday. The guard now has a third alarm — the update installation itself: it checks the system five minutes later. |
+| **One copy of the program** | A second launch brings up the window that is already open. Two windows with administrator rights would apply settings at the same time and overwrite each other's undo journal. |
+| **You can see how far the check has got** | Verifying 191 settings takes up to half a minute and used to stay silent until the very end. Now the engine reports its progress and the window shows "15 / 34" and the name of the current section. |
+| **The run log can be saved to a file** | A button on the Log page: these logs are what "it applied the wrong thing" cases are settled by, and a screenshot is no longer needed. |
+| **Keyboard and screen reader** | Tab walks the sections, Enter and Space open the selected one, and the hand-drawn controls now tell the system their names — the reader used to read emptiness. |
 
 Also: ready-made **Basic / Strict / Maximum** presets, third-party telemetry
 (Chrome, Edge, Office, VS Code, NVIDIA, PowerShell, Visual Studio), laptop-vendor
@@ -167,6 +172,8 @@ By hand, if you prefer:
 | **AppInfo.cs** | The program version and the update check on GitHub — on a button only. |
 | **Welcome.cs** | The first-run window: one question instead of thirteen sections at once. |
 | **Mocks.cs** | Test data for interface screenshots, entirely under `#if UITEST`. |
+| **SingleInstance.cs** | One copy of the program: a second launch shows the window that is already open. |
+| **SelfTest.cs** | Checks for the pure functions of the interface — version comparison, parsing the engine's replies, "does this command change the system or only read it". A separate build under `#if SELFTEST`. |
 | **Ui.cs** | Theme (colours, fonts), cards, switches, buttons, list rows, the index ring, tiles. |
 | **Ui2.cs** | Window title bar, gradient sidebar, sliding navigation highlight, ring chart, home-screen tiles, value animation. |
 | **Ui3.cs** | Rows of the "Dossier" page: who turned on the camera/microphone (`SpyRow`), the digital trace with erase checkboxes (`WipeRow`), the per-day sensor chart (`SensorChart`). |
@@ -179,6 +186,7 @@ By hand, if you prefer:
 | **tests/engine-tests.ps1** | Behaviour checks for the engine; the GitHub build runs the same ones. Read-only. |
 | **tests/roundtrip.ps1** | Apply, verify and revert for real, then compare every value with the original one. It changes the system, so it needs the `-Confirmed` switch; the build runs it on a disposable machine. |
 | **tools/make_winget.py** | Builds the winget catalogue manifest from the version and the release checksum. |
+| **tools/set_version.py** | Writes the program version into `app.res` — the one Windows shows in the file properties. `--check` compares them, and the build insists on it. |
 | **check-engine.cmd** | Engine self-check. Read-only, changes nothing. |
 
 ---
@@ -323,8 +331,8 @@ Locally: double-click **build.cmd** — `Win11Privacy.exe` appears next to it.
 The repository has automated builds (GitHub Actions):
 
 - on every commit to `main` and every pull request — the engine's syntax is
-  checked, the engine and interface versions are compared, its behaviour tests are
-  run, the translation is verified, **the settings are applied and reverted on a
+  checked, the engine, interface and resource versions are compared, its behaviour
+  tests and the interface's own checks are run, the translation is verified, **the settings are applied and reverted on a
   live disposable machine and every value is compared with what it was before**,
   every page of the interface and the first-run window are opened with test data in
   Russian and English, the exe is built, and it is confirmed that the engine is

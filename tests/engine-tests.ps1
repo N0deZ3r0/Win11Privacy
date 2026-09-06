@@ -406,7 +406,11 @@ Write-Host ''
 Write-Host 'Резервная копия: только при ручном применении и только по факту'
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($fn.Name -in @('Ensure-Backup', 'Write-Section')) { Invoke-Expression $fn.Extent.Text }
+    if ($fn.Name -eq 'Compress-Journal') { Invoke-Expression $fn.Extent.Text }
 }
+# заглушка: проверяем резервную копию, а не запись журнала
+function Save-JournalEntries { param([switch]$Quiet) }
+
 if (Get-Command Ensure-Backup -ErrorAction SilentlyContinue) {
     $script:Defs = @(
         @{ M = 'probe'; T = 'reg';   P = 'HKCU:\Software'; N = 'x'; V = 0 },
@@ -614,6 +618,41 @@ $engineText = Get-Content -Raw -LiteralPath $engine
 Check 'каждая секция сбрасывает журнал на диск' ($engineText -match "function Write-Section[^`n]*Save-JournalEntries -Quiet")
 Check 'внутри модуля журнал пишется не реже, чем раз в десять записей' `
       ($engineText -match 'Journal\.Count -ge 10\s*\)\s*\{\s*Save-JournalEntries -Quiet')
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Журнал отката: замок и схлопывание'
+Check 'запись журнала под общим замком' ($engineText -match 'Use-JournalLock\s*\{')
+Check 'замок общесистемный' ($engineText -match "Mutex\(\`$false, 'Global")
+if (Get-Command Compress-Journal -ErrorAction SilentlyContinue) {
+    # три правки одного параметра должны схлопнуться в одну запись: для отката
+    # нужно самое раннее значение, всё остальное — история
+    $sample = @(
+        [pscustomobject]@{ kind='reg'; path='HKLM:\Test'; name='A'; existed=$true;  old='1'; newValue='0'; time='2026-09-01T10:00:00' },
+        [pscustomobject]@{ kind='reg'; path='HKLM:\Test'; name='A'; existed=$true;  old='0'; newValue='2'; time='2026-09-02T10:00:00' },
+        [pscustomobject]@{ kind='reg'; path='HKLM:\Test'; name='B'; existed=$false; old='';  newValue='1'; time='2026-09-02T11:00:00' }
+    )
+    $packed = @(Compress-Journal $sample)
+    Check 'повторы одного параметра схлопнулись' ($packed.Count -eq 2) ("получено записей: " + $packed.Count)
+    $a = @($packed | Where-Object { $_['name'] -eq 'A' })[0]
+    Check 'сохранено самое раннее «было»' ("$($a['old'])" -eq '1') ("получено: " + $a['old'])
+    Check 'сохранено последнее «стало»' ("$($a['newValue'])" -eq '2') ("получено: " + $a['newValue'])
+    Check 'посчитано число правок' ([int]$a['count'] -eq 2) ("получено: " + $a['count'])
+} else {
+    Check 'функция схлопывания журнала найдена' $false
+}
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Страж просыпается после обновления Windows'
+Check 'у стража есть триггер по событию' ($engineText -match 'MSFT_TaskEventTrigger')
+Check 'слушается журнал обновлений' ($engineText -match 'Microsoft-Windows-WindowsUpdateClient')
+Check 'проверка идёт не мгновенно, а с задержкой' ($engineText -match "\`$t3.Delay = 'PT5M'")
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Ход долгой проверки виден'
+Check 'проверка сообщает, сколько пройдено' ($engineText -match '###PROGRESS### \{0\}/\{1\}')
 
 # --------------------------------------------------------------------------- #
 Write-Host ''

@@ -426,18 +426,67 @@ function Ensure-Backup {
 # Журнал отката сбрасывается на диск по ходу работы: раньше он писался
 # единственный раз в самом конце, и обрыв прогона (закрыли окно, выключили
 # питание) оставлял изменения в системе, а вернуть их было нечем.
+# Журнал читается и переписывается целиком, поэтому два одновременно
+# работающих экземпляра затирали правки друг друга — а журнал единственный
+# путь назад. Общесистемный замок делает запись неделимой.
+function Use-JournalLock {
+    param([scriptblock]$Body)
+    $mx = $null
+    try { $mx = New-Object System.Threading.Mutex($false, 'Global\Win11Privacy-Journal') } catch { }
+    $held = $false
+    if ($mx) { try { $held = $mx.WaitOne(10000) } catch [System.Threading.AbandonedMutexException] { $held = $true } catch { } }
+    try { & $Body }
+    finally {
+        if ($mx) {
+            if ($held) { try { $mx.ReleaseMutex() } catch { } }
+            try { $mx.Dispose() } catch { }
+        }
+    }
+}
+
+# Для отката нужна САМАЯ РАННЯЯ запись про каждый параметр — та, что помнит
+# состояние до нас. Остальные повторы держать незачем: раньше журнал рос без
+# предела и на каждой записи переписывался целиком.
+function Compress-Journal {
+    param($Items)
+    $order = New-Object System.Collections.Generic.List[string]
+    $first = @{}
+    foreach ($e in @($Items)) {
+        $key = if ("$($e.kind)" -eq 'startup') { "startup|$($e.id)" } else { ("reg|{0}|{1}" -f "$($e.path)", "$($e.name)").ToLowerInvariant() }
+        if (-not $first.ContainsKey($key)) {
+            $c = @{}
+            foreach ($p in $e.PSObject.Properties) { $c[$p.Name] = $p.Value }
+            if (-not $c.ContainsKey('count') -or [int]$c['count'] -lt 1) { $c['count'] = 1 }
+            $first[$key] = $c
+            $order.Add($key)
+            continue
+        }
+        # повтор: помним только чем всё кончилось и сколько раз меняли
+        $cur = $first[$key]
+        $cur['count'] = [int]$cur['count'] + [int]$(if ($e.PSObject.Properties['count']) { $e.count } else { 1 })
+        if ($e.PSObject.Properties['newValue']) { $cur['newValue'] = $e.newValue }
+        if ($e.PSObject.Properties['time'] -and "$($e.time)") { $cur['lastTime'] = "$($e.time)" }
+    }
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($k in $order) { $out.Add($first[$k]) }
+    return $out.ToArray()
+}
+
 function Save-JournalEntries {
     param([switch]$Quiet)
     if ($DryRun -or $script:Journal.Count -eq 0) { return }
-    try {
-        $prev = Load-Json 'changes.json'
-        $all = New-Object System.Collections.Generic.List[object]
-        if ($prev -and $prev.items) { foreach ($e in @($prev.items)) { $all.Add($e) } }
-        foreach ($e in $script:Journal) { $all.Add($e) }
-        Save-Json 'changes.json' @{ items = $all.ToArray(); updated = (Get-Date).ToString('s') }
-        if (-not $Quiet) { Write-Log ("Записано в журнал отката: {0}" -f $script:Journal.Count) }
-        $script:Journal.Clear()
-    } catch { }
+    $mine = $script:Journal.Count
+    Use-JournalLock {
+        try {
+            $prev = Load-Json 'changes.json'
+            $all = New-Object System.Collections.Generic.List[object]
+            if ($prev -and $prev.items) { foreach ($e in @($prev.items)) { $all.Add($e) } }
+            foreach ($e in $script:Journal) { $all.Add($e) }
+            Save-Json 'changes.json' @{ items = (Compress-Journal $all.ToArray()); updated = (Get-Date).ToString('s') }
+            $script:Journal.Clear()
+        } catch { }
+    }
+    if (-not $Quiet -and $script:Journal.Count -eq 0) { Write-Log ("Записано в журнал отката: {0}" -f $mine) }
 }
 function Load-Json { param([string]$Name) $p = Join-Path $script:DataDir $Name; if (Test-Path -LiteralPath $p) { try { return (Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null } } return $null }
 
@@ -1875,10 +1924,22 @@ if ($InstallGuard) {
         # по умолчанию раз в неделю; -GuardDaily — каждый день в то же время
         $t2 = if ($GuardDaily) { New-ScheduledTaskTrigger -Daily -At 12:00 }
               else { New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 12:00 }
+        # Настройки сбивает обновление, а расписание могло ждать до воскресенья.
+        # Третий триггер — сама установка обновления: страж приходит следом.
+        $triggers = @($t1, $t2)
+        try {
+            $t3 = New-CimInstance -CimClass (Get-CimClass -ClassName MSFT_TaskEventTrigger -Namespace Root/Microsoft/Windows/TaskScheduler) -ClientOnly
+            $t3.Enabled = $true
+            $t3.Delay = 'PT5M'
+            $t3.Subscription = '<QueryList><Query Id="0" Path="System"><Select Path="System">*[System[Provider[@Name=''Microsoft-Windows-WindowsUpdateClient''] and (EventID=19 or EventID=43)]]</Select></Query></QueryList>'
+            $triggers += $t3
+        } catch { }
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
         $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
-        Register-ScheduledTask -TaskName $script:GuardTask -Action $action -Trigger @($t1, $t2) -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
+        Register-ScheduledTask -TaskName $script:GuardTask -Action $action -Trigger $triggers -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
         Write-Log ("   [+] страж установлен: проверка через 3 минуты после входа в систему и {0}" -f $(if ($GuardDaily) { 'каждый день в 12:00' } else { 'по воскресеньям в 12:00' }))
+        if ($triggers.Count -gt 2) { Write-Log '   [+] и через 5 минут после каждого установленного обновления Windows' }
+        else { Write-Log '   [-] пробуждение после обновлений недоступно на этой системе' }
         Write-Log ("   [+] отслеживается модулей: {0}" -f $mods.Count)
         Write-Log ("   [+] журнал: {0}" -f (Join-Path $script:DataDir 'guard.log'))
     } catch { Write-Log "   [!] не удалось установить стража: $($_.Exception.Message)" }
@@ -3431,6 +3492,11 @@ if ($SelfTest) {
 # =========================================================================== #
 if ($Audit) {
     if ($Modules.Count -eq 0) { $Modules = $script:ModuleOrder }
+    # Проверка идёт до полуминуты и раньше молчала до самого ответа: окно
+    # показывало бегущую полосу, по которой не понять, идёт работа или нет.
+    $planned = @($script:Defs | Where-Object { ($Modules -contains $_.M) -and ($SkipItems -notcontains $_.Id) })
+    $script:AuditTotal = $planned.Count
+    $script:AuditDone = 0
     $items = @()
     $oemInfo = $null
     $blockedSet = @{}
@@ -3440,6 +3506,11 @@ if ($Audit) {
         if ($Modules -notcontains $d.M) { continue }
         if ($SkipItems -contains $d.Id) { continue }
         $r = Check-Def $d
+        $script:AuditDone++
+        # интерфейс читает эти строки и показывает честный ход работы
+        if ($script:AuditTotal -gt 0 -and ($script:AuditDone % 5 -eq 0 -or $script:AuditDone -eq $script:AuditTotal)) {
+            Write-Host ("###PROGRESS### {0}/{1} {2}" -f $script:AuditDone, $script:AuditTotal, $script:ModuleTitles[$d.M])
+        }
         $r.id = $d.Id
         # Windows не отдала этот параметр при применении — это не «не применено»
         # «нет на этой версии Windows» важнее записанного отказа: это причина
@@ -3570,15 +3641,19 @@ function Get-ChangeGroups {
             $was = $(if ($e.existed) { "$($e.old)" } else { 'не было' })
             $now = "$($e.newValue)"
         }
+        # у схлопнутой записи число правок лежит в ней самой
+        $times = [int]$(if ($e.PSObject.Properties['count'] -and [int]$e.count -gt 0) { $e.count } else { 1 })
+        $when = $(if ($e.PSObject.Properties['lastTime'] -and "$($e.lastTime)") { "$($e.lastTime)" } else { "$($e.time)" })
         if (-not $groups.ContainsKey($key)) {
             $order.Add($key)
             $groups[$key] = @{ id = (ConvertTo-StartupId $key); kind = $kind; title = $title
                                where = $where; was = $was; now = $now
-                               time = "$($e.time)"; count = 1 }
+                               time = $when; count = $times }
         } else {
             # самое раннее «было» уже записано, обновляем только текущее значение
             $groups[$key].now = $now
-            $groups[$key].count = [int]$groups[$key].count + 1
+            $groups[$key].time = $when
+            $groups[$key].count = [int]$groups[$key].count + $times
         }
     }
     $out = @()

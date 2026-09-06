@@ -378,6 +378,8 @@ namespace Win11Privacy
             Primary = primary;
             Cursor = Cursors.Hand;
             TabStop = true;
+            AccessibleRole = AccessibleRole.PushButton;
+            AccessibleName = text;
         }
 
         public void Fit()
@@ -389,7 +391,7 @@ namespace Win11Privacy
         }
 
         protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); Fit(); }
-        protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); Fit(); }
+        protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); AccessibleName = Text; Fit(); }
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; _down = false; Invalidate(); }
         protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); _down = true; Focus(); Invalidate(); }
@@ -516,6 +518,9 @@ namespace Win11Privacy
             Title = title; Description = description; Glyph = glyph; Hard = hard;
             BackColor = Theme.CardBg;
             Cursor = Cursors.Hand;
+            AccessibleRole = AccessibleRole.CheckButton;
+            AccessibleName = title;
+            AccessibleDescription = description;
             Toggle.Checked = on;
             Toggle.CheckedChanged += delegate { Invalidate(); };
             Toggle.MouseEnter += delegate { _hover = true; Invalidate(); };
@@ -835,10 +840,33 @@ namespace Win11Privacy
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
-                     ControlStyles.SupportsTransparentBackColor, true);
+                     ControlStyles.SupportsTransparentBackColor | ControlStyles.Selectable, true);
             Text = text; Glyph = glyph;
             BackColor = Color.Transparent;
             Cursor = Cursors.Hand;
+            TabStop = true;                       // по разделам можно пройти табуляцией
+            AccessibleRole = AccessibleRole.PageTab;
+            AccessibleName = text;
+        }
+
+        protected override void OnTextChanged(EventArgs e)
+        { base.OnTextChanged(e); AccessibleName = Text; }
+
+        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        { base.OnMouseDown(e); if (CanFocus) Focus(); }
+
+        // Enter и пробел открывают раздел — как щелчок мышью
+        protected override bool IsInputKey(Keys keyData)
+        { return keyData == Keys.Enter || keyData == Keys.Space || base.IsInputKey(keyData); }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space)
+            { OnClick(EventArgs.Empty); e.Handled = true; }
         }
 
         protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); Height = (int)(Font.Height * 2.5F); }
@@ -861,6 +889,13 @@ namespace Win11Privacy
                 using (GraphicsPath p = Theme.RoundRect(r, 7))
                 using (SolidBrush b = new SolidBrush(Color.FromArgb(Theme.Dark ? 26 : 22, Theme.Text)))
                     g.FillPath(b, p);
+            }
+            // Идущему по разделам табуляцией нужно видеть, где он сейчас
+            if (Focused && !Selected)
+            {
+                using (GraphicsPath p = Theme.RoundRect(r, 7))
+                using (Pen pen = new Pen(Theme.Accent, 1.4F))
+                    g.DrawPath(pen, p);
             }
 
             Color fg = Selected ? Theme.AccentText : Theme.TextDim;

@@ -48,6 +48,7 @@ namespace Win11Privacy
         private int _junkCount;             // параметры под числовыми именами от версий 1.1–1.5
         private bool _procWrites;           // текущая команда меняет систему
         private bool _cancelled;            // прервано пользователем
+        private string _busyText = "";      // чем занята программа сейчас
         private Icon _appIcon;
         private Image _appImage;
 
@@ -1463,7 +1464,28 @@ namespace Win11Privacy
             page.BackColor = Theme.WindowBg;
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            page.Controls.Add(PageTitle(L.T("Журнал выполнения")), 0, 0);
+            // Заголовок с кнопкой: по этим журналам находились прошлые ошибки,
+            // но выгрузить их можно было только выделением мышью.
+            TableLayoutPanel head = new TableLayoutPanel();
+            head.ColumnCount = 2; head.RowCount = 1; head.AutoSize = true;
+            head.BackColor = Theme.WindowBg; head.Dock = DockStyle.Fill;
+            head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            head.Controls.Add(PageTitle(L.T("Журнал выполнения")), 0, 0);
+
+            FlowLayoutPanel logBtns = new FlowLayoutPanel();
+            logBtns.AutoSize = true; logBtns.WrapContents = false;
+            logBtns.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
+            logBtns.Margin = new Padding(0, 0, 0, (int)(u * 0.45F));
+            ModernButton logSave = new ModernButton(L.T("Сохранить журнал"), false);
+            logSave.Font = Font; logSave.Margin = new Padding(0, 0, (int)(u * 0.4F), 0);
+            logSave.Click += delegate { SaveLogToFile(); };
+            ModernButton logClear = new ModernButton(L.T("Очистить"), false);
+            logClear.Font = Font; logClear.Margin = new Padding(0);
+            logClear.Click += delegate { if (_log != null) _log.Clear(); };
+            logBtns.Controls.Add(logSave); logBtns.Controls.Add(logClear);
+            head.Controls.Add(logBtns, 1, 0);
+            page.Controls.Add(head, 0, 0);
 
             Card card = new Card(); card.Dock = DockStyle.Fill; card.Padding = new Padding((int)(u*0.6F));
             card.Margin = new Padding(0,(int)(u*0.5F),0,(int)(u*0.3F));
@@ -1478,6 +1500,35 @@ namespace Win11Privacy
             LogLine(L.T("Здесь появляется подробный вывод при применении настроек, откате,"), Theme.TextDim);
             LogLine(L.T("работе стража и монитора."), Theme.TextDim);
             return page;
+        }
+
+        // Журнал выгружается в файл целиком: именно по нему разбираются
+        // случаи «применилось не то» — присылать снимок экрана неудобно.
+        private void SaveLogToFile()
+        {
+            if (_log == null || _log.TextLength == 0)
+            {
+                MessageBox.Show(this, L.T("Журнал пока пуст."), L.T("Сохранение журнала"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            SaveFileDialog d = new SaveFileDialog();
+            d.Filter = L.T("Текстовый файл (*.txt)|*.txt");
+            d.FileName = "win11privacy-log-" + DateTime.Now.ToString("yyyy-MM-dd-HHmm") + ".txt";
+            if (d.ShowDialog(this) != DialogResult.OK) return;
+            try
+            {
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine(L.T("Приватность Windows 11, версия ") + AppInfo.Version);
+                sb.AppendLine(Environment.OSVersion.VersionString + (Environment.Is64BitOperatingSystem ? " x64" : " x86"));
+                sb.AppendLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                sb.AppendLine(new string('-', 60));
+                sb.AppendLine(_log.Text);
+                File.WriteAllText(d.FileName, sb.ToString(), new UTF8Encoding(true));
+                _status.Text = L.T("Журнал сохранён: ") + Path.GetFileName(d.FileName);
+            }
+            catch (Exception ex)
+            { MessageBox.Show(this, ex.Message, L.T("Ошибка"), MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
 
         // ================================================================== //
@@ -2236,7 +2287,7 @@ namespace Win11Privacy
             "-DisableMonitor", "-XrayEnable", "-XrayDisable", "-XrayBaseline"
         };
 
-        private static bool EngineWrites(string extra)
+        internal static bool EngineWrites(string extra)
         {
             if (extra == null) return false;
             // тестовый прогон и проверка только читают, хотя список модулей у них тот же
@@ -2246,6 +2297,36 @@ namespace Win11Privacy
             foreach (string f in WriteFlags)
                 if (extra.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0) return true;
             return false;
+        }
+
+        // «###PROGRESS### 15/34 Телеметрия» — движок говорит, сколько проверок
+        // из скольких пройдено. Раньше проверка молчала до самого конца, и
+        // полминуты было не отличить работу от зависания.
+        private bool ShowProgress(string line)
+        {
+            if (line == null || !line.StartsWith("###PROGRESS###")) return false;
+            string rest = line.Substring("###PROGRESS###".Length).Trim();
+            int sp = rest.IndexOf(' ');
+            string nums = sp > 0 ? rest.Substring(0, sp) : rest;
+            string what = sp > 0 ? rest.Substring(sp + 1).Trim() : "";
+            string[] parts = nums.Split('/');
+            int done, total;
+            if (parts.Length != 2 || !int.TryParse(parts[0], out done) || !int.TryParse(parts[1], out total) || total < 1)
+                return true;                        // строка наша, но непонятная — просто прячем
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    if (!_progress.Visible) return;
+                    _progress.Style = ProgressBarStyle.Continuous;
+                    _progress.Maximum = total;
+                    _progress.Value = Math.Max(0, Math.Min(done, total));
+                    _status.Text = (_busyText.Length > 0 ? _busyText + "  " : "") + done + " / " + total +
+                                   (what.Length > 0 ? "  -  " + L.T(what) : "");
+                });
+            }
+            catch { }
+            return true;
         }
 
         private bool EngineAlive()
@@ -2349,6 +2430,7 @@ namespace Win11Privacy
                 if (e.Data == null) return;
                 string line = e.Data;
                 if (line.Trim() == "###DONE###") return;
+                if (ShowProgress(line.TrimStart())) return;
                 try { BeginInvoke((MethodInvoker)delegate { LogEngine(line); }); } catch { }
             };
             p.OutputDataReceived += h; p.ErrorDataReceived += h;
@@ -2421,6 +2503,7 @@ namespace Win11Privacy
                 if (e.Data == null) return;
                 string t = e.Data.TrimStart();
                 if (t.StartsWith("###JSON###")) jsonLine = t.Substring(10).Trim();
+                else if (ShowProgress(t)) { }
                 else if (t.Length > 0 && errBuf.Length < 2000) errBuf.Append(t).Append("\n");
             };
             p.OutputDataReceived += h; p.ErrorDataReceived += h;
@@ -2455,6 +2538,9 @@ namespace Win11Privacy
         private void SetBusy(bool busy, string status)
         {
             _progress.Visible = busy; _status.Text = status;
+            _busyText = busy ? status : "";
+            // бегущая полоса — пока движок не сказал, сколько всего работы
+            if (busy) { _progress.Style = ProgressBarStyle.Marquee; _progress.Value = 0; }
             if (_btnStop != null)
             {
                 _btnStop.Visible = busy;
@@ -2751,7 +2837,15 @@ namespace Win11Privacy
             if (silent && profile != null) { RunSilentProfile(profile); return; }
             if (audit) { RunCliAudit(); return; }
 
-            Application.Run(new MainForm());
+            // Второе окно означало бы два движка разом и переписанный журнал
+            // отката. Показываем уже открытое вместо запуска второго.
+            if (!SingleInstance.Take())
+            {
+                SingleInstance.ShowRunning();
+                return;
+            }
+            try { Application.Run(new MainForm()); }
+            finally { SingleInstance.Release(); }
         }
 
         private static int RunSilentProfile(string profilePath)
