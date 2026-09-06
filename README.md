@@ -49,11 +49,18 @@ about you. Watches so that updates do not quietly turn the tracking back on.**
 | **ETW trace sessions** | Windows starts telemetry collectors at boot beyond the DiagTrack service — the program switches those off too. |
 | **Proof of the result** | Not "index 92%", but what it was before the program and what it is now: collectors, tasks, domains, events per day. |
 | **All app permissions** | 25 categories — not only camera and microphone, but screenshots, notifications, documents, the whole disk. Including apps that hold a permission but have not used it yet. |
+| **One question on first run** | Instead of thirteen sections at once — "basic privacy", "strict", or "first show me what has been collected about me". The wizard applies nothing: it ticks a set and shows what will be done. |
+| **Long work is visible and can be stopped** | A "Stop" button in the status bar. Reading stops at once, applying stops after a warning — everything the engine already changed is in the journal and can be reverted on the Changes page. Closing the window mid-run asks as well, instead of leaving the engine running unseen. |
+| **The undo journal is written as it goes** | It used to be saved once, at the very end: an interrupted run left the changes in the system with nothing to revert them with. Now it hits the disk after every module and at least once every ten edits. |
+| **The engine lives where nothing writes without administrator rights** | The script runs with full rights, so in the user's temp folder any process could have swapped it. The folder in ProgramData is created with explicit permissions, and before every launch the file is checked against the SHA-256 of what is embedded in the exe. |
+| **A clear error instead of the .NET dialog** | When the program trips over something, it explains what happened and writes `crash.log` you can attach to a bug report. |
 
 Also: ready-made **Basic / Strict / Maximum** presets, third-party telemetry
 (Chrome, Edge, Office, VS Code, NVIDIA, PowerShell, Visual Studio), laptop-vendor
 tracking, firewall blocking, wiping the accumulated telemetry buffer, profiles and
-silent launch from the command line, diagnostics, light and dark themes.
+silent launch from the command line (a profile remembers individual items inside
+modules too), an update check on a button — the program never goes online by
+itself, diagnostics, light and dark themes.
 
 ---
 
@@ -141,7 +148,7 @@ By hand, if you prefer:
   /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll ^
   /win32res:app.res ^
   /resource:Win11-Privacy-Engine.ps1,engine.ps1 /resource:app.ico,app.ico /resource:app.png,app.png ^
-  MainForm.cs Ui.cs Ui2.cs Ui3.cs Ui4.cs Lang.cs Json.cs
+  *.cs
 ```
 
 ---
@@ -150,8 +157,16 @@ By hand, if you prefer:
 
 | File | What is inside |
 |---|---|
-| **Win11-Privacy-Engine.ps1** | The engine. All the work with the system: registry, services, scheduled tasks, hosts, firewall, telemetry X-ray, dossier (sensors and digital trace), the guard, state snapshots, cleanup. Embedded in the exe as the `engine.ps1` resource and unpacked to a temporary folder at startup. Can also run on its own. |
-| **MainForm.cs** | The window, thirteen pages, launching the engine, parsing its replies, the HTML report, command-line mode. |
+| **Win11-Privacy-Engine.ps1** | The engine. All the work with the system: registry, services, scheduled tasks, hosts, firewall, telemetry X-ray, dossier (sensors and digital trace), the guard, state snapshots, cleanup. Embedded in the exe as the `engine.ps1` resource; before a launch it is placed in `C:\ProgramData\Win11Privacy\bin` — a folder nothing writes to without administrator rights. Can also run on its own. |
+| **MainForm.cs** | The window frame: sidebar with groups, pages, launching the engine and parsing its replies, command-line mode. |
+| **PageHome.cs / PageXray.cs / PageDossier.cs** | The "Overview", "X-ray" and "Dossier" pages — the largest of the thirteen. |
+| **Actions.cs** | What each button does: applying, verifying, the monitor, the guard. |
+| **Report.cs** | The "before and after" HTML report. |
+| **Engine.cs** | Unpacking the engine: a folder writable by administrators only, and a SHA-256 check against what is embedded in the exe. |
+| **Crash.cs** | Catching unhandled errors: a clear window instead of the system one, plus `crash.log`. |
+| **AppInfo.cs** | The program version and the update check on GitHub — on a button only. |
+| **Welcome.cs** | The first-run window: one question instead of thirteen sections at once. |
+| **Mocks.cs** | Test data for interface screenshots, entirely under `#if UITEST`. |
 | **Ui.cs** | Theme (colours, fonts), cards, switches, buttons, list rows, the index ring, tiles. |
 | **Ui2.cs** | Window title bar, gradient sidebar, sliding navigation highlight, ring chart, home-screen tiles, value animation. |
 | **Ui3.cs** | Rows of the "Dossier" page: who turned on the camera/microphone (`SpyRow`), the digital trace with erase checkboxes (`WipeRow`), the per-day sensor chart (`SensorChart`). |
@@ -161,7 +176,9 @@ By hand, if you prefer:
 | **app.manifest** | The administrator-rights requirement and display-scaling support. |
 | **app.res** | A prebuilt Win32 resource: manifest + icon (7 sizes) + version. No need to rebuild it. |
 | **app.ico / app.png** | The application icon. |
-| **tests/engine-tests.ps1** | Behaviour checks for the engine; the GitHub build runs the same ones. |
+| **tests/engine-tests.ps1** | Behaviour checks for the engine; the GitHub build runs the same ones. Read-only. |
+| **tests/roundtrip.ps1** | Apply, verify and revert for real, then compare every value with the original one. It changes the system, so it needs the `-Confirmed` switch; the build runs it on a disposable machine. |
+| **tools/make_winget.py** | Builds the winget catalogue manifest from the version and the release checksum. |
 | **check-engine.cmd** | Engine self-check. Read-only, changes nothing. |
 
 ---
@@ -238,6 +255,17 @@ To make a new module appear in the interface, add a line to `BuildModules()` in
 
 ## Checking without building
 
+The undo is verified separately — for real, by applying and reverting:
+
+```
+powershell -ExecutionPolicy Bypass -File tests\roundtrip.ps1 -Confirmed
+```
+
+The test changes the settings of the computer, so without `-Confirmed` it refuses
+to run. It applies the modules, makes sure the audit sees that, reverts and
+compares **every** value with the one from before: comparing only the totals would
+not be enough — errors cancelling each other out would go unnoticed.
+
 **`check-engine.cmd`** runs the engine in read-only mode and leaves four result
 files next to it: system detection, the settings audit, X-ray status and a test
 run. Nothing in the system is changed.
@@ -295,12 +323,16 @@ Locally: double-click **build.cmd** — `Win11Privacy.exe` appears next to it.
 The repository has automated builds (GitHub Actions):
 
 - on every commit to `main` and every pull request — the engine's syntax is
-  checked, its behaviour tests are run, the translation is verified, every page of
-  the interface is opened with test data in Russian and English, the exe is built,
-  and it is confirmed that the engine is embedded inside it and matches the source,
-  and that the manifest requests administrator rights;
-- on a tag of the form **v1.0.0** — the built exe is published to a release
-  automatically.
+  checked, the engine and interface versions are compared, its behaviour tests are
+  run, the translation is verified, **the settings are applied and reverted on a
+  live disposable machine and every value is compared with what it was before**,
+  every page of the interface and the first-run window are opened with test data in
+  Russian and English, the exe is built, and it is confirmed that the engine is
+  embedded inside it and matches the source, and that the manifest requests
+  administrator rights;
+- on a tag of the form **v1.0.0** — the tag is checked against the version inside
+  the program, and the built exe is published to a release together with the
+  checksums and the winget manifest.
 
 To cut a new version:
 
