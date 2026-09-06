@@ -187,6 +187,7 @@ By hand, if you prefer:
 | **tests/roundtrip.ps1** | Apply, verify and revert for real, then compare every value with the original one. It changes the system, so it needs the `-Confirmed` switch; the build runs it on a disposable machine. |
 | **tools/make_winget.py** | Builds the winget catalogue manifest from the version and the release checksum. |
 | **tools/set_version.py** | Writes the program version into `app.res` — the one Windows shows in the file properties. `--check` compares them, and the build insists on it. |
+| **tools/submit_winget.py** | Submits the manifest of a new version to the winget catalogue: creates a branch in the fork, uploads the files and opens a pull request. The catalogue itself is never cloned — it weighs gigabytes. |
 | **check-engine.cmd** | Engine self-check. Read-only, changes nothing. |
 
 ---
@@ -339,8 +340,21 @@ The repository has automated builds (GitHub Actions):
   embedded inside it and matches the source, and that the manifest requests
   administrator rights;
 - on a tag of the form **v1.0.0** — the tag is checked against the version inside
-  the program, and the built exe is published to a release together with the
-  checksums and the winget manifest.
+  the program, the built exe is published to a release together with the checksums
+  and the winget manifest, and the manifest itself is submitted to the catalogue
+  as a pull request.
+
+Submitting to the catalogue is enabled by the repository secret **`WINGET_TOKEN`** —
+a personal token with the `public_repo` scope: the build's built-in token cannot
+write to someone else's repository. Without the secret the step is quietly skipped,
+and the manifest can be sent by hand:
+
+```
+python tools/submit_winget.py --version 1.9.1
+```
+
+The contributor agreement (CLA) is signed once, and the fork of the catalogue is
+created automatically.
 
 To cut a new version:
 

@@ -277,3 +277,24 @@ jobs:
             ```
             Get-FileHash Win11Privacy.exe -Algorithm SHA256
             ```
+
+      # Каталог winget за релизами не следит: на каждую версию нужен свой
+      # pull request. Отправляем его сразу после публикации — если в секретах
+      # лежит токен с правом public_repo. Встроенный токен сборки в чужой
+      # репозиторий писать не может, поэтому без секрета шаг просто молчит.
+      - name: Отправить манифест в каталог winget
+        if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          if (-not $env:GH_TOKEN) {
+              Write-Host "секрет WINGET_TOKEN не задан - манифест в каталог не отправляем"
+              exit 0
+          }
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          python tools/submit_winget.py --version $version --sums SHA256SUMS.txt
+
