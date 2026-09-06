@@ -15,6 +15,7 @@
 
 import io
 import os
+import re
 import sys
 
 HEADER = u"""using System;
@@ -67,14 +68,24 @@ FOOTER = u"""        }
 }
 """
 
-SOURCES = ['lang-en.txt', 'lang-en2.txt', 'lang-en3.txt', 'lang-en4.txt']
+def dicts(root):
+    """Все словари lang-en*.txt по порядку номеров: список файлов не надо
+    править руками при добавлении нового."""
+    names = [n for n in os.listdir(root)
+             if n.startswith('lang-en') and n.endswith('.txt')]
+
+    def num(n):
+        m = re.search(r'lang-en(\d*)\.txt', n)
+        return int(m.group(1)) if m and m.group(1) else 1
+
+    return sorted(names, key=num)
 
 
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     pairs = []
     seen = set()
-    for name in SOURCES:
+    for name in dicts(root):
         path = os.path.join(root, name)
         if not os.path.exists(path):
             continue

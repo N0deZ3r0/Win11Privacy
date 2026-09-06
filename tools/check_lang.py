@@ -15,8 +15,24 @@ import os
 import re
 import sys
 
-SOURCES = ['MainForm.cs', 'Ui.cs', 'Ui2.cs', 'Ui3.cs', 'Ui4.cs']
-DICTS = ['lang-en.txt', 'lang-en2.txt', 'lang-en3.txt', 'lang-en4.txt']
+# Lang.cs — сам словарь, Mocks.cs — тестовые подписи для снимков.
+SKIP = {'Lang.cs', 'Mocks.cs'}
+
+
+def sources(root):
+    return sorted(n for n in os.listdir(root)
+                  if n.endswith('.cs') and n not in SKIP)
+
+
+def dicts(root):
+    names = [n for n in os.listdir(root)
+             if n.startswith('lang-en') and n.endswith('.txt')]
+
+    def num(n):
+        m = re.search(r'lang-en(\d*)\.txt', n)
+        return int(m.group(1)) if m and m.group(1) else 1
+
+    return sorted(names, key=num)
 LIT = re.compile(r'L\.T\("((?:[^"\\]|\\.)*)"\)')
 CYR = re.compile(u'[Ѐ-ӿ]')
 
@@ -25,7 +41,7 @@ def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     known = set()
     spaces = []
-    for name in DICTS:
+    for name in dicts(root):
         path = os.path.join(root, name)
         if not os.path.exists(path):
             continue
@@ -49,7 +65,7 @@ def main():
 
     missing = []
     seen = set()
-    for name in SOURCES:
+    for name in sources(root):
         path = os.path.join(root, name)
         if not os.path.exists(path):
             continue

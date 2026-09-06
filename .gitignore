@@ -1,4 +1,4 @@
-# Собранное приложение — раздаётся через Releases, в репозитории не хранится
+﻿# Собранное приложение — раздаётся через Releases, в репозитории не хранится
 Win11Privacy.exe
 *.pdb
 
@@ -15,3 +15,6 @@ Thumbs.db
 desktop.ini
 .vs/
 *.user
+
+# Манифест winget собирается под релиз командой tools/make_winget.py
+packaging/winget/

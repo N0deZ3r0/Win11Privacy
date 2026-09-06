@@ -1,0 +1,86 @@
+# Перевод строк, появившихся в 1.9.0: окно первого запуска, прерывание работы,
+# отчёт о сбое, версия и проверка обновления, группы в боковой панели.
+# Формат: русский TAB английский. Краевые пробелы должны совпадать.
+
+# --- полоса внимания на «Обзоре» ---
+В реестре остались параметры под числовыми именами — их записали версии 1.1–1.5, и они ничего не настраивают. Найдено: 	The registry still holds values under numeric names — versions 1.1–1.5 wrote them, and they configure nothing. Found: 
+Страж вернул настройки, сбитые Windows: 	The guard restored settings Windows had reverted: 
+ шт. Проверка 	 of them. Checked 
+ После обновления 	 After update 
+Подробнее	Details
+
+# --- проверка обновления ---
+GitHub не ответил номером версии.	GitHub did not return a version number.
+Не удалось связаться с GitHub: 	Could not reach GitHub: 
+Проверить обновление	Check for update
+Версия программы	Program version
+Версия 	Version 
+Обновления сама программа не проверяет и в сеть не выходит: только по кнопке «Проверить обновление».	The program never checks for updates and never goes online by itself — only when you press Check for update.
+Движок распакован: 	Engine unpacked to: 
+ (папка закрыта для записи без прав администратора)	 (the folder cannot be written to without administrator rights)
+ (временная папка — прав на защищённую не хватило)	 (temp folder — no rights for the protected one)
+Проверка обновления…	Checking for an update…
+Проверить не удалось.	Check failed.
+Проверка обновления	Update check
+Есть новая версия: 	New version available: 
+У вас последняя версия.	You have the latest version.
+На GitHub выложена 	GitHub has 
+На GitHub та же версия — обновляться не нужно.	GitHub has the same version — no update needed.
+У вас последняя версия: 	You have the latest version: 
+Вышла версия 	Version 
+, у вас 	, you have 
+Открыть страницу загрузки в браузере?	Open the download page in the browser?
+
+# --- отчёт о сбое ---
+неизвестная ошибка	unknown error
+Программа наткнулась на ошибку:	The program hit an error:
+Продолжить работу не получится — окно закроется.	It cannot continue — the window will close.
+Само окно, скорее всего, продолжит работать. Настройки системы при этом не менялись.	The window will most likely keep working. No system settings were changed.
+Подробности записаны в файл:	Details are written to the file:
+Открыть папку с файлом? Его можно приложить к сообщению об ошибке на GitHub.	Open the folder with the file? You can attach it to a bug report on GitHub.
+Ошибка в программе	Program error
+
+# --- распаковка движка ---
+не удалось распаковать движок:\n	could not unpack the engine:\n
+\n\nФайл на диске не совпадает с тем, что внутри программы. Обычно так делает антивирус.	\n\nThe file on disk does not match the one inside the program. Usually an antivirus is behind this.
+
+# --- группы в боковой панели ---
+Действия	Actions
+Разведка	Recon
+Контроль	Control
+Служебное	Service
+
+# --- прерывание работы и закрытие окна ---
+Прервать	Stop
+Прервать работу	Stop the work
+Прервано.	Stopped.
+Прервано по вашей команде.	Stopped at your command.
+Что движок успел изменить — записано на странице «Изменения».	Whatever the engine managed to change is listed on the Changes page.
+Идёт работа	Work in progress
+Движок сейчас меняет настройки системы.\n\n	The engine is changing system settings right now.\n\n
+Если прервать, часть настроек останется применённой. Всё, что он успел изменить, записано в журнал — вернуть можно на странице «Изменения».\n\nВсё равно прервать?	If you stop it, part of the settings stays applied. Everything it managed to change is in the journal — you can undo it on the Changes page.\n\nStop anyway?
+Программа сейчас меняет настройки системы.\n\nЕсли закрыть окно, работа прервётся на середине. Всё уже изменённое останется в журнале — вернуть можно на странице «Изменения».\n\nЗакрыть?	The program is changing system settings right now.\n\nClosing the window interrupts it midway. Everything already changed stays in the journal — you can undo it on the Changes page.\n\nClose?
+Программа сейчас читает состояние системы.\n\nЕсли закрыть окно, чтение прервётся. Ничего изменено не будет.\n\nЗакрыть?	The program is reading the state of the system right now.\n\nClosing the window interrupts the reading. Nothing will be changed.\n\nClose?
+Программа не может работать на этом компьютере из-за политики устройства.	The program cannot work on this computer because of the device policy.
+
+# --- окно первого запуска ---
+С чего начнём?	Where do we start?
+Программа отключает сбор данных Microsoft и показывает, что о вас уже собрано.\n	The program turns off Microsoft data collection and shows what has already been collected about you.\n
+Выбор ниже ничего не меняет сразу — он только отмечает нужное и показывает, что будет сделано.	The choice below changes nothing right away — it only ticks what is needed and shows what will be done.
+Базовая приватность	Basic privacy
+Телеметрия, рекламный идентификатор, история действий, реклама в системе, Copilot.\n	Telemetry, advertising ID, activity history, ads in the system, Copilot.\n
+Ничего из того, чем вы пользуетесь, не ломает. Подходит большинству.	Breaks nothing you actually use. Suits most people.
+Строгая настройка	Strict setup
+То же плюс службы сбора данных, домены телеметрии, геолокация, виджеты и OneDrive.\n	The same plus data collection services, telemetry domains, location, widgets and OneDrive.\n
+Некоторые удобства Windows перестанут работать — это осознанный размен.	Some Windows conveniences will stop working — a deliberate trade-off.
+Сначала посмотреть, что обо мне собрано	First show me what has been collected about me
+Ничего не меняем: программа прочитает реальное состояние системы и покажет индекс,\n	Nothing gets changed: the program reads the real state of the system and shows the index,\n
+а на «Досье» и «Рентгене» — что Windows уже знает об этом компьютере.	while Dossier and X-ray show what Windows already knows about this computer.
+Разберусь сам	I will figure it out
+Набор отмечен. Посмотрите список и нажмите «Применить».	The set is ticked. Look through the list and press Apply.
+
+# --- проверка обновления: своя сборка новее последнего релиза ---
+У вас сборка новее релиза.	Your build is newer than the release.
+На GitHub пока 	GitHub still has 
+ — ваша сборка новее.	 — your build is newer.
+Версия программы: 	Program version: 

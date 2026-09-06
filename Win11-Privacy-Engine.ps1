@@ -113,6 +113,24 @@ $ErrorActionPreference = 'Continue'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 # --------------------------------------------------------------------------- #
+#  Ограниченный языковой режим PowerShell. На компьютерах с политикой
+#  устройства (Device Guard/WDAC, AppLocker) PowerShell запускается в режиме
+#  ConstrainedLanguage: почти все вызовы .NET, на которых держится движок,
+#  в нём запрещены. Раньше скрипт падал посреди работы непонятной ошибкой —
+#  теперь говорит прямо, что дело в политике, а не в программе.
+# --------------------------------------------------------------------------- #
+$script:LangMode = 'FullLanguage'
+try { $script:LangMode = [string]$ExecutionContext.SessionState.LanguageMode } catch { }
+if ($script:LangMode -ne 'FullLanguage') {
+    Write-Host ('PowerShell на этом компьютере работает в ограниченном режиме: ' + $script:LangMode + '.')
+    Write-Host 'Так его настроила политика устройства -- Device Guard (WDAC) или AppLocker. Обычно это рабочий компьютер организации.'
+    Write-Host 'В таком режиме программа не может ни прочитать состояние системы, ни изменить его: запрещены сами средства, которыми она работает.'
+    Write-Host ('###JSON### {"error":"languageMode","languageMode":"' + $script:LangMode + '"}')
+    Write-Host '###DONE###'
+    exit 3
+}
+
+# --------------------------------------------------------------------------- #
 #  Списки модулей приходят из интерфейса одной строкой «a,b,c»: powershell.exe
 #  с ключом -File не разбивает аргументы по запятым и отдаёт массив из одного
 #  элемента. Разворачиваем сами, иначе ни один модуль не совпадёт по имени.
@@ -139,6 +157,9 @@ $ChangeItems  = Expand-List $ChangeItems
 # =========================================================================== #
 #  Константы
 # =========================================================================== #
+# Версия. Должна совпадать с MainForm.AppVersion в интерфейсе -- сборка это
+# проверяет, чтобы вшитый движок и окно не рассказывали о себе разное.
+$script:EngineVersion  = '1.9.0'
 $script:HostsMarkStart = '# --- Win11Privacy: блокировка телеметрии (начало) ---'
 $script:HostsMarkEnd   = '# --- Win11Privacy: блокировка телеметрии (конец) ---'
 $script:FwGroup        = 'Win11Privacy'
@@ -180,7 +201,7 @@ $script:TelemetryDnsRegex = 'telemetry|vortex|events\.data\.microsoft|pipe\.aria
 #  Служебные функции
 # =========================================================================== #
 function Write-Log { param([string]$Message = '') Write-Host $Message }
-function Write-Section { param([string]$Title) Write-Log ''; Write-Log ('--- ' + $Title + ' ' + ('-' * [Math]::Max(3, 60 - $Title.Length))) }
+function Write-Section { param([string]$Title) Save-JournalEntries -Quiet; Write-Log ''; Write-Log ('--- ' + $Title + ' ' + ('-' * [Math]::Max(3, 60 - $Title.Length))) }
 function Emit-Json { param($Object) Write-Host ('###JSON### ' + ($Object | ConvertTo-Json -Compress -Depth 8)) }
 function Use-Module { param([string]$Name) return ($Modules -contains $Name) }
 
@@ -271,6 +292,7 @@ function Set-Reg {
             $script:Journal.Add(@{ kind = 'reg'; path = $Path; name = $Name; type = $Type
                                    existed = $existed; old = $oldValue
                                    newValue = "$Value"; time = (Get-Date).ToString('s') })
+            if ($script:Journal.Count -ge 10) { Save-JournalEntries -Quiet }
         } catch { }
         Write-Log "   [+] $label"; $script:Changes++
         return
@@ -401,7 +423,11 @@ function Ensure-Backup {
     }
 }
 
+# Журнал отката сбрасывается на диск по ходу работы: раньше он писался
+# единственный раз в самом конце, и обрыв прогона (закрыли окно, выключили
+# питание) оставлял изменения в системе, а вернуть их было нечем.
 function Save-JournalEntries {
+    param([switch]$Quiet)
     if ($DryRun -or $script:Journal.Count -eq 0) { return }
     try {
         $prev = Load-Json 'changes.json'
@@ -409,7 +435,7 @@ function Save-JournalEntries {
         if ($prev -and $prev.items) { foreach ($e in @($prev.items)) { $all.Add($e) } }
         foreach ($e in $script:Journal) { $all.Add($e) }
         Save-Json 'changes.json' @{ items = $all.ToArray(); updated = (Get-Date).ToString('s') }
-        Write-Log ("Записано в журнал отката: {0}" -f $script:Journal.Count)
+        if (-not $Quiet) { Write-Log ("Записано в журнал отката: {0}" -f $script:Journal.Count) }
         $script:Journal.Clear()
     } catch { }
 }
@@ -1404,6 +1430,7 @@ if ($Detect) {
     $result = @{
         os = $os.Caption; build = [System.Environment]::OSVersion.Version.Build; edition = $ed.id; editionKind = $ed.kind
         admin = (Test-Admin); user = $env:USERNAME
+        engineVersion = $script:EngineVersion; languageMode = $script:LangMode
         apps = $apps; oem = $oem
         guardInstalled = [bool]$guardTask
         watcherInstalled = [bool](Get-ScheduledTask -TaskName 'Win11Privacy Watcher' -ErrorAction SilentlyContinue)

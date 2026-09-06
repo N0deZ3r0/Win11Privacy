@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 setlocal
 cd /d "%~dp0"
 title Win11Privacy - sborka
@@ -22,7 +22,7 @@ echo Sborka Win11Privacy.exe ...
   /resource:Win11-Privacy-Engine.ps1,engine.ps1 ^
   /resource:app.ico,app.ico ^
   /resource:app.png,app.png ^
-  MainForm.cs Ui.cs Ui2.cs Ui3.cs Ui4.cs Lang.cs Json.cs
+  *.cs
 
 if errorlevel 1 (
   echo.

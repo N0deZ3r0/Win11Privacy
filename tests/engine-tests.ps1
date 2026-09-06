@@ -587,6 +587,36 @@ if ($isAdmin) {
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
+Write-Host 'Версия и режим PowerShell'
+$detect = Get-EngineJson @('-Detect')
+Check 'определение системы отвечает' ($null -ne $detect)
+if ($detect) {
+    $engVer = "$($detect.engineVersion)"
+    Check 'движок сообщает свою версию' ($engVer -match '^\d+\.\d+\.\d+$') ("получено: " + $engVer)
+    # версия объявлена в двух местах, и разъехаться они не должны: об этом
+    # человек судит на «О программе» и по ней же решает, обновляться ли
+    $appInfo = Join-Path (Split-Path $PSScriptRoot -Parent) 'AppInfo.cs'
+    if (Test-Path -LiteralPath $appInfo) {
+        $m = [regex]::Match((Get-Content -Raw -LiteralPath $appInfo), 'Version\s*=\s*"([0-9.]+)"')
+        Check 'версии движка и интерфейса совпадают' ($m.Success -and $m.Groups[1].Value -eq $engVer) `
+              ("интерфейс: " + $m.Groups[1].Value + ", движок: " + $engVer)
+    }
+    Check 'языковой режим PowerShell полный' ("$($detect.languageMode)" -eq 'FullLanguage') `
+          ("получено: " + $detect.languageMode)
+}
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Журнал отката пишется по ходу работы'
+# Раньше журнал сохранялся единственный раз в самом конце: обрыв прогона
+# оставлял изменения в системе, а вернуть их было нечем.
+$engineText = Get-Content -Raw -LiteralPath $engine
+Check 'каждая секция сбрасывает журнал на диск' ($engineText -match "function Write-Section[^`n]*Save-JournalEntries -Quiet")
+Check 'внутри модуля журнал пишется не реже, чем раз в десять записей' `
+      ($engineText -match 'Journal\.Count -ge 10\s*\)\s*\{\s*Save-JournalEntries -Quiet')
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
 Write-Host ("Пройдено: " + $script:Passed + ", провалено: " + $script:Failed)
 if ($script:Failed -gt 0) { exit 1 }
 exit 0

@@ -158,6 +158,43 @@ namespace Win11Privacy
     // ====================================================================== //
     //  Боковая панель: градиент, свечение, скользящая подсветка выбора
     // ====================================================================== //
+    // ====================================================================== //
+    //  Заголовок группы в боковой панели. Тринадцать пунктов подряд читаются
+    //  как сплошной список: глаз каждый раз проходит его целиком. С подписями
+    //  «Действия», «Разведка», «Контроль» нужное находится сразу, а в свёрнутой
+    //  панели вместо подписи остаётся тонкая черта — она делит список так же.
+    // ====================================================================== //
+    internal class NavGroup : Control
+    {
+        public NavGroup(string text)
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                     ControlStyles.SupportsTransparentBackColor, true);
+            Text = text;
+            BackColor = Color.Transparent;
+        }
+
+        public bool Compact { get { return Width < Font.Height * 6; } }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            float u = Font.Height;
+            if (Compact)
+            {
+                using (Pen p = new Pen(Theme.Mix(Theme.SideBottom, Theme.TextFaint, 0.5F)))
+                    g.DrawLine(p, u * 0.6F, Height / 2F, Width - u * 0.6F, Height / 2F);
+                return;
+            }
+            using (Font f = new Font(Font.FontFamily, Font.Size * 0.78F, FontStyle.Bold))
+            using (SolidBrush b = new SolidBrush(Theme.TextFaint))
+                g.DrawString(Text.ToUpperInvariant(), f, b, u * 0.6F, (Height - f.Height) / 2F);
+        }
+    }
+
     internal class NavHost : Panel
     {
         private readonly Tween _y = new Tween(0.22F);

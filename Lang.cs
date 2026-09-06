@@ -40,7 +40,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(942, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1009, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -983,6 +983,73 @@ namespace Win11Privacy
             _map["телеметрия выросла"] = "telemetry grew";
             _map["Нет на этой Windows"] = "Not on this Windows";
             _map["нет на этой версии Windows"] = "not on this Windows version";
+            _map["В реестре остались параметры под числовыми именами — их записали версии 1.1–1.5, и они ничего не настраивают. Найдено: "] = "The registry still holds values under numeric names — versions 1.1–1.5 wrote them, and they configure nothing. Found: ";
+            _map["Страж вернул настройки, сбитые Windows: "] = "The guard restored settings Windows had reverted: ";
+            _map[" шт. Проверка "] = " of them. Checked ";
+            _map[" После обновления "] = " After update ";
+            _map["Подробнее"] = "Details";
+            _map["GitHub не ответил номером версии."] = "GitHub did not return a version number.";
+            _map["Не удалось связаться с GitHub: "] = "Could not reach GitHub: ";
+            _map["Проверить обновление"] = "Check for update";
+            _map["Версия программы"] = "Program version";
+            _map["Версия "] = "Version ";
+            _map["Обновления сама программа не проверяет и в сеть не выходит: только по кнопке «Проверить обновление»."] = "The program never checks for updates and never goes online by itself — only when you press Check for update.";
+            _map["Движок распакован: "] = "Engine unpacked to: ";
+            _map[" (папка закрыта для записи без прав администратора)"] = " (the folder cannot be written to without administrator rights)";
+            _map[" (временная папка — прав на защищённую не хватило)"] = " (temp folder — no rights for the protected one)";
+            _map["Проверка обновления…"] = "Checking for an update…";
+            _map["Проверить не удалось."] = "Check failed.";
+            _map["Проверка обновления"] = "Update check";
+            _map["Есть новая версия: "] = "New version available: ";
+            _map["У вас последняя версия."] = "You have the latest version.";
+            _map["На GitHub выложена "] = "GitHub has ";
+            _map["На GitHub та же версия — обновляться не нужно."] = "GitHub has the same version — no update needed.";
+            _map["У вас последняя версия: "] = "You have the latest version: ";
+            _map["Вышла версия "] = "Version ";
+            _map[", у вас "] = ", you have ";
+            _map["Открыть страницу загрузки в браузере?"] = "Open the download page in the browser?";
+            _map["неизвестная ошибка"] = "unknown error";
+            _map["Программа наткнулась на ошибку:"] = "The program hit an error:";
+            _map["Продолжить работу не получится — окно закроется."] = "It cannot continue — the window will close.";
+            _map["Само окно, скорее всего, продолжит работать. Настройки системы при этом не менялись."] = "The window will most likely keep working. No system settings were changed.";
+            _map["Подробности записаны в файл:"] = "Details are written to the file:";
+            _map["Открыть папку с файлом? Его можно приложить к сообщению об ошибке на GitHub."] = "Open the folder with the file? You can attach it to a bug report on GitHub.";
+            _map["Ошибка в программе"] = "Program error";
+            _map["не удалось распаковать движок:\n"] = "could not unpack the engine:\n";
+            _map["\n\nФайл на диске не совпадает с тем, что внутри программы. Обычно так делает антивирус."] = "\n\nThe file on disk does not match the one inside the program. Usually an antivirus is behind this.";
+            _map["Действия"] = "Actions";
+            _map["Разведка"] = "Recon";
+            _map["Контроль"] = "Control";
+            _map["Служебное"] = "Service";
+            _map["Прервать"] = "Stop";
+            _map["Прервать работу"] = "Stop the work";
+            _map["Прервано."] = "Stopped.";
+            _map["Прервано по вашей команде."] = "Stopped at your command.";
+            _map["Что движок успел изменить — записано на странице «Изменения»."] = "Whatever the engine managed to change is listed on the Changes page.";
+            _map["Идёт работа"] = "Work in progress";
+            _map["Движок сейчас меняет настройки системы.\n\n"] = "The engine is changing system settings right now.\n\n";
+            _map["Если прервать, часть настроек останется применённой. Всё, что он успел изменить, записано в журнал — вернуть можно на странице «Изменения».\n\nВсё равно прервать?"] = "If you stop it, part of the settings stays applied. Everything it managed to change is in the journal — you can undo it on the Changes page.\n\nStop anyway?";
+            _map["Программа сейчас меняет настройки системы.\n\nЕсли закрыть окно, работа прервётся на середине. Всё уже изменённое останется в журнале — вернуть можно на странице «Изменения».\n\nЗакрыть?"] = "The program is changing system settings right now.\n\nClosing the window interrupts it midway. Everything already changed stays in the journal — you can undo it on the Changes page.\n\nClose?";
+            _map["Программа сейчас читает состояние системы.\n\nЕсли закрыть окно, чтение прервётся. Ничего изменено не будет.\n\nЗакрыть?"] = "The program is reading the state of the system right now.\n\nClosing the window interrupts the reading. Nothing will be changed.\n\nClose?";
+            _map["Программа не может работать на этом компьютере из-за политики устройства."] = "The program cannot work on this computer because of the device policy.";
+            _map["С чего начнём?"] = "Where do we start?";
+            _map["Программа отключает сбор данных Microsoft и показывает, что о вас уже собрано.\n"] = "The program turns off Microsoft data collection and shows what has already been collected about you.\n";
+            _map["Выбор ниже ничего не меняет сразу — он только отмечает нужное и показывает, что будет сделано."] = "The choice below changes nothing right away — it only ticks what is needed and shows what will be done.";
+            _map["Базовая приватность"] = "Basic privacy";
+            _map["Телеметрия, рекламный идентификатор, история действий, реклама в системе, Copilot.\n"] = "Telemetry, advertising ID, activity history, ads in the system, Copilot.\n";
+            _map["Ничего из того, чем вы пользуетесь, не ломает. Подходит большинству."] = "Breaks nothing you actually use. Suits most people.";
+            _map["Строгая настройка"] = "Strict setup";
+            _map["То же плюс службы сбора данных, домены телеметрии, геолокация, виджеты и OneDrive.\n"] = "The same plus data collection services, telemetry domains, location, widgets and OneDrive.\n";
+            _map["Некоторые удобства Windows перестанут работать — это осознанный размен."] = "Some Windows conveniences will stop working — a deliberate trade-off.";
+            _map["Сначала посмотреть, что обо мне собрано"] = "First show me what has been collected about me";
+            _map["Ничего не меняем: программа прочитает реальное состояние системы и покажет индекс,\n"] = "Nothing gets changed: the program reads the real state of the system and shows the index,\n";
+            _map["а на «Досье» и «Рентгене» — что Windows уже знает об этом компьютере."] = "while Dossier and X-ray show what Windows already knows about this computer.";
+            _map["Разберусь сам"] = "I will figure it out";
+            _map["Набор отмечен. Посмотрите список и нажмите «Применить»."] = "The set is ticked. Look through the list and press Apply.";
+            _map["У вас сборка новее релиза."] = "Your build is newer than the release.";
+            _map["На GitHub пока "] = "GitHub still has ";
+            _map[" — ваша сборка новее."] = " — your build is newer.";
+            _map["Версия программы: "] = "Program version: ";
         }
     }
 }
