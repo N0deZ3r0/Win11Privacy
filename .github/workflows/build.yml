@@ -35,6 +35,8 @@ jobs:
 
       - name: Проверить перевод
         shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           python tools/gen_lang.py
           git diff --exit-code -- Lang.cs
@@ -203,6 +205,8 @@ jobs:
       - name: Собрать манифест winget
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           python tools/make_winget.py --sums SHA256SUMS.txt
           $dir = "packaging/winget/$($env:GITHUB_REF_NAME -replace '^v','')"

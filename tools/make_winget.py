@@ -23,6 +23,14 @@ import os
 import re
 import sys
 
+# На сборке стандартный вывод Windows — cp1252, и русский текст роняет скрипт
+# ошибкой кодировки. Просим UTF-8; на старых версиях python молча пропускаем.
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKG_ID = 'N0deZ3r0.Win11Privacy'
 REPO = 'N0deZ3r0/Win11Privacy'
