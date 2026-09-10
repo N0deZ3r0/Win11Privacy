@@ -672,6 +672,34 @@ Check 'проверка сообщает, сколько пройдено' ($eng
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
+Write-Host 'Разрешения приложений и фоновые обращения в сеть'
+# Список берём заново и в свою переменную: $defs выше по файлу к этому месту
+# уже переписан (в PowerShell $defs и $Defs — одно и то же имя).
+$defsV110 = Get-EngineJson @('-ListDefs')
+Check 'список настроек для новых модулей получен' ($null -ne $defsV110)
+if ($defsV110) {
+    $byMod = @{}
+    foreach ($g in @($defsV110.groups)) { $byMod["$($g.module)"] = @($g.items).Count }
+    Check 'модуль «Разрешения приложений» есть' ($byMod['apppriv'] -ge 16) ("пунктов: " + $byMod['apppriv'])
+    Check 'модуль «Камера, микрофон и фон» есть' ($byMod['apphw'] -eq 3) ("пунктов: " + $byMod['apphw'])
+    Check 'модуль «Фоновые обращения в сеть» есть' ($byMod['network'] -ge 12) ("пунктов: " + $byMod['network'])
+}
+# Имена политик AppPrivacy — ровно те, что знает Windows (AppPrivacy.admx):
+# опечатка в имени значит, что политика молча ничего не делает.
+$knownAppPrivacy = @('LetAppsAccessAccountInfo','LetAppsAccessCalendar','LetAppsAccessCallHistory','LetAppsAccessCamera',
+    'LetAppsAccessContacts','LetAppsAccessEmail','LetAppsAccessLocation','LetAppsAccessMessaging','LetAppsAccessMicrophone',
+    'LetAppsAccessMotion','LetAppsAccessNotifications','LetAppsAccessPhone','LetAppsAccessRadios','LetAppsAccessTasks',
+    'LetAppsAccessTrustedDevices','LetAppsActivateWithVoice','LetAppsActivateWithVoiceAboveLock','LetAppsGetDiagnosticInfo',
+    'LetAppsRunInBackground','LetAppsSyncWithDevices')
+$usedAppPrivacy = @([regex]::Matches($engineText, "'(LetApps\w+)'") | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+$wrongAppPrivacy = @($usedAppPrivacy | Where-Object { $knownAppPrivacy -notcontains $_ })
+Check 'имена политик AppPrivacy существуют в Windows' ($wrongAppPrivacy.Count -eq 0) ($wrongAppPrivacy -join ', ')
+Check 'доступ к возрасту (Age API) закрывается политикой' ($usedAppPrivacy -contains 'LetAppsAccessAccountInfo')
+Check '«Досье» знает ИИ-модели и ключи доступа' (($engineText -match "id='systemAIModels'") -and ($engineText -match "id='passkeysEnumeration'"))
+Check '«Цифровой след» видит и чистит журналы Windows' (($engineText -match "\& \`$add 'eventlogs'") -and ($engineText -match "'eventlogs' \{"))
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
 Write-Host ("Пройдено: " + $script:Passed + ", провалено: " + $script:Failed)
 if ($script:Failed -gt 0) { exit 1 }
 exit 0

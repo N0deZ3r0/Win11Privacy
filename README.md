@@ -48,7 +48,10 @@ about you. Watches so that updates do not quietly turn the tracking back on.**
 | **Cleans up after itself** | Everything the program has accumulated about you — sensor history, log, snapshots — is visible on the "About" page and erased with one button. |
 | **ETW trace sessions** | Windows starts telemetry collectors at boot beyond the DiagTrack service — the program switches those off too. |
 | **Proof of the result** | Not "index 92%", but what it was before the program and what it is now: collectors, tasks, domains, events per day. |
-| **All app permissions** | 25 categories — not only camera and microphone, but screenshots, notifications, documents, the whole disk. Including apps that hold a permission but have not used it yet. |
+| **All app permissions** | 34 categories — not only camera and microphone, but screenshots, notifications, documents, the whole disk, passkeys and Windows AI models. Including apps that hold a permission but have not used it yet. |
+| **Permissions by policy, not by switch** | Contacts, calendar, calls, email and account information are closed by policy: neither an app nor a Windows update can switch them back on. Age is part of it — the new Windows Age APIs give an app nothing without this permission. |
+| **Background network calls** | Device metadata, on-demand fonts, offline maps, disk-health and speech models, Teredo — what Windows downloads and sends by itself. Taken from Microsoft's own list, safe items only. |
+| **Windows logs in the digital trace** | Thousands of entries about which programs ran and what they accessed — shown in the Dossier and wiped along with the rest of the trace. |
 | **One question on first run** | Instead of thirteen sections at once — "basic privacy", "strict", or "first show me what has been collected about me". The wizard applies nothing: it ticks a set and shows what will be done. |
 | **Long work is visible and can be stopped** | A "Stop" button in the status bar. Reading stops at once, applying stops after a warning — everything the engine already changed is in the journal and can be reverted on the Changes page. Closing the window mid-run asks as well, instead of leaving the engine running unseen. |
 | **The undo journal is written as it goes** | It used to be saved once, at the very end: an interrupted run left the changes in the system with nothing to revert them with. Now it hits the disk after every module and at least once every ten edits. |
@@ -56,7 +59,7 @@ about you. Watches so that updates do not quietly turn the tracking back on.**
 | **A clear error instead of the .NET dialog** | When the program trips over something, it explains what happened and writes `crash.log` you can attach to a bug report. |
 | **The guard comes right after an update** | A Windows update is what knocks the settings out, and a schedule could wait until Sunday. The guard now has a third alarm — the update installation itself: it checks the system five minutes later. |
 | **One copy of the program** | A second launch brings up the window that is already open. Two windows with administrator rights would apply settings at the same time and overwrite each other's undo journal. |
-| **You can see how far the check has got** | Verifying 191 settings takes up to half a minute and used to stay silent until the very end. Now the engine reports its progress and the window shows "15 / 34" and the name of the current section. |
+| **You can see how far the check has got** | Verifying 244 settings takes up to half a minute and used to stay silent until the very end. Now the engine reports its progress and the window shows "15 / 34" and the name of the current section. |
 | **The run log can be saved to a file** | A button on the Log page: these logs are what "it applied the wrong thing" cases are settled by, and a screenshot is no longer needed. |
 | **Keyboard and screen reader** | Tab walks the sections, Enter and Space open the selected one, and the hand-drawn controls now tell the system their names — the reader used to read emptiness. |
 
@@ -94,7 +97,7 @@ Notepad and Paint policies work on both versions and are applied as usual.
 ## Language
 
 The interface is fully available in Russian and English, including the names of
-all 191 settings and the HTML report. The language is taken from your Windows
+all 244 settings and the HTML report. The language is taken from your Windows
 settings and can be switched with a button on the "About" page.
 
 ---

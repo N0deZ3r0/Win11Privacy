@@ -159,7 +159,7 @@ $ChangeItems  = Expand-List $ChangeItems
 # =========================================================================== #
 # Версия. Должна совпадать с MainForm.AppVersion в интерфейсе -- сборка это
 # проверяет, чтобы вшитый движок и окно не рассказывали о себе разное.
-$script:EngineVersion  = '1.9.2'
+$script:EngineVersion  = '1.10.0'
 $script:HostsMarkStart = '# --- Win11Privacy: блокировка телеметрии (начало) ---'
 $script:HostsMarkEnd   = '# --- Win11Privacy: блокировка телеметрии (конец) ---'
 $script:FwGroup        = 'Win11Privacy'
@@ -625,6 +625,13 @@ Def 'telemetry' 'reg' $dc 'AllowUpdateComplianceProcessing' 0 'DWord' 'откл�
 Def 'telemetry' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Privacy' 'TailoredExperiencesWithDiagnosticDataEnabled' 0 'DWord' 'без рекомендаций на основе диагностики'
 Def 'telemetry' 'reg' 'HKCU:\Software\Microsoft\Siuf\Rules' 'NumberOfSIUFInPeriod' 0 'DWord' 'опросы Центра отзывов — выкл'
 Def 'telemetry' 'reg' 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\Settings\AllowExperimentation' 'value' 0 'DWord' 'эксперименты Microsoft — выкл'
+# Телеметрия совместимости живёт отдельно от DiagTrack: опись программ,
+# оценщик совместимости и запись действий пользователя шлют свои данные.
+Def 'telemetry' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\SQMClient\Windows' 'CEIPEnable' 0 'DWord' 'программа улучшения качества (CEIP) — выкл'
+Def 'telemetry' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppCompat' 'AITEnable' 0 'DWord' 'телеметрия совместимости приложений — выкл'
+Def 'telemetry' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppCompat' 'DisableInventory' 1 'DWord' 'опись установленных программ — выкл'
+Def 'telemetry' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppCompat' 'DisableUAR' 1 'DWord' 'запись действий пользователя (Steps Recorder) — выкл'
+Def 'telemetry' 'reg' 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\CloudContent' 'DisableTailoredExperiencesWithDiagnosticData' 1 'DWord' 'персонализация по диагностике — запрет политикой'
 
 Def 'errors' 'reg' 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' 'Disabled' 1 'DWord' 'отправка отчётов об ошибках — выкл'
 Def 'errors' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting' 'Disabled' 1 'DWord' 'то же, политикой'
@@ -654,6 +661,7 @@ Def 'ads' 'reg' $cc 'DisableSoftLanding' 1 'DWord' 'подсказки Windows'
 Def 'ads' 'reg' $cc 'DisableWindowsSpotlightFeatures' 1 'DWord' 'Windows Spotlight'
 Def 'ads' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'Start_IrisRecommendations' 0 'DWord' 'рекомендации в меню Пуск'
 Def 'ads' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'ShowSyncProviderNotifications' 0 'DWord' 'реклама OneDrive в Проводнике'
+Def 'ads' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement' 'ScoobeSystemSettingEnabled' 0 'DWord' '«Получите больше от Windows» после обновлений — выкл'
 
 $sys = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
 Def 'activity' 'reg' $sys 'EnableActivityFeed' 0 'DWord' 'лента активности — выкл'
@@ -661,6 +669,8 @@ Def 'activity' 'reg' $sys 'PublishUserActivities' 0 'DWord' 'не публико
 Def 'activity' 'reg' $sys 'UploadUserActivities' 0 'DWord' 'не выгружать активность в облако'
 Def 'activity' 'reg' $sys 'AllowClipboardHistory' 0 'DWord' 'история буфера обмена — выкл'
 Def 'activity' 'reg' $sys 'AllowCrossDeviceClipboard' 0 'DWord' 'синхронизация буфера между устройствами — выкл'
+Def 'activity' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'Start_TrackProgs' 0 'DWord' 'Пуск: не отслеживать запуск программ'
+Def 'activity' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\SmartActionPlatform\SmartClipboard' 'Disabled' 1 'DWord' 'буфер обмена: «предлагаемые действия» — выкл'
 
 Def 'input' 'reg' 'HKCU:\Software\Microsoft\InputPersonalization' 'RestrictImplicitTextCollection' 1 'DWord' 'не собирать набранный текст'
 Def 'input' 'reg' 'HKCU:\Software\Microsoft\InputPersonalization' 'RestrictImplicitInkCollection' 1 'DWord' 'не собирать рукописный ввод'
@@ -669,6 +679,8 @@ Def 'input' 'reg' 'HKCU:\Software\Microsoft\Personalization\Settings' 'AcceptedP
 Def 'input' 'reg' 'HKCU:\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy' 'HasAccepted' 0 'DWord' 'облачное распознавание речи — выкл'
 Def 'input' 'reg' 'HKCU:\Control Panel\International\User Profile' 'HttpAcceptLanguageOptOut' 1 'DWord' 'не отдавать сайтам список языков'
 Def 'input' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\appDiagnostics' 'Value' 'Deny' 'String' 'приложениям запрещена диагностика других приложений'
+Def 'input' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\TabletPC' 'PreventHandwritingDataSharing' 1 'DWord' 'не отправлять образцы рукописного ввода'
+Def 'input' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\HandwritingErrorReports' 'PreventHandwritingErrorReports' 1 'DWord' 'не отправлять отчёты об ошибках распознавания рукописи'
 
 $su = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search'
 $sm = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'
@@ -682,6 +694,7 @@ Def 'search' 'reg' $sm 'ConnectedSearchUseWeb' 0 'DWord' 'не обращать�
 Def 'search' 'reg' $sm 'AllowSearchToUseLocation' 0 'DWord' 'поиск не использует геолокацию'
 Def 'search' 'reg' $sm 'AllowCloudSearch' 0 'DWord' 'облачный поиск по OneDrive/Outlook — выкл'
 Def 'search' 'reg' $sm 'EnableDynamicContentInWSB' 0 'DWord' 'рекламные подсказки в поле поиска — выкл'
+Def 'search' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\SearchSettings' 'IsDeviceSearchHistoryEnabled' 0 'DWord' 'история поиска на устройстве (Параметры) — выкл'
 
 $ai = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'
 Def 'copilot' 'reg' 'HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 1 'DWord' 'Windows Copilot — выкл' 22000
@@ -727,6 +740,52 @@ Def 'location' 'reg' $loc 'DisableLocation' 1 'DWord' 'служба геолок
 Def 'location' 'reg' $loc 'DisableWindowsLocationProvider' 1 'DWord' 'поставщик местоположения Windows — выкл'
 Def 'location' 'reg' 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location' 'Value' 'Deny' 'String' 'доступ приложений к местоположению — запрещён'
 Def 'location' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\FindMyDevice' 'AllowFindMyDevice' 0 'DWord' '«Поиск устройства» (отправка координат) — выкл'
+Def 'location' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' 'LetAppsAccessLocation' 2 'DWord' 'приложениям запрещено местоположение (политика)'
+
+# Разрешения приложений — политикой, а не переключателями. Переключатель в
+# ConsentStore может вернуть кто угодно: Windows после обновления, установщик,
+# сам человек одним щелчком. Политика AppPrivacy стоит насмерть. Сюда же входит
+# доступ к сведениям учётной записи — через него приложения узнают возраст
+# пользователя (Windows Age API): без этого права вызов падает с E_ACCESSDENIED.
+$ap = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy'
+Def 'apppriv' 'reg' $ap 'LetAppsAccessAccountInfo' 2 'DWord' 'сведения учётной записи и возраст (Age API) — запрещены'
+Def 'apppriv' 'reg' $ap 'LetAppsAccessContacts' 2 'DWord' 'контакты — запрещены приложениям'
+Def 'apppriv' 'reg' $ap 'LetAppsAccessCalendar' 2 'DWord' 'календарь — запрещён приложениям'
+Def 'apppriv' 'reg' $ap 'LetAppsAccessCallHistory' 2 'DWord' 'журнал звонков — запрещён приложениям'
+Def 'apppriv' 'reg' $ap 'LetAppsAccessEmail' 2 'DWord' 'почта — запрещена приложениям'
+Def 'apppriv' 'reg' $ap 'LetAppsAccessMessaging' 2 'DWord' 'сообщения — запрещены приложениям'
+Def 'apppriv' 'reg' $ap 'LetAppsAccessPhone' 2 'DWord' 'звонки — запрещены приложениям'
+Def 'apppriv' 'reg' $ap 'LetAppsAccessTasks' 2 'DWord' 'задачи и планы — запрещены приложениям'
+Def 'apppriv' 'reg' $ap 'LetAppsAccessNotifications' 2 'DWord' 'чтение уведомлений — запрещено приложениям'
+Def 'apppriv' 'reg' $ap 'LetAppsAccessMotion' 2 'DWord' 'данные о движении — запрещены приложениям'
+Def 'apppriv' 'reg' $ap 'LetAppsAccessRadios' 2 'DWord' 'управление радиомодулями — запрещено приложениям'
+Def 'apppriv' 'reg' $ap 'LetAppsSyncWithDevices' 2 'DWord' 'обмен с устройствами — запрещён приложениям'
+Def 'apppriv' 'reg' $ap 'LetAppsAccessTrustedDevices' 2 'DWord' 'доверенные устройства — запрещены приложениям'
+Def 'apppriv' 'reg' $ap 'LetAppsGetDiagnosticInfo' 2 'DWord' 'диагностика других приложений — запрещена'
+Def 'apppriv' 'reg' $ap 'LetAppsActivateWithVoice' 2 'DWord' 'голосовая активация приложений — запрещена'
+Def 'apppriv' 'reg' $ap 'LetAppsActivateWithVoiceAboveLock' 2 'DWord' 'голосовая активация на экране блокировки — запрещена'
+
+# Камера, микрофон и фоновая работа — отдельно: без них приложения из магазина
+# теряют эти функции. Обычных программ (браузеров, мессенджеров) не касается.
+Def 'apphw' 'reg' $ap 'LetAppsAccessCamera' 2 'DWord' 'камера — запрещена приложениям из магазина'
+Def 'apphw' 'reg' $ap 'LetAppsAccessMicrophone' 2 'DWord' 'микрофон — запрещён приложениям из магазина'
+Def 'apphw' 'reg' $ap 'LetAppsRunInBackground' 2 'DWord' 'фоновая работа приложений из магазина — запрещена'
+
+# Что Windows скачивает и отправляет сама, без вашего запроса. Всё — из
+# официального списка Microsoft «Manage connections from Windows operating
+# system components to Microsoft services», только безопасные пункты.
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Device Metadata' 'PreventDeviceMetadataFromNetwork' 1 'DWord' 'не скачивать метаданные устройств'
+Def 'network' 'reg' $sys 'EnableFontProviders' 0 'DWord' 'не скачивать шрифты по требованию'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PreviewBuilds' 'AllowBuildPreview' 0 'DWord' 'сборки Insider — запрет'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Maps' 'AutoDownloadAndUpdateMapData' 0 'DWord' 'офлайн-карты: не обновлять сами'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Maps' 'AllowUntriggeredNetworkTrafficOnSettingsPage' 0 'DWord' 'офлайн-карты: без трафика на странице настроек'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Microsoft\OneDrive' 'PreventNetworkTrafficPreUserSignIn' 1 'DWord' 'OneDrive: не выходить в сеть до входа в систему'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Speech' 'AllowSpeechModelUpdate' 0 'DWord' 'не обновлять речевые модели'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\StorageHealth' 'AllowDiskHealthModelUpdates' 0 'DWord' 'не скачивать модели здоровья дисков'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Messaging' 'AllowMessageSync' 0 'DWord' 'не синхронизировать сообщения с облаком'
+Def 'network' 'reg' 'HKCU:\SOFTWARE\Microsoft\Messaging' 'CloudServiceSyncEnabled' 0 'DWord' 'облачная синхронизация сообщений — выкл'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\TCPIP\v6Transition' 'Teredo_State' 'Disabled' 'String' 'Teredo (туннель IPv6 через Microsoft) — выкл'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Microsoft\WcmSvc\wifinetworkmanager\config' 'AutoConnectAllowedOEM' 0 'DWord' 'Wi-Fi Sense — выкл'
 
 Def 'widgets' 'regpol' 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests' 0 'DWord' 'виджеты и лента новостей MSN — выкл' 22000
 Def 'widgets' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'TaskbarDa' 0 'DWord' 'кнопка виджетов на панели задач — убрать' 22000
@@ -770,7 +829,21 @@ foreach ($tp in @(
     '\Microsoft\Windows\Shell\FamilySafetyMonitor',
     '\Microsoft\Windows\Shell\FamilySafetyRefreshTask',
     '\Microsoft\Windows\Speech\SpeechModelDownloadTask',
-    '\Microsoft\Windows\Autochk\Proxy')) {
+    '\Microsoft\Windows\Autochk\Proxy',
+    # Появились в Windows 11 24H2–25H2. Оценщик совместимости «Exp» запускает
+    # compattelrunner с DoScheduledTelemetryRun — старую задачу «Appraisal»
+    # движок закрывал, а эта шла мимо. FeatureConfig\UsageData* — отчёты о том,
+    # какими функциями вы пользуетесь.
+    '\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser Exp',
+    '\Microsoft\Windows\Flighting\FeatureConfig\UsageDataReporting',
+    '\Microsoft\Windows\Flighting\FeatureConfig\UsageDataReceiver',
+    '\Microsoft\Windows\Flighting\FeatureConfig\UsageDataFlushing',
+    '\Microsoft\Windows\Flighting\FeatureConfig\BootstrapUsageDataReporting',
+    '\Microsoft\Windows\Flighting\FeatureConfig\GovernedFeatureUsageProcessing',
+    '\Microsoft\Windows\Flighting\OneSettings\RefreshCache',
+    '\Microsoft\Windows\Sustainability\SustainabilityTelemetry',
+    '\Microsoft\Windows\PerformanceTrace\ShowFeedbackToast',
+    '\Microsoft\Windows\Maps\MapsToastTask')) {
     Def 'services' 'task' $tp '' 'Disabled' '' ('задача ' + (Split-Path $tp -Leaf))
 }
 
@@ -855,13 +928,14 @@ Def 'app_vs' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\VisualStudio\SQM' 'OptIn' 
 Def 'app_vs' 'reg' 'HKCU:\Software\Microsoft\VisualStudio\Telemetry' 'TurnOffSwitch' 1 'DWord' 'Visual Studio: телеметрия — выкл'
 Def 'app_vs' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\VisualStudio\Feedback' 'DisableFeedbackDialog' 1 'DWord' 'Visual Studio: окно отзывов — выкл'
 
-$script:ModuleOrder = @('telemetry','errors','activity','input','edge','delivery','location','ads','widgets','search','copilot','ai',
-                        'defender','onedrive','services','etw','hosts','firewall','fwips','doh','buffer','app_nvidia','app_vscode','app_chrome','app_firefox',
+$script:ModuleOrder = @('telemetry','errors','activity','input','edge','delivery','location','apppriv','network','ads','widgets','search','copilot','ai',
+                        'defender','apphw','onedrive','services','etw','hosts','firewall','fwips','doh','buffer','app_nvidia','app_vscode','app_chrome','app_firefox',
                         'app_office','app_devtools','app_vs','oem','cleanup','startup')
 $script:ModuleTitles = @{
     telemetry='Телеметрия и диагностика'; errors='Отчёты об ошибках'; activity='История активности и буфер обмена';
     input='Персонализация ввода, рукописный ввод, речь'; edge='Microsoft Edge'; delivery='Раздача обновлений другим ПК';
-    location='Геолокация и поиск устройства'; ads='Рекламный ID и реклама в интерфейсе'; widgets='Виджеты и лента новостей';
+    location='Геолокация и поиск устройства'; apppriv='Разрешения приложений (запрет политикой)';
+    network='Фоновые обращения Windows в сеть'; apphw='Камера, микрофон и фоновая работа приложений'; ads='Рекламный ID и реклама в интерфейсе'; widgets='Виджеты и лента новостей';
     search='Поиск: Bing, Cortana, облако'; copilot='Copilot и Recall';
     ai='ИИ-функции Windows'; defender='Защитник: облако и образцы'; etw='Сессии трассировки телеметрии'; onedrive='OneDrive: синхронизация и реклама'; services='Службы и задачи телеметрии'; hosts='Блокировка телеметрийных доменов (hosts)';
     firewall='Брандмауэр: блокировка служб телеметрии'; fwips='Брандмауэр: адреса сбора телеметрии'; doh='Шифрованный DNS (обход блокировки)'; buffer='Неотправленная телеметрия'; app_nvidia='NVIDIA';
@@ -2661,7 +2735,18 @@ $script:SpyCaps = @(
     @{ id='sensors.custom';         title='Датчики устройства' },
     @{ id='humanInterfaceDevice';   title='Устройства ввода' },
     @{ id='cellularData';           title='Сотовая связь' },
-    @{ id='appDiagnostics';         title='Диагностика других программ' }
+    @{ id='appDiagnostics';         title='Диагностика других программ' },
+    # Эти категории Windows завела позже: ИИ-модели системы, ключи доступа,
+    # периферия. Раньше «Досье» их просто не показывало.
+    @{ id='systemAIModels';         title='ИИ-модели Windows' },
+    @{ id='passkeys';               title='Ключи доступа (passkeys)' },
+    @{ id='passkeysEnumeration';    title='Перечень ключей доступа' },
+    @{ id='bluetooth';              title='Bluetooth' },
+    @{ id='usb';                    title='USB-устройства' },
+    @{ id='serialCommunication';    title='COM-порты' },
+    @{ id='wiFiDirect';             title='Wi-Fi Direct' },
+    @{ id='wifiData';               title='Данные о сетях Wi-Fi' },
+    @{ id='gazeInput';              title='Отслеживание взгляда' }
 )
 
 function ConvertTo-FriendlyAppName {
@@ -2802,6 +2887,16 @@ function Get-FileCount { param([string]$P, [string]$Filter = '*')
     return @(Get-ChildItem -LiteralPath $P -Filter $Filter -Force -ErrorAction SilentlyContinue).Count
 }
 
+# Журналы событий, где Windows хранит следы работы с программами и доступа к
+# данным. Раньше «Цифровой след» их не видел, а записей там тысячи.
+$script:FootprintLogs = @(
+    'Microsoft-Windows-Privacy-Auditing/Operational',
+    'Microsoft-Windows-UniversalTelemetryClient/Operational',
+    'Microsoft-Windows-Application-Experience/Program-Telemetry',
+    'Microsoft-Windows-Application-Experience/Program-Compatibility-Assistant',
+    'Microsoft-Windows-Shell-Core/Operational'
+)
+
 function Get-Footprint {
     $items = New-Object System.Collections.Generic.List[object]
     $add = { param($id, $title, $what, $value, $mb, $count, $canWipe, $warn)
@@ -2881,6 +2976,13 @@ function Get-Footprint {
     $inpMb = Get-FolderSizeMB $inp
     & $add 'inputpers' 'Личный словарь набора текста' 'Слова, собранные из вашего набора и рукописного ввода.' ("{0} МБ" -f $inpMb) $inpMb (Get-FileCount $inp) ($inpMb -gt 0) ''
 
+    # Журналы Windows о работе с программами
+    $evN = 0
+    foreach ($lg in $script:FootprintLogs) {
+        try { $evN += [int](Get-WinEvent -ListLog $lg -ErrorAction Stop).RecordCount } catch { }
+    }
+    & $add 'eventlogs' 'Журналы Windows о работе с программами' 'Какие программы обращались к данным и камере, что запускалось и что отправлял клиент телеметрии.' ("{0} записей" -f $evN) 0 $evN ($evN -gt 0) ''
+
     # Кэш DNS
     $dnsN = 0
     try { $dnsN = @(Get-DnsClientCache -ErrorAction Stop).Count } catch { }
@@ -2951,6 +3053,16 @@ function Invoke-FootprintWipe {
             'dnscache' {
                 if ($DryRun) { Write-Log '   [тест] кэш DNS — очистить'; break }
                 try { Clear-DnsClientCache -ErrorAction Stop; Write-Log '   [+] кэш DNS очищен'; $script:Changes++ } catch { Write-Log '   [!] не удалось очистить кэш DNS' }
+            }
+            'eventlogs' {
+                if ($DryRun) { Write-Log '   [тест] журналы Windows о работе с программами — очистить'; break }
+                $cleared = 0
+                foreach ($lg in $script:FootprintLogs) {
+                    $null = & wevtutil.exe cl $lg 2>&1
+                    if ($LASTEXITCODE -eq 0) { $cleared++ }
+                }
+                Write-Log ("   [+] очищено журналов: {0} из {1}" -f $cleared, $script:FootprintLogs.Count)
+                if ($cleared -gt 0) { $script:Changes++ }
             }
             default { Write-Log ("   [-] неизвестный элемент следа: {0}" -f $id) }
         }

@@ -1,0 +1,86 @@
+# Перевод строк версии 1.10.0: разрешения приложений политикой, фоновые
+# обращения в сеть, телеметрия совместимости, новые категории «Досье» и
+# журналы Windows в «Цифровом следе». Сюда же — описания пунктов следа,
+# которые интерфейс раньше вообще не переводил.
+# Формат: русский TAB английский. Краевые пробелы должны совпадать.
+
+# --- новые модули ---
+Разрешения приложений	App permissions
+Запрет политикой: контакты, календарь, звонки, почта, сведения учётной записи и возраст. Включить обратно их не сможет ни приложение, ни обновление.	Blocked by policy: contacts, calendar, calls, email, account information and age. Neither an app nor an update can switch them back on.
+Фоновые обращения в сеть	Background network calls
+Метаданные устройств, шрифты, карты, модели дисков и речи, Teredo — то, что Windows скачивает и отправляет сама.	Device metadata, fonts, maps, disk and speech models, Teredo — what Windows downloads and sends by itself.
+Камера, микрофон и фон приложений	Camera, microphone and background apps
+Запрет приложениям из магазина: камера и микрофон перестанут в них работать, фоновые задачи тоже. Браузеры и обычные программы не затрагивает.	Blocks Store apps: camera and microphone stop working in them, and so do background tasks. Browsers and regular programs are not affected.
+
+# --- новые категории разрешений в «Досье» ---
+ИИ-модели Windows	Windows AI models
+Ключи доступа (passkeys)	Passkeys
+Перечень ключей доступа	Passkey list
+USB-устройства	USB devices
+COM-порты	COM ports
+Данные о сетях Wi-Fi	Wi-Fi network data
+Отслеживание взгляда	Eye tracking
+
+# --- названия новых настроек ---
+программа улучшения качества (CEIP) — выкл	Customer Experience Improvement Program (CEIP) — off
+телеметрия совместимости приложений — выкл	app compatibility telemetry — off
+опись установленных программ — выкл	inventory of installed programs — off
+запись действий пользователя (Steps Recorder) — выкл	user action recording (Steps Recorder) — off
+персонализация по диагностике — запрет политикой	tailored experiences from diagnostics — blocked by policy
+«Получите больше от Windows» после обновлений — выкл	"Get even more out of Windows" after updates — off
+Пуск: не отслеживать запуск программ	Start: do not track program launches
+буфер обмена: «предлагаемые действия» — выкл	clipboard: "suggested actions" — off
+не отправлять образцы рукописного ввода	do not send handwriting samples
+не отправлять отчёты об ошибках распознавания рукописи	do not send handwriting recognition error reports
+история поиска на устройстве (Параметры) — выкл	search history on this device (Settings) — off
+приложениям запрещено местоположение (политика)	location blocked for apps (policy)
+сведения учётной записи и возраст (Age API) — запрещены	account information and age (Age API) — blocked
+контакты — запрещены приложениям	contacts — blocked for apps
+календарь — запрещён приложениям	calendar — blocked for apps
+журнал звонков — запрещён приложениям	call history — blocked for apps
+почта — запрещена приложениям	email — blocked for apps
+сообщения — запрещены приложениям	messaging — blocked for apps
+звонки — запрещены приложениям	phone calls — blocked for apps
+задачи и планы — запрещены приложениям	tasks — blocked for apps
+чтение уведомлений — запрещено приложениям	reading notifications — blocked for apps
+данные о движении — запрещены приложениям	motion data — blocked for apps
+управление радиомодулями — запрещено приложениям	radio control — blocked for apps
+обмен с устройствами — запрещён приложениям	syncing with devices — blocked for apps
+доверенные устройства — запрещены приложениям	trusted devices — blocked for apps
+диагностика других приложений — запрещена	diagnostics of other apps — blocked
+голосовая активация приложений — запрещена	voice activation of apps — blocked
+голосовая активация на экране блокировки — запрещена	voice activation on the lock screen — blocked
+камера — запрещена приложениям из магазина	camera — blocked for Store apps
+микрофон — запрещён приложениям из магазина	microphone — blocked for Store apps
+фоновая работа приложений из магазина — запрещена	background activity of Store apps — blocked
+не скачивать метаданные устройств	do not download device metadata
+не скачивать шрифты по требованию	do not download fonts on demand
+сборки Insider — запрет	Insider builds — blocked
+офлайн-карты: не обновлять сами	offline maps: no automatic updates
+офлайн-карты: без трафика на странице настроек	offline maps: no traffic from the settings page
+OneDrive: не выходить в сеть до входа в систему	OneDrive: no network traffic before sign-in
+не обновлять речевые модели	do not update speech models
+не скачивать модели здоровья дисков	do not download disk health models
+не синхронизировать сообщения с облаком	do not sync messages with the cloud
+облачная синхронизация сообщений — выкл	cloud message sync — off
+Teredo (туннель IPv6 через Microsoft) — выкл	Teredo (IPv6 tunnel via Microsoft) — off
+Wi-Fi Sense — выкл	Wi-Fi Sense — off
+
+# --- «Цифровой след»: названия и описания пунктов ---
+Журналы Windows о работе с программами	Windows logs about program activity
+Уникальный ID, по которому рекламные сети узнают вас во всех приложениях.	A unique ID that ad networks use to recognise you across all apps.
+MachineGuid и SQM MachineId — метки, которыми помечается телеметрия. Нужны системе, стереть нельзя.	MachineGuid and SQM MachineId — the tags telemetry is marked with. The system needs them; they cannot be wiped.
+Список всех сетей, к которым подключался компьютер — по ним видно, где вы бывали. Пароли Wi-Fi не трогаются.	Every network the computer has joined — they show where you have been. Wi-Fi passwords are left alone.
+Windows помнит каждую флешку и внешний диск. Запись системная, показываем для сведения.	Windows remembers every USB stick and external drive. The record belongs to the system; it is shown for information only.
+ActivitiesCache.db — какие программы и документы вы открывали, с точным временем.	ActivitiesCache.db — which programs and documents you opened, to the exact time.
+Ярлыки всего, что вы открывали, плюс списки переходов на панели задач.	Shortcuts to everything you opened, plus the jump lists on the taskbar.
+История запросов в строке поиска Проводника.	History of searches in the File Explorer search box.
+Что вы вручную набирали в адресной строке Проводника.	What you typed by hand into the File Explorer address bar.
+Всё скопированное (Win+V) хранится на диске.	Everything you copied (Win+V) is kept on disk.
+Дампы и отчёты о сбоях: содержат пути файлов, имена программ, куски памяти.	Crash dumps and reports: they contain file paths, program names and chunks of memory.
+Слова, собранные из вашего набора и рукописного ввода.	Words collected from your typing and handwriting.
+Какие программы обращались к данным и камере, что запускалось и что отправлял клиент телеметрии.	Which programs accessed your data and camera, what was launched and what the telemetry client sent.
+Адреса сайтов и служб, к которым недавно обращался компьютер.	Addresses of sites and services the computer contacted recently.
+
+# --- приставка имён задач планировщика («задача » + имя задачи) ---
+задача 	task 

@@ -237,7 +237,7 @@ namespace Win11Privacy
                 {
                     Dictionary<string, object> it = Json.Obj(o);
                     string id = Json.GetStr(it, "id");
-                    _dossierList.Controls.Add(new WipeRow(id, L.T(Json.GetStr(it, "title")), Json.GetStr(it, "what"),
+                    _dossierList.Controls.Add(new WipeRow(id, L.T(Json.GetStr(it, "title")), L.T(Json.GetStr(it, "what")),
                         Json.GetStr(it, "value"), FootGlyph(id), Json.GetBool(it, "canWipe")) { Font = this.Font });
                 }
                 _btnDossierWipe.Enabled = Json.GetInt(_lastFoot, "wipeable") > 0;

@@ -63,6 +63,9 @@ namespace Win11Privacy
             if (_map == null) Build();
             string v;
             if (_map.TryGetValue(ru, out v)) return v;
+            // Имена задач планировщика движок собирает сам: «задача » + имя
+            // задачи. Имя и так английское — переводится только приставка.
+            if (ru.StartsWith("задача ") && _map.TryGetValue("задача ", out v)) return v + ru.Substring(7);
             return ru;
         }
 

@@ -17,7 +17,7 @@ param(
     [switch]$Confirmed,
     # Модули только из тех, что пишут в реестр: службы, hosts и брандмауэр
     # трогать на чужой машине незачем, а проверяется тем же самым механизмом.
-    [string]$Modules = 'telemetry,ads,activity,input,search'
+    [string]$Modules = 'telemetry,ads,activity,input,search,apppriv,network'
 )
 
 $ErrorActionPreference = 'Continue'

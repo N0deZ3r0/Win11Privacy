@@ -35,12 +35,15 @@ namespace Win11Privacy
             if (_map == null) Build();
             string v;
             if (_map.TryGetValue(ru, out v)) return v;
+            // Имена задач планировщика движок собирает сам: «задача » + имя
+            // задачи. Имя и так английское — переводится только приставка.
+            if (ru.StartsWith("задача ") && _map.TryGetValue("задача ", out v)) return v + ru.Substring(7);
             return ru;
         }
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(1099, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1170, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -1140,6 +1143,77 @@ namespace Win11Privacy
             _map["Copilot (компонент)"] = "Copilot (component)";
             _map["Новый Outlook"] = "New Outlook";
             _map["Записки"] = "Sticky Notes";
+            _map["Разрешения приложений"] = "App permissions";
+            _map["Запрет политикой: контакты, календарь, звонки, почта, сведения учётной записи и возраст. Включить обратно их не сможет ни приложение, ни обновление."] = "Blocked by policy: contacts, calendar, calls, email, account information and age. Neither an app nor an update can switch them back on.";
+            _map["Фоновые обращения в сеть"] = "Background network calls";
+            _map["Метаданные устройств, шрифты, карты, модели дисков и речи, Teredo — то, что Windows скачивает и отправляет сама."] = "Device metadata, fonts, maps, disk and speech models, Teredo — what Windows downloads and sends by itself.";
+            _map["Камера, микрофон и фон приложений"] = "Camera, microphone and background apps";
+            _map["Запрет приложениям из магазина: камера и микрофон перестанут в них работать, фоновые задачи тоже. Браузеры и обычные программы не затрагивает."] = "Blocks Store apps: camera and microphone stop working in them, and so do background tasks. Browsers and regular programs are not affected.";
+            _map["ИИ-модели Windows"] = "Windows AI models";
+            _map["Ключи доступа (passkeys)"] = "Passkeys";
+            _map["Перечень ключей доступа"] = "Passkey list";
+            _map["USB-устройства"] = "USB devices";
+            _map["COM-порты"] = "COM ports";
+            _map["Данные о сетях Wi-Fi"] = "Wi-Fi network data";
+            _map["Отслеживание взгляда"] = "Eye tracking";
+            _map["программа улучшения качества (CEIP) — выкл"] = "Customer Experience Improvement Program (CEIP) — off";
+            _map["телеметрия совместимости приложений — выкл"] = "app compatibility telemetry — off";
+            _map["опись установленных программ — выкл"] = "inventory of installed programs — off";
+            _map["запись действий пользователя (Steps Recorder) — выкл"] = "user action recording (Steps Recorder) — off";
+            _map["персонализация по диагностике — запрет политикой"] = "tailored experiences from diagnostics — blocked by policy";
+            _map["«Получите больше от Windows» после обновлений — выкл"] = "\"Get even more out of Windows\" after updates — off";
+            _map["Пуск: не отслеживать запуск программ"] = "Start: do not track program launches";
+            _map["буфер обмена: «предлагаемые действия» — выкл"] = "clipboard: \"suggested actions\" — off";
+            _map["не отправлять образцы рукописного ввода"] = "do not send handwriting samples";
+            _map["не отправлять отчёты об ошибках распознавания рукописи"] = "do not send handwriting recognition error reports";
+            _map["история поиска на устройстве (Параметры) — выкл"] = "search history on this device (Settings) — off";
+            _map["приложениям запрещено местоположение (политика)"] = "location blocked for apps (policy)";
+            _map["сведения учётной записи и возраст (Age API) — запрещены"] = "account information and age (Age API) — blocked";
+            _map["контакты — запрещены приложениям"] = "contacts — blocked for apps";
+            _map["календарь — запрещён приложениям"] = "calendar — blocked for apps";
+            _map["журнал звонков — запрещён приложениям"] = "call history — blocked for apps";
+            _map["почта — запрещена приложениям"] = "email — blocked for apps";
+            _map["сообщения — запрещены приложениям"] = "messaging — blocked for apps";
+            _map["звонки — запрещены приложениям"] = "phone calls — blocked for apps";
+            _map["задачи и планы — запрещены приложениям"] = "tasks — blocked for apps";
+            _map["чтение уведомлений — запрещено приложениям"] = "reading notifications — blocked for apps";
+            _map["данные о движении — запрещены приложениям"] = "motion data — blocked for apps";
+            _map["управление радиомодулями — запрещено приложениям"] = "radio control — blocked for apps";
+            _map["обмен с устройствами — запрещён приложениям"] = "syncing with devices — blocked for apps";
+            _map["доверенные устройства — запрещены приложениям"] = "trusted devices — blocked for apps";
+            _map["диагностика других приложений — запрещена"] = "diagnostics of other apps — blocked";
+            _map["голосовая активация приложений — запрещена"] = "voice activation of apps — blocked";
+            _map["голосовая активация на экране блокировки — запрещена"] = "voice activation on the lock screen — blocked";
+            _map["камера — запрещена приложениям из магазина"] = "camera — blocked for Store apps";
+            _map["микрофон — запрещён приложениям из магазина"] = "microphone — blocked for Store apps";
+            _map["фоновая работа приложений из магазина — запрещена"] = "background activity of Store apps — blocked";
+            _map["не скачивать метаданные устройств"] = "do not download device metadata";
+            _map["не скачивать шрифты по требованию"] = "do not download fonts on demand";
+            _map["сборки Insider — запрет"] = "Insider builds — blocked";
+            _map["офлайн-карты: не обновлять сами"] = "offline maps: no automatic updates";
+            _map["офлайн-карты: без трафика на странице настроек"] = "offline maps: no traffic from the settings page";
+            _map["OneDrive: не выходить в сеть до входа в систему"] = "OneDrive: no network traffic before sign-in";
+            _map["не обновлять речевые модели"] = "do not update speech models";
+            _map["не скачивать модели здоровья дисков"] = "do not download disk health models";
+            _map["не синхронизировать сообщения с облаком"] = "do not sync messages with the cloud";
+            _map["облачная синхронизация сообщений — выкл"] = "cloud message sync — off";
+            _map["Teredo (туннель IPv6 через Microsoft) — выкл"] = "Teredo (IPv6 tunnel via Microsoft) — off";
+            _map["Wi-Fi Sense — выкл"] = "Wi-Fi Sense — off";
+            _map["Журналы Windows о работе с программами"] = "Windows logs about program activity";
+            _map["Уникальный ID, по которому рекламные сети узнают вас во всех приложениях."] = "A unique ID that ad networks use to recognise you across all apps.";
+            _map["MachineGuid и SQM MachineId — метки, которыми помечается телеметрия. Нужны системе, стереть нельзя."] = "MachineGuid and SQM MachineId — the tags telemetry is marked with. The system needs them; they cannot be wiped.";
+            _map["Список всех сетей, к которым подключался компьютер — по ним видно, где вы бывали. Пароли Wi-Fi не трогаются."] = "Every network the computer has joined — they show where you have been. Wi-Fi passwords are left alone.";
+            _map["Windows помнит каждую флешку и внешний диск. Запись системная, показываем для сведения."] = "Windows remembers every USB stick and external drive. The record belongs to the system; it is shown for information only.";
+            _map["ActivitiesCache.db — какие программы и документы вы открывали, с точным временем."] = "ActivitiesCache.db — which programs and documents you opened, to the exact time.";
+            _map["Ярлыки всего, что вы открывали, плюс списки переходов на панели задач."] = "Shortcuts to everything you opened, plus the jump lists on the taskbar.";
+            _map["История запросов в строке поиска Проводника."] = "History of searches in the File Explorer search box.";
+            _map["Что вы вручную набирали в адресной строке Проводника."] = "What you typed by hand into the File Explorer address bar.";
+            _map["Всё скопированное (Win+V) хранится на диске."] = "Everything you copied (Win+V) is kept on disk.";
+            _map["Дампы и отчёты о сбоях: содержат пути файлов, имена программ, куски памяти."] = "Crash dumps and reports: they contain file paths, program names and chunks of memory.";
+            _map["Слова, собранные из вашего набора и рукописного ввода."] = "Words collected from your typing and handwriting.";
+            _map["Какие программы обращались к данным и камере, что запускалось и что отправлял клиент телеметрии."] = "Which programs accessed your data and camera, what was launched and what the telemetry client sent.";
+            _map["Адреса сайтов и служб, к которым недавно обращался компьютер."] = "Addresses of sites and services the computer contacted recently.";
+            _map["задача "] = "task ";
         }
     }
 }

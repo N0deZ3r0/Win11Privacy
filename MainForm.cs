@@ -179,6 +179,8 @@ namespace Win11Privacy
             A(S1,"delivery",L.T("Раздача обновлений в интернет"),L.T("Отдача файлов обновлений чужим ПК."),GSync,true,false,false);
             A(S1,"onedrive",L.T("OneDrive: синхронизация и реклама"),L.T("Отключает выгрузку файлов в облако и рекламу OneDrive в Проводнике. Файлы на диске остаются."),GSync,false,false,false);
             A(S1,"location",L.T("Геолокация и «Поиск устройства»"),L.T("Служба местоположения целиком и отправка координат в Microsoft."),GPin,false,false,false);
+            A(S1,"apppriv",L.T("Разрешения приложений"),L.T("Запрет политикой: контакты, календарь, звонки, почта, сведения учётной записи и возраст. Включить обратно их не сможет ни приложение, ни обновление."),GShield,true,false,false);
+            A(S1,"network",L.T("Фоновые обращения в сеть"),L.T("Метаданные устройств, шрифты, карты, модели дисков и речи, Teredo — то, что Windows скачивает и отправляет сама."),GGlobe,true,false,false);
 
             A(S2,"ads",L.T("Рекламный ID и реклама"),L.T("Реклама в Пуске, на экране блокировки и в Параметрах."),GAds,true,false,false);
             A(S2,"widgets",L.T("Виджеты и лента новостей"),L.T("Лента MSN на панели задач, которая изучает ваши интересы."),GGlobe,false,false,false);
@@ -193,6 +195,7 @@ namespace Win11Privacy
             A(S4,"buffer",L.T("Стереть неотправленную телеметрию"),L.T("Удаляет накопленный буфер C:\\ProgramData\\Microsoft\\Diagnosis."),GBroom,false,true,false);
             A(S4,"defender",L.T("Защитник: облако и образцы"),L.T("Отправка подозрительных файлов и облачная проверка MAPS. Чуть снижает защиту."),GShield,false,true,false);
             A(S4,"fwips",L.T("Блокировка адресов телеметрии"),L.T("Брандмауэр режет сами IP сбора данных — hosts телеметрия обходит. Если что-то отвалится, снимите и откатите."),GFire,false,true,false);
+            A(S4,"apphw",L.T("Камера, микрофон и фон приложений"),L.T("Запрет приложениям из магазина: камера и микрофон перестанут в них работать, фоновые задачи тоже. Браузеры и обычные программы не затрагивает."),GShield,false,true,false);
             A(S4,"doh",L.T("Запретить шифрованный DNS"),L.T("Через DoH браузеры и Windows обходят блокировку по доменам. Отключение вернёт видимость запросов провайдеру."),GGlobe,false,true,false);
 
             A(S5,"app_nvidia","NVIDIA",L.T("Телеметрия драйвера и GeForce Experience."),GApp,true,false,true);
@@ -2162,7 +2165,7 @@ namespace Win11Privacy
         private void ApplyPreset(string kind)
         {
             string[] baseMods = { "telemetry", "errors", "activity", "input", "edge", "delivery",
-                                  "ads", "search", "copilot", "ai", "cleanup" };
+                                  "ads", "search", "copilot", "ai", "cleanup", "apppriv", "network" };
             string[] strictAdd = { "widgets", "location", "onedrive", "defender", "services", "hosts" };
             int n = 0;
             foreach (ModuleDef m in _mods)
