@@ -111,7 +111,15 @@ def main():
                 print('запрос на эту версию уже открыт: ' + pr['url'])
                 return 0
 
-    gh(['repo', 'sync', fork, '--source', UPSTREAM, '--force'])
+    # Свежесть форка не обязательна: запрос сравнивается по общему предку, а
+    # добавляем мы только три новых файла. К тому же синхронизация требует
+    # права workflow, если в каталоге поменялись его собственные сборки, —
+    # токену с одним public_repo GitHub в этом отказывает. Не вышло — ветка
+    # пойдёт от того master, что уже есть в форке.
+    code, _, err = gh(['repo', 'sync', fork, '--source', UPSTREAM, '--force'], check=False)
+    if code != 0:
+        why = err.splitlines()[0] if err else 'без пояснений'
+        print('форк не синхронизирован (%s) — ветка пойдёт от его текущего master' % why)
     head = json.loads(gh(['api', 'repos/%s/git/ref/heads/master' % fork])[1])['object']['sha']
 
     refs = json.loads(gh(['api', 'repos/%s/git/refs/heads' % fork])[1])
