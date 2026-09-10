@@ -159,7 +159,7 @@ $ChangeItems  = Expand-List $ChangeItems
 # =========================================================================== #
 # Версия. Должна совпадать с MainForm.AppVersion в интерфейсе -- сборка это
 # проверяет, чтобы вшитый движок и окно не рассказывали о себе разное.
-$script:EngineVersion  = '1.10.0'
+$script:EngineVersion  = '1.10.1'
 $script:HostsMarkStart = '# --- Win11Privacy: блокировка телеметрии (начало) ---'
 $script:HostsMarkEnd   = '# --- Win11Privacy: блокировка телеметрии (конец) ---'
 $script:FwGroup        = 'Win11Privacy'
@@ -338,6 +338,9 @@ function Clear-FolderContents {
         if ($Step) { Write-Log ("   {0} {1} -- нечего чистить" -f $Step, $Label) }
         return 0.0
     }
+    # Большую папку посчитать и вычистить — это минуты, а строка шага
+    # появлялась только в конце, и чистка выглядела зависшей.
+    if ($Step) { Write-Log ("   {0} {1}..." -f $Step, $Label) }
     $before = Get-FolderSizeMB $FolderPath
     if ($DryRun) { Write-Log ("   {0} [тест] {1} -- можно освободить ~{2} МБ" -f $Step, $Label, $before); return 0.0 }
     Get-ChildItem -LiteralPath $FolderPath -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
@@ -1353,17 +1356,41 @@ $script:TelemetryIps = @(
     '191.232.139.2','191.232.80.58','191.239.52.100'
 )
 
+# Имена спрашиваются все сразу, а не по одному. Части адресов из списка давно
+# нет, и на каждый такой запрос Windows ждёт ответа DNS: за VPN или при
+# молчащем DNS роутера — по 10–15 секунд. По очереди шаг тянулся минутами без
+# единой строки в журнале и выглядел зависшим. Кто не ответил за отведённое
+# время, в правило не попадёт — известные адреса выше в нём есть всегда.
 function Get-TelemetryIpList {
+    param([int]$TimeoutMs = 8000)
     $set = @{}
     foreach ($ip in $script:TelemetryIps) { $set[$ip] = $true }
+    # каждое имя ждёт ответа в своём потоке пула — пусть потоков хватит на все
+    $w = 0; $io = 0
+    [System.Threading.ThreadPool]::GetMinThreads([ref]$w, [ref]$io)
+    if ($w -lt 64) { $null = [System.Threading.ThreadPool]::SetMinThreads(64, $io) }
+    $tasks = New-Object System.Collections.Generic.List[System.Threading.Tasks.Task]
+    $seen = @{}
     foreach ($d in $script:HostsDomains) {
-        try {
-            foreach ($r in (Resolve-DnsName -Name $d -Type A -ErrorAction Stop)) {
-                if ($r.IPAddress -and (Test-PublicIp $r.IPAddress)) { $set[$r.IPAddress] = $true }
-            }
-        } catch { }
+        if ($seen.ContainsKey($d)) { continue }
+        $seen[$d] = $true
+        try { $tasks.Add([System.Net.Dns]::GetHostAddressesAsync($d)) } catch { }
     }
-    return @($set.Keys)
+    # WaitAll бросает, если какое-то имя не существует, — это не ошибка
+    if ($tasks.Count -gt 0) { try { $null = [System.Threading.Tasks.Task]::WaitAll($tasks.ToArray(), $TimeoutMs) } catch { } }
+    $answered = 0
+    foreach ($t in $tasks) {
+        if ($t.Status -ne 'RanToCompletion') { continue }
+        $answered++
+        foreach ($a in $t.Result) {
+            # только IPv4, как было с Resolve-DnsName -Type A
+            if ($a.AddressFamily -ne 'InterNetwork') { continue }
+            $s = $a.IPAddressToString
+            if (Test-PublicIp $s) { $set[$s] = $true }
+        }
+    }
+    $ipList = @($set.Keys)
+    return @{ ips = $ipList; answered = $answered; asked = $tasks.Count }
 }
 
 function Test-FwIpRule {
@@ -1373,7 +1400,10 @@ function Test-FwIpRule {
 function Apply-FwIpBlock {
     if ($DryRun) { Write-Log '   [тест] будут заблокированы адреса сбора телеметрии'; return }
     try {
-        $ips = Get-TelemetryIpList
+        Write-Log '   узнаю текущие адреса серверов сбора — не дольше 10 секунд'
+        $found = Get-TelemetryIpList
+        $ips = @($found.ips)
+        Write-Log ("   ответили DNS имён: {0} из {1}" -f $found.answered, $found.asked)
         if ($ips.Count -eq 0) { Write-Log '   [-] адреса не определились'; return }
         Get-NetFirewallRule -DisplayName $script:FwIpRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
         New-NetFirewallRule -DisplayName $script:FwIpRuleName -Group $script:FwGroup -Direction Outbound -Action Block `

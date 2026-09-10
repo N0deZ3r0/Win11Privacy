@@ -213,6 +213,30 @@ if ($devFound.Count -eq 1) {
     Check 'сетевой путь не выдаётся за локальный' ((ConvertFrom-DevicePath '\device\mup\srv\share\x.exe') -eq '')
 }
 
+# Адреса телеметрии спрашиваются у DNS все сразу и не дольше отведённого:
+# по одному шаг тянулся минутами, пока мёртвые имена ждали ответа.
+$ipFns = @('Test-PublicIp', 'Get-TelemetryIpList')
+$ipFound = @()
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($ipFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $ipFound += $fn.Name }
+}
+Check 'разбор адресов телеметрии найден в движке' ($ipFound.Count -eq $ipFns.Count) ("найдено: " + ($ipFound -join ','))
+if ($ipFound.Count -eq $ipFns.Count) {
+    $script:TelemetryIps = @('13.64.90.137')
+    # адрес вместо имени отвечает сразу и без сети; localhost — частный и в
+    # правило попасть не должен; несуществующее имя не должно задерживать
+    $script:HostsDomains = @('8.8.8.8', 'localhost', '8.8.8.8', 'win11privacy-test.invalid')
+    $ipSw = [Diagnostics.Stopwatch]::StartNew()
+    $ipRes = Get-TelemetryIpList -TimeoutMs 3000
+    $ipSw.Stop()
+    $ipGot = @($ipRes.ips)
+    Check 'известные адреса попадают в правило всегда' ($ipGot -contains '13.64.90.137')
+    Check 'адрес из списка имён попадает в правило' ($ipGot -contains '8.8.8.8') ("получено: " + ($ipGot -join ', '))
+    Check 'частные адреса в правило не попадают' (-not ($ipGot | Where-Object { $_ -like '127.*' }))
+    Check 'повторы в списке имён спрашиваются один раз' ($ipRes.asked -eq 3) ("спрошено: $($ipRes.asked)")
+    Check 'разбор имён укладывается в отведённое время' ($ipSw.Elapsed.TotalSeconds -lt 6) ("заняло: {0:N1} с" -f $ipSw.Elapsed.TotalSeconds)
+}
+
 # --------------------------------------------------------------------------- #
 Write-Host ''
 Write-Host 'Порядок объявлений в движке'
