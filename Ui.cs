@@ -118,7 +118,27 @@ namespace Win11Privacy
         public static readonly string[] MonoFonts = { "Cascadia Mono", "Cascadia Code", "Consolas", "Courier New" };
         public static readonly string[] IconFonts = { "Segoe Fluent Icons", "Segoe MDL2 Assets" };
 
-        private static Font _iconFont;
+        // Производные шрифты — жирный, мельче, крупнее — нужны при каждой
+        // перерисовке. Раньше они создавались прямо в OnPaint и не
+        // освобождались: по дескриптору GDI на кадр, пока не вмешается сборщик
+        // мусора. Теперь каждый создаётся один раз и живёт до конца программы.
+        private static readonly Dictionary<string, Font> _fonts = new Dictionary<string, Font>();
+
+        public static Font Sized(string family, float points, FontStyle style)
+        {
+            string key = family + "|" + (int)Math.Round(points * 100F) + "|" + (int)style;
+            Font f;
+            if (!_fonts.TryGetValue(key, out f))
+            {
+                f = new Font(family, points, style, GraphicsUnit.Point);
+                _fonts[key] = f;
+            }
+            return f;
+        }
+
+        public static Font Bold(Font f) { return Sized(f.Name, f.SizeInPoints, FontStyle.Bold); }
+
+        private static string _iconFamily;
         private static bool _iconChecked;
         public static Font IconFont(float size)
         {
@@ -127,16 +147,11 @@ namespace Win11Privacy
                 _iconChecked = true;
                 foreach (string n in IconFonts)
                 {
-                    try
-                    {
-                        using (FontFamily ff = new FontFamily(n)) { _iconFont = new Font(n, size, GraphicsUnit.Point); break; }
-                    }
+                    try { using (FontFamily ff = new FontFamily(n)) { _iconFamily = n; break; } }
                     catch { }
                 }
             }
-            if (_iconFont == null) return null;
-            if (Math.Abs(_iconFont.Size - size) > 0.1F) _iconFont = new Font(_iconFont.FontFamily, size, GraphicsUnit.Point);
-            return _iconFont;
+            return _iconFamily == null ? null : Sized(_iconFamily, size, FontStyle.Regular);
         }
 
         public static GraphicsPath RoundRect(RectangleF r, float radius)
@@ -545,7 +560,7 @@ namespace Win11Privacy
         protected override void OnFontChanged(EventArgs e)
         {
             base.OnFontChanged(e);
-            _bold = new Font(Font, FontStyle.Bold);
+            _bold = Theme.Bold(Font);
             Toggle.Font = Font;
             Relayout();
         }
@@ -581,7 +596,7 @@ namespace Win11Privacy
             _inLayout = true;
             try
             {
-                if (_bold == null) _bold = new Font(Font, FontStyle.Bold);
+                if (_bold == null) _bold = Theme.Bold(Font);
                 int u = U;
                 int badge = (int)(u * 2.2F);
                 _textLeft = (int)(u * 0.8F) + badge + (int)(u * 0.75F);
@@ -907,7 +922,7 @@ namespace Win11Privacy
                     TextRenderer.DrawText(g, Glyph, icon, new Rectangle(0, 0, Width, Height), fg,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
                 else
-                    TextRenderer.DrawText(g, Text.Length > 0 ? Text.Substring(0, 1) : "", new Font(Font, FontStyle.Bold),
+                    TextRenderer.DrawText(g, Text.Length > 0 ? Text.Substring(0, 1) : "", Theme.Bold(Font),
                         new Rectangle(0, 0, Width, Height), fg,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
                 if (!string.IsNullOrEmpty(Badge))
@@ -925,7 +940,7 @@ namespace Win11Privacy
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
             int tx = gx + (int)(u * 2.0F);
-            TextRenderer.DrawText(g, Text, Selected ? new Font(Font, FontStyle.Bold) : Font,
+            TextRenderer.DrawText(g, Text, Selected ? Theme.Bold(Font) : Font,
                 new Rectangle(tx, 0, Width - tx - (int)(u * 1.6F), Height), fg,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
 
@@ -981,52 +996,52 @@ namespace Win11Privacy
             using (SolidBrush b = new SolidBrush(Accent)) g.FillPath(b, p);
 
             int u = Font.Height;
+            int left = (int)(u * 0.9F);
+            int textW = Math.Max(20, Width - (int)(u * 1.5F));
+
+            // Заголовок плитки — в одну строку, а на узкой плитке в две. Раньше
+            // он обрывался многоточием («ОБРАЩЕНИЯ К ТЕЛЕ…»), и понять, что
+            // означает число под ним, было нельзя. Всё, что ниже, сдвигается.
+            string cap = Caption.ToUpperInvariant();
+            Font cf = Theme.Sized(Font.Name, Font.SizeInPoints * 0.8F, FontStyle.Bold);
+            int line = TextRenderer.MeasureText(g, "X", cf).Height;
+            Size capNeed = TextRenderer.MeasureText(g, cap, cf, new Size(textW, 0), TextFormatFlags.WordBreak);
+            int capH = capNeed.Height > line ? line * 2 : line;
+            int shift = capH - line;
+            TextRenderer.DrawText(g, cap, cf, new Rectangle(left, (int)(u * 0.5F), textW, capH), Theme.TextFaint,
+                TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
 #if UITEST
-            using (Font cfm = new Font(Font.FontFamily, Font.Size * 0.8F, FontStyle.Bold))
-            {
-                int capW = Width - (int)(u * 1.5F);
-                Size capNeed = TextRenderer.MeasureText(g, Caption.ToUpperInvariant(), cfm,
-                                   new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
-                if (capNeed.Width > capW) ClipWatch.Note("StatTile.Caption", Caption, capNeed.Width, capW);
-            }
+            if (capNeed.Height > capH || capNeed.Width > textW) ClipWatch.Note("StatTile.Caption", Caption, capNeed.Width, textW);
 #endif
-            TextRenderer.DrawText(g, Caption.ToUpperInvariant(), new Font(Font.FontFamily, Font.Size * 0.8F, FontStyle.Bold),
-                new Rectangle((int)(u * 0.9F), (int)(u * 0.5F), Width - (int)(u * 1.5F), u * 2), Theme.TextFaint,
-                TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
-            using (Font vf = new Font(Font.FontFamily, Font.Size * 1.45F, FontStyle.Bold))
-                TextRenderer.DrawText(g, Value, vf,
-                    new Rectangle((int)(u * 0.85F), (int)(u * 1.55F), Width - (int)(u * 1.4F), (int)(u * 2.2F)),
-                    Accent, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+            TextRenderer.DrawText(g, Value, Theme.Sized(Font.Name, Font.SizeInPoints * 1.45F, FontStyle.Bold),
+                new Rectangle((int)(u * 0.85F), (int)(u * 1.55F) + shift, Width - (int)(u * 1.4F), (int)(u * 2.2F)),
+                Accent, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
             if (!string.IsNullOrEmpty(Sub))
             {
                 // Подпись переносится на вторую строку, а если и так не влезает —
                 // печатается шрифтом поменьше. Раньше она была в одну строку с
                 // обрезкой и на узкой плитке рвалась на полуслове:
                 // «1 не заблокировано (из кэ…».
-                int subL = (int)(u * 0.9F);
-                int subW = Math.Max(20, Width - (int)(u * 1.5F));
-                int subT = (int)(u * 3.9F);
-                int subH = Height - subT - (int)(u * 0.35F);
+                int subT = (int)(u * 3.9F) + shift;
+                if (shift > 0) subT -= (int)(u * 0.3F);      // под двухстрочным заголовком зазор над подписью поджат
+                int subH = Height - subT - (int)(u * 0.25F);
                 if (subH < u) { subT = Height - (int)(u * 1.7F); subH = (int)(u * 1.6F); }
+                // меряем теми же флагами, какими рисуем: иначе длинное слово
+                // считалось влезшим и всё равно обрывалось многоточием
                 Font sf = Font;
-                Font shrunk = null;
-                Size need = TextRenderer.MeasureText(g, Sub, sf, new Size(subW, 0),
-                                TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
+                Size need = TextRenderer.MeasureText(g, Sub, sf, new Size(textW, 0), TextFormatFlags.WordBreak);
                 foreach (float scale in new[] { 0.85F, 0.72F })
                 {
-                    if (need.Height <= subH || Font.Size * scale < 6.5F) break;
-                    if (shrunk != null) shrunk.Dispose();
-                    shrunk = new Font(Font.FontFamily, Font.Size * scale);
-                    sf = shrunk;
-                    need = TextRenderer.MeasureText(g, Sub, sf, new Size(subW, 0),
-                               TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
+                    if ((need.Height <= subH && need.Width <= textW) || Font.Size * scale < 6.5F) break;
+                    sf = Theme.Sized(Font.Name, Font.SizeInPoints * scale, FontStyle.Regular);
+                    need = TextRenderer.MeasureText(g, Sub, sf, new Size(textW, 0), TextFormatFlags.WordBreak);
                 }
-                TextRenderer.DrawText(g, Sub, sf, new Rectangle(subL, subT, subW, subH), Theme.TextDim,
+                TextRenderer.DrawText(g, Sub, sf, new Rectangle(left, subT, textW, subH), Theme.TextDim,
                     TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
 #if UITEST
                 if (need.Height > subH) ClipWatch.Note("StatTile.Sub", Sub, need.Height, subH);
+                else if (need.Width > textW) ClipWatch.Note("StatTile.Sub", Sub, need.Width, textW);
 #endif
-                if (shrunk != null) shrunk.Dispose();
             }
         }
     }
@@ -1055,10 +1070,10 @@ namespace Win11Privacy
                 using (SolidBrush b = new SolidBrush(Theme.Err)) g.FillEllipse(b, u * 0.5F, (Height - u * 0.5F) / 2F, u * 0.5F, u * 0.5F);
             }
             int lx = _flag ? (int)(u * 1.5F) : (int)(u * 0.4F);
-            Size vs = TextRenderer.MeasureText(_val, new Font(Font, FontStyle.Bold));
+            Size vs = TextRenderer.MeasureText(_val, Theme.Bold(Font));
             TextRenderer.DrawText(g, _key, Font, new Rectangle(lx, 0, Width - lx - vs.Width - (int)(u * 0.8F), Height),
                 _flag ? Theme.Err : Theme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
-            TextRenderer.DrawText(g, _val, new Font(Font, FontStyle.Bold), new Rectangle(0, 0, Width - (int)(u * 0.4F), Height),
+            TextRenderer.DrawText(g, _val, Theme.Bold(Font), new Rectangle(0, 0, Width - (int)(u * 0.4F), Height),
                 _flag ? Theme.Err : Theme.TextDim, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
         }
     }
@@ -1173,15 +1188,15 @@ namespace Win11Privacy
 
             int tx = (int)(u * 1.9F);
             string chip = _count.ToString() + "  ·  " + _share.ToString("0.#") + "%";
-            Size cs = TextRenderer.MeasureText(chip, new Font(Font, FontStyle.Bold));
+            Size cs = TextRenderer.MeasureText(chip, Theme.Bold(Font));
             int chipW = cs.Width + (int)(u * 1.0F), chipH = (int)(u * 1.35F);
             RectangleF cr = new RectangleF(Width - chipW - (int)(u * 0.5F), (int)(u * 0.45F), chipW, chipH);
             using (GraphicsPath p = Theme.RoundRect(cr, chipH / 2F))
             using (SolidBrush b = new SolidBrush(Theme.Mix(Theme.CardBg, Theme.Accent, 0.25F))) g.FillPath(b, p);
-            TextRenderer.DrawText(g, chip, new Font(Font, FontStyle.Bold), Rectangle.Round(cr), Theme.Accent,
+            TextRenderer.DrawText(g, chip, Theme.Bold(Font), Rectangle.Round(cr), Theme.Accent,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
-            TextRenderer.DrawText(g, _name, new Font(Font, FontStyle.Bold),
+            TextRenderer.DrawText(g, _name, Theme.Bold(Font),
                 new Rectangle(tx, (int)(u * 0.3F), Width - tx - chipW - (int)(u * 1.2F), (int)(u * 1.5F)),
                 Theme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
             TextRenderer.DrawText(g, _what, Font,
@@ -1237,24 +1252,31 @@ namespace Win11Privacy
     internal class AuditGroupRow : Control
     {
         private readonly string _title; private readonly int _ok, _total;
-        private readonly List<object> _items; private bool _open, _hover;
+        private readonly List<Dictionary<string, object>> _rows = new List<Dictionary<string, object>>();
+        private bool _open, _hover;
+
+        // В раскрытой группе видны несоответствия, а если их нет — все пункты.
+        // Список один и для высоты, и для отрисовки: раньше каждая решала это
+        // по-своему, и под строками оставалось пустое место.
         public AuditGroupRow(string title, int ok, int total, List<object> items)
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            _title = title; _ok = ok; _total = total; _items = items; BackColor = Theme.CardBg;
+            _title = title; _ok = ok; _total = total; BackColor = Theme.CardBg;
             Cursor = Cursors.Hand;
+            List<Dictionary<string, object>> all = new List<Dictionary<string, object>>();
+            foreach (object o in items)
+            {
+                Dictionary<string, object> it = Json.Obj(o);
+                if (it == null) continue;
+                all.Add(it);
+                if (!Json.GetBool(it, "ok")) _rows.Add(it);
+            }
+            if (_rows.Count == 0) _rows = all;
         }
         private int HeadH { get { return (int)(Font.Height * 2.2F); } }
+        private int RowH { get { return (int)(Font.Height * 1.7F); } }
         protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); Recalc(); }
-        protected override void OnResize(EventArgs e) { base.OnResize(e); }
-        private void Recalc() { Height = _open ? HeadH + RowsH() : HeadH; }
-        private int RowsH()
-        {
-            int fails = 0; foreach (object o in _items) if (!Json.GetBool(Json.Obj(o), "ok")) fails++;
-            int shown = _total == _ok ? _items.Count : fails;   // если всё ок — показываем все; иначе только несоответствия
-            if (shown == 0) shown = _items.Count;
-            return shown * (int)(Font.Height * 1.7F) + (int)(Font.Height * 0.4F);
-        }
+        private void Recalc() { Height = _open ? HeadH + _rows.Count * RowH + (int)(Font.Height * 0.4F) : HeadH; }
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; Invalidate(); }
         protected override void OnClick(EventArgs e)
@@ -1270,40 +1292,38 @@ namespace Win11Privacy
 
             bool all = _ok == _total;
             Color badge = all ? Theme.Ok : (_ok == 0 ? Theme.Err : Theme.Warn);
-            Font icon = Theme.IconFont(Font.Size * 1.1F);
+            Font icon = Theme.IconFont(Font.Size * 0.85F);
             string glyph = _open ? "" : "";
-            if (icon != null) TextRenderer.DrawText(g, glyph, Theme.IconFont(Font.Size * 0.85F), new Rectangle((int)(u * 0.3F), 0, (int)(u * 1.4F), HeadH), Theme.TextDim, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            if (icon != null) TextRenderer.DrawText(g, glyph, icon, new Rectangle((int)(u * 0.3F), 0, (int)(u * 1.4F), HeadH), Theme.TextDim, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
             int tx = (int)(u * 1.9F);
             string score = _ok + "/" + _total;
-            Size ss = TextRenderer.MeasureText(score, new Font(Font, FontStyle.Bold));
-            TextRenderer.DrawText(g, _title, new Font(Font, FontStyle.Bold), new Rectangle(tx, 0, Width - tx - ss.Width - (int)(u * 2.2F), HeadH),
+            Size ss = TextRenderer.MeasureText(score, Theme.Bold(Font));
+            TextRenderer.DrawText(g, _title, Theme.Bold(Font), new Rectangle(tx, 0, Width - tx - ss.Width - (int)(u * 2.2F), HeadH),
                 Theme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
 
             int chipW = ss.Width + (int)(u * 1.0F); int chipH = (int)(u * 1.35F);
             RectangleF chip = new RectangleF(Width - chipW - (int)(u * 0.5F), (HeadH - chipH) / 2F, chipW, chipH);
             using (GraphicsPath p = Theme.RoundRect(chip, chipH / 2F)) using (SolidBrush b = new SolidBrush(Theme.Mix(Theme.CardBg, badge, 0.22F))) g.FillPath(b, p);
-            TextRenderer.DrawText(g, score, new Font(Font, FontStyle.Bold), Rectangle.Round(chip), badge, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            TextRenderer.DrawText(g, score, Theme.Bold(Font), Rectangle.Round(chip), badge, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
             if (_open)
             {
                 int y = HeadH + (int)(u * 0.2F);
-                foreach (object o in _items)
+                foreach (Dictionary<string, object> it in _rows)
                 {
-                    Dictionary<string, object> it = Json.Obj(o);
                     bool ok = Json.GetBool(it, "ok");
                     bool blocked = Json.GetBool(it, "blocked");
-                    if (!all && ok) continue;   // при несоответствиях показываем только их
                     // «Windows не разрешает» — не наша вина и не красное: серым
                     Color dot = ok ? Theme.Ok : (blocked ? Theme.TextFaint : Theme.Err);
-                    using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, u * 1.9F, y + (u * 1.7F - u * 0.45F) / 2F, u * 0.45F, u * 0.45F);
+                    using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, u * 1.9F, y + (RowH - u * 0.45F) / 2F, u * 0.45F, u * 0.45F);
                     string nm = L.T(Json.GetStr(it, "name")); string act = L.T(Json.GetStr(it, "actual"));
                     Size acs = TextRenderer.MeasureText(act, Font);
-                    TextRenderer.DrawText(g, nm, Font, new Rectangle((int)(u * 2.9F), y, Width - (int)(u * 2.9F) - acs.Width - (int)(u * 1.0F), (int)(u * 1.7F)),
+                    TextRenderer.DrawText(g, nm, Font, new Rectangle((int)(u * 2.9F), y, Width - (int)(u * 2.9F) - acs.Width - (int)(u * 1.0F), RowH),
                         Theme.TextDim, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
-                    TextRenderer.DrawText(g, act, Font, new Rectangle(0, y, Width - (int)(u * 0.6F), (int)(u * 1.7F)),
+                    TextRenderer.DrawText(g, act, Font, new Rectangle(0, y, Width - (int)(u * 0.6F), RowH),
                         Theme.TextFaint, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
-                    y += (int)(u * 1.7F);
+                    y += RowH;
                 }
             }
         }

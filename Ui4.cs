@@ -80,12 +80,16 @@ namespace Win11Privacy
 
             int tx = pad + chip + (int)(u * 0.65F);
             int tw = Width - tx - chev - (int)(u * 0.8F);
-            TextRenderer.DrawText(g, Title, new Font(Font, FontStyle.Bold),
+            TextRenderer.DrawText(g, Title, Theme.Bold(Font),
                 new Rectangle(tx, (int)(Height / 2F - u * 1.45F), tw, (int)(u * 1.5F)), Theme.Text,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
             TextRenderer.DrawText(g, Status, Font,
                 new Rectangle(tx, (int)(Height / 2F + 0), tw, (int)(u * 1.5F)), StatusColor,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+#if UITEST
+            int need = TextRenderer.MeasureText(g, Status, Font).Width;
+            if (need > tw) ClipWatch.Note("ActionCard.Status", Status, need, tw);
+#endif
         }
     }
 
@@ -106,13 +110,22 @@ namespace Win11Privacy
             Caption = caption; Glyph = glyph; Accent = accent;
         }
 
-        public void SetValue(string v) { Value = v; Invalidate(); }
+        public void SetValue(string v) { Value = v; Fit(); Invalidate(); }
 
-        protected override void OnFontChanged(EventArgs e)
+        private Font ValueFont { get { return Theme.Sized(Font.Name, Font.SizeInPoints * 1.2F, FontStyle.Bold); } }
+        private Font CaptionFont { get { return Theme.Sized(Font.Name, Font.SizeInPoints * 0.85F, FontStyle.Regular); } }
+        private int TextLeft { get { return (int)(Font.Height * 2.1F) + (int)(Font.Height * 0.55F); } }
+
+        // Ширина — по тексту, а не с запасом на глаз: три показателя в ряд
+        // обязаны поместиться и в самом узком окне.
+        private void Fit()
         {
-            base.OnFontChanged(e);
-            Size = new Size((int)(Font.Height * 10.5F), (int)(Font.Height * 2.9F));
+            int text = Math.Max(TextRenderer.MeasureText(Value, ValueFont).Width,
+                                TextRenderer.MeasureText(Caption, CaptionFont).Width);
+            Size = new Size(TextLeft + text, (int)(Font.Height * 2.9F));
         }
+
+        protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); Fit(); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -128,13 +141,11 @@ namespace Win11Privacy
             if (icon != null && !string.IsNullOrEmpty(Glyph))
                 TextRenderer.DrawText(g, Glyph, icon, new Rectangle(0, cy, chip, chip), Accent,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-            int tx = chip + (int)(u * 0.55F);
-            using (Font vf = new Font(Font.FontFamily, Font.Size * 1.2F, FontStyle.Bold))
-                TextRenderer.DrawText(g, Value, vf, new Rectangle(tx, (int)(u * 0.1F), Width - tx, (int)(u * 1.6F)),
-                    Accent, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
-            using (Font cf = new Font(Font.FontFamily, Font.Size * 0.85F))
-                TextRenderer.DrawText(g, Caption, cf, new Rectangle(tx, (int)(u * 1.6F), Width - tx, (int)(u * 1.3F)),
-                    Theme.TextDim, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+            int tx = TextLeft;
+            TextRenderer.DrawText(g, Value, ValueFont, new Rectangle(tx, (int)(u * 0.1F), Width - tx, (int)(u * 1.6F)),
+                Accent, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+            TextRenderer.DrawText(g, Caption, CaptionFont, new Rectangle(tx, (int)(u * 1.6F), Width - tx, (int)(u * 1.3F)),
+                Theme.TextDim, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
         }
     }
 
@@ -379,7 +390,7 @@ namespace Win11Privacy
             row.FlowDirection = FlowDirection.RightToLeft;
             row.BackColor = Theme.WindowBg;
             ModernButton ok = new ModernButton(okText, true);
-            ok.Font = new Font(baseFont, FontStyle.Bold);
+            ok.Font = Theme.Bold(baseFont);
             ok.Margin = new Padding((int)(u * 0.4F), (int)(u * 0.3F), 0, 0);
             ok.Click += delegate { DialogResult = DialogResult.OK; Close(); };
             ModernButton cancel = new ModernButton(L.T("Отмена"), false);

@@ -1,14 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Text;
-using System.Globalization;
 using System.IO;
-using System.Reflection;
-using System.Security.Principal;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
 namespace Win11Privacy
@@ -103,37 +98,45 @@ namespace Win11Privacy
 
         private void OnSaveProfile(object sender, EventArgs e)
         {
-            List<string> mods = SelectedModules();
-            SaveFileDialog d = new SaveFileDialog();
-            d.Filter = L.T("Профиль Win11Privacy (*.json)|*.json"); d.FileName = "win11privacy-profile.json";
-            if (d.ShowDialog(this) != DialogResult.OK) return;
+            string path;
+            using (SaveFileDialog d = new SaveFileDialog())
+            {
+                d.Filter = L.T("Профиль Win11Privacy (*.json)|*.json"); d.FileName = "win11privacy-profile.json";
+                if (d.ShowDialog(this) != DialogResult.OK) return;
+                path = d.FileName;
+            }
             try
             {
-                StringBuilder sb = new StringBuilder();
-                sb.Append("{\n  \"version\": 1,\n  \"modules\": [");
-                for (int i = 0; i < mods.Count; i++) { sb.Append("\"").Append(mods[i]).Append("\""); if (i < mods.Count - 1) sb.Append(", "); }
-                sb.Append("],\n");
-                // Раньше профиль помнил только модули, и точная настройка
-                // «применить не всё, а выбранное» при переносе на другой
-                // компьютер терялась.
-                List<string> skip = SkippedItems();
-                sb.Append("  \"skip\": [");
-                for (int i = 0; i < skip.Count; i++) { sb.Append("\"").Append(skip[i]).Append("\""); if (i < skip.Count - 1) sb.Append(", "); }
-                sb.Append("],\n");
-                sb.Append("  \"backup\": ").Append(_optBackup.Checked ? "true" : "false").Append(",\n");
-                sb.Append("  \"restorePoint\": ").Append(_optRestore.Checked ? "true" : "false").Append("\n}\n");
-                File.WriteAllText(d.FileName, sb.ToString(), new UTF8Encoding(false));
-                _status.Text = L.T("Профиль сохранён: ") + Path.GetFileName(d.FileName);
+                // Вместе с модулями профиль помнит и снятые пункты внутри них:
+                // иначе точная настройка «применить не всё, а выбранное» при
+                // переносе на другой компьютер теряется.
+                string json = "{\n  \"version\": 1,\n" +
+                              "  \"modules\": [" + JsonStrings(SelectedModules()) + "],\n" +
+                              "  \"skip\": [" + JsonStrings(SkippedItems()) + "],\n" +
+                              "  \"backup\": " + (_optBackup.Checked ? "true" : "false") + ",\n" +
+                              "  \"restorePoint\": " + (_optRestore.Checked ? "true" : "false") + "\n}\n";
+                File.WriteAllText(path, json, new UTF8Encoding(false));
+                _status.Text = L.T("Профиль сохранён: ") + Path.GetFileName(path);
             }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, L.T("Ошибка"), MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
 
+        // Идентификаторы модулей и настроек — латиница без кавычек, экранировать нечего
+        private static string JsonStrings(List<string> items)
+        {
+            return items.Count == 0 ? "" : "\"" + string.Join("\", \"", items.ToArray()) + "\"";
+        }
+
         private void OnLoadProfile(object sender, EventArgs e)
         {
-            OpenFileDialog d = new OpenFileDialog();
-            d.Filter = L.T("Профиль Win11Privacy (*.json)|*.json|Все файлы|*.*");
-            if (d.ShowDialog(this) != DialogResult.OK) return;
-            try { ApplyProfileFile(d.FileName); _status.Text = L.T("Профиль загружен: ") + Path.GetFileName(d.FileName); }
+            string path;
+            using (OpenFileDialog d = new OpenFileDialog())
+            {
+                d.Filter = L.T("Профиль Win11Privacy (*.json)|*.json|Все файлы|*.*");
+                if (d.ShowDialog(this) != DialogResult.OK) return;
+                path = d.FileName;
+            }
+            try { ApplyProfileFile(path); _status.Text = L.T("Профиль загружен: ") + Path.GetFileName(path); }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, L.T("Ошибка"), MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
 
@@ -367,55 +370,53 @@ namespace Win11Privacy
 
         private void RefreshMonitor()
         {
-            RunJson("-Monitor -MonitorHours 24", L.T("Сбор статистики соединений…"), delegate(Dictionary<string, object> d) { RenderMonitor(d); });
+            RunJson("-Monitor -MonitorHours 24", L.T("Сбор статистики соединений…"), RenderMonitor);
         }
 
         private void RenderMonitor(Dictionary<string, object> d)
         {
-            {
-                if (d == null || d.ContainsKey("error")) { _monitorList.Controls.Clear(); SectionHeader sh = new SectionHeader(d != null ? Json.GetStr(d, "error") : L.T("Нет данных — PowerShell недоступен")); sh.Font = Font; _monitorList.Controls.Add(sh); _monitorList.Restack(); return; }
-                _lastMonitor = d;
-                _monitorEnabled = Json.GetBool(d, "enabled"); UpdateMonitorButton();
-                int total = Json.GetInt(d, "total"), tele = Json.GetInt(d, "telemetryHits");
-                _monitorTiles.Controls.Clear();
-                _monitorTiles.Controls.Add(Tile(L.T("Исходящих соединений"), total.ToString(), L.T("за 24 часа"), Theme.Accent));
-                _monitorTiles.Controls.Add(Tile(L.T("К телеметрии"), tele.ToString(), L.T("распознано по имени домена"), tele == 0 ? Theme.Ok : Theme.Warn));
-                _monitorTiles.Controls.Add(Tile(L.T("Отклонено"), Json.GetInt(d, "blocked").ToString(), L.T("попыток срезал брандмауэр"), Theme.Ok));
-                _monitorTiles.Controls.Add(Tile(L.T("Правил брандмауэра"), Json.GetInt(d, "firewallRules").ToString(), _monitorEnabled ? L.T("монитор включён") : L.T("монитор выключен"), _monitorEnabled ? Theme.Ok : Theme.TextFaint));
+            if (d == null || d.ContainsKey("error")) { _monitorList.Controls.Clear(); SectionHeader sh = new SectionHeader(d != null ? Json.GetStr(d, "error") : L.T("Нет данных — PowerShell недоступен")); sh.Font = Font; _monitorList.Controls.Add(sh); _monitorList.Restack(); return; }
+            _lastMonitor = d;
+            _monitorEnabled = Json.GetBool(d, "enabled"); UpdateMonitorButton();
+            int total = Json.GetInt(d, "total"), tele = Json.GetInt(d, "telemetryHits");
+            _monitorTiles.Controls.Clear();
+            _monitorTiles.Controls.Add(Tile(L.T("Исходящих соединений"), total.ToString(), L.T("за 24 часа"), Theme.Accent));
+            _monitorTiles.Controls.Add(Tile(L.T("К телеметрии"), tele.ToString(), L.T("распознано по имени домена"), tele == 0 ? Theme.Ok : Theme.Warn));
+            _monitorTiles.Controls.Add(Tile(L.T("Отклонено"), Json.GetInt(d, "blocked").ToString(), L.T("попыток срезал брандмауэр"), Theme.Ok));
+            _monitorTiles.Controls.Add(Tile(L.T("Правил брандмауэра"), Json.GetInt(d, "firewallRules").ToString(), _monitorEnabled ? L.T("монитор включён") : L.T("монитор выключен"), _monitorEnabled ? Theme.Ok : Theme.TextFaint));
 
-                _monitorList.Controls.Clear();
-                List<object> procs = Json.GetArr(d, "byProcess");
-                if (procs.Count > 0)
+            _monitorList.Controls.Clear();
+            List<object> procs = Json.GetArr(d, "byProcess");
+            if (procs.Count > 0)
+            {
+                SectionHeader sh = new SectionHeader(L.T("Кто отправляет — можно закрыть выход в сеть")); sh.Font = Font; _monitorList.Controls.Add(sh);
+                foreach (object o in procs)
                 {
-                    SectionHeader sh = new SectionHeader(L.T("Кто отправляет — можно закрыть выход в сеть")); sh.Font = Font; _monitorList.Controls.Add(sh);
-                    foreach (object o in procs)
-                    {
-                        Dictionary<string, object> pr = Json.Obj(o);
-                        NetAppRow r = new NetAppRow(Json.GetStr(pr, "name"), Json.GetInt(pr, "count") + L.T(" соед."),
-                                                    Json.GetStr(pr, "path"), Json.GetBool(pr, "blocked"));
-                        r.Font = Font;
-                        r.ToggleBlock += OnToggleAppBlock;
-                        _monitorList.Controls.Add(r);
-                    }
+                    Dictionary<string, object> pr = Json.Obj(o);
+                    NetAppRow r = new NetAppRow(Json.GetStr(pr, "name"), Json.GetInt(pr, "count") + L.T(" соед."),
+                                                Json.GetStr(pr, "path"), Json.GetBool(pr, "blocked"));
+                    r.Font = Font;
+                    r.ToggleBlock += OnToggleAppBlock;
+                    _monitorList.Controls.Add(r);
                 }
-                List<object> dests = Json.GetArr(d, "byDest");
-                if (dests.Count > 0)
-                {
-                    SectionHeader sh = new SectionHeader(L.T("Куда (адреса назначения)")); sh.Font = Font; _monitorList.Controls.Add(sh);
-                    foreach (object o in dests)
-                    {
-                        Dictionary<string, object> ds = Json.Obj(o);
-                        string dom = Json.GetStr(ds, "domain"); string ip = Json.GetStr(ds, "ip");
-                        string label = string.IsNullOrEmpty(dom) ? ip : (dom + "  (" + ip + ")");
-                        bool tel = System.Text.RegularExpressions.Regex.IsMatch(dom, "telemetry|events\\.data|vortex|aria|watson|data\\.microsoft", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                        _monitorList.Controls.Add(new KvRow(label, Json.GetInt(ds, "count") + "×", tel) { Font = this.Font });
-                    }
-                }
-                if (procs.Count == 0 && dests.Count == 0)
-                { SectionHeader sh = new SectionHeader(_monitorEnabled ? L.T("Пока ничего не зафиксировано — данные появятся по мере работы") : L.T("Включите монитор, чтобы начать сбор")); sh.Font = Font; _monitorList.Controls.Add(sh); }
-                try { _monitorList.AutoScrollPosition = Point.Empty; } catch { }
-            _monitorList.Restack();
             }
+            List<object> dests = Json.GetArr(d, "byDest");
+            if (dests.Count > 0)
+            {
+                SectionHeader sh = new SectionHeader(L.T("Куда (адреса назначения)")); sh.Font = Font; _monitorList.Controls.Add(sh);
+                foreach (object o in dests)
+                {
+                    Dictionary<string, object> ds = Json.Obj(o);
+                    string dom = Json.GetStr(ds, "domain"); string ip = Json.GetStr(ds, "ip");
+                    string label = string.IsNullOrEmpty(dom) ? ip : (dom + "  (" + ip + ")");
+                    bool tel = Regex.IsMatch(dom, "telemetry|events\\.data|vortex|aria|watson|data\\.microsoft", RegexOptions.IgnoreCase);
+                    _monitorList.Controls.Add(new KvRow(label, Json.GetInt(ds, "count") + "×", tel) { Font = this.Font });
+                }
+            }
+            if (procs.Count == 0 && dests.Count == 0)
+            { SectionHeader sh = new SectionHeader(_monitorEnabled ? L.T("Пока ничего не зафиксировано — данные появятся по мере работы") : L.T("Включите монитор, чтобы начать сбор")); sh.Font = Font; _monitorList.Controls.Add(sh); }
+            try { _monitorList.AutoScrollPosition = Point.Empty; } catch { }
+            _monitorList.Restack();
         }
 
         // ================================================================== //
@@ -477,6 +478,11 @@ namespace Win11Privacy
             });
         }
 
+        private static string JoinList(List<object> items)
+        {
+            return string.Join(", ", items.ConvertAll<string>(Json.Str).ToArray());
+        }
+
         private void RenderGuard()
         {
             if (_guardBody == null) return;
@@ -500,7 +506,7 @@ namespace Win11Privacy
                     _guardBody.Controls.Add(new KvRow(L.T("Сбито обновлениями"), Json.GetArr(last, "drifted").Count.ToString(), false) { Font = this.Font });
                     _guardBody.Controls.Add(new KvRow(L.T("Исправлено"), Json.GetInt(last, "fixed").ToString(), false) { Font = this.Font });
                     List<object> kb = Json.GetArr(last, "hotfixes");
-                    if (kb.Count > 0) { StringBuilder sb = new StringBuilder(); foreach (object o in kb) { if (sb.Length > 0) sb.Append(", "); sb.Append(Json.Str(o)); } _guardBody.Controls.Add(new KvRow(L.T("Обновления Windows"), sb.ToString(), false) { Font = this.Font }); }
+                    if (kb.Count > 0) _guardBody.Controls.Add(new KvRow(L.T("Обновления Windows"), JoinList(kb), false) { Font = this.Font });
                 }
             }
 
@@ -523,11 +529,7 @@ namespace Win11Privacy
                 sh4.Font = Font; _guardBody.Controls.Add(sh4);
                 List<object> kb2 = Json.GetArr(_lastDiff, "hotfixes");
                 if (kb2.Count > 0)
-                {
-                    StringBuilder sb = new StringBuilder();
-                    foreach (object o in kb2) { if (sb.Length > 0) sb.Append(", "); sb.Append(Json.Str(o)); }
-                    _guardBody.Controls.Add(new KvRow(L.T("За этот период установлены обновления"), sb.ToString(), broke > 0) { Font = this.Font });
-                }
+                    _guardBody.Controls.Add(new KvRow(L.T("За этот период установлены обновления"), JoinList(kb2), broke > 0) { Font = this.Font });
                 foreach (object o in Json.GetArr(_lastDiff, "changes"))
                 {
                     Dictionary<string, object> c = Json.Obj(o);

@@ -24,6 +24,7 @@ namespace Win11Privacy
             int u = Font.Height;
             TableLayoutPanel page = new TableLayoutPanel();
             page.ColumnCount = 1; page.RowCount = 4;
+            page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             page.BackColor = Theme.WindowBg;
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -68,7 +69,7 @@ namespace Win11Privacy
             _btnXrayBase = new ModernButton(L.T("Запомнить как «до»"), false); _btnXrayBase.Click += delegate { RunXrayScan(true); };
             _btnXrayWipe = new ModernButton(L.T("Стереть копию"), false); _btnXrayWipe.Click += OnXrayWipe;
             foreach (ModernButton b in new[] { _btnXrayRec, _btnXrayScan, _btnXrayBase, _btnXrayWipe })
-            { b.Font = b.Primary ? new Font(Font, FontStyle.Bold) : Font; b.Margin = new Padding((int)(u * 0.4F), 0, 0, (int)(u * 0.3F)); xb.Controls.Add(b); }
+            { b.Font = b.Primary ? Theme.Bold(Font) : Font; b.Margin = new Padding((int)(u * 0.4F), 0, 0, (int)(u * 0.3F)); xb.Controls.Add(b); }
             ci.Controls.Add(xb, 0, 1);
             ctl.Controls.Add(ci);
             page.Controls.Add(ctl, 0, 1);
@@ -145,7 +146,7 @@ namespace Win11Privacy
                     _xrayList.Controls.Clear();
                     SectionHeader sh = new SectionHeader(err); sh.Font = Font; _xrayList.Controls.Add(sh);
                     try { _xrayList.AutoScrollPosition = Point.Empty; } catch { }
-            _xrayList.Restack(); _xrayState.Text = err; return;
+                    _xrayList.Restack(); _xrayState.Text = err; return;
                 }
                 _lastXray = d;
                 RenderXray(d);
@@ -170,10 +171,11 @@ namespace Win11Privacy
                 object dp = Json.Get(d, "deltaPercent");
                 if (dp != null) double.TryParse(dp.ToString().Replace(',', '.'), System.Globalization.NumberStyles.Any,
                     System.Globalization.CultureInfo.InvariantCulture, out delta);
-                bool better = perDay < bp;
+                bool better = perDay < bp, worse = perDay > bp;
                 _xrayTiles.Controls.Add(Tile(better ? L.T("Стало меньше на") : L.T("Изменение"),
-                    (better ? "" : "+") + Math.Abs(delta).ToString("0.#") + "%",
-                    L.T("было ") + bp + L.T(" → стало ") + perDay + L.T(" в сутки"), better ? Theme.Ok : Theme.Err));
+                    (worse ? "+" : "") + Math.Abs(delta).ToString("0.#") + "%",
+                    L.T("было ") + bp + L.T(" → стало ") + perDay + L.T(" в сутки"),
+                    better ? Theme.Ok : (worse ? Theme.Err : Theme.Accent)));
             }
             else
             {
@@ -217,7 +219,7 @@ namespace Win11Privacy
                 if (sh != null) double.TryParse(sh.ToString().Replace(',', '.'), System.Globalization.NumberStyles.Any,
                     System.Globalization.CultureInfo.InvariantCulture, out share);
                 XrayCatRow row = new XrayCatRow(
-                    L.T(Json.GetStr(c, "name")), Json.GetInt(c, "count"), share, Json.GetStr(c, "what"),
+                    L.T(Json.GetStr(c, "name")), Json.GetInt(c, "count"), share, L.T(Json.GetStr(c, "what")),
                     Json.GetArr(c, "topNames"),
                     sm != null ? Json.GetStr(sm, "name") : "",
                     sm != null ? Json.GetStr(sm, "time") : "",

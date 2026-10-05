@@ -141,7 +141,7 @@ namespace Win11Privacy
 
             // имя программы + датчик и длительность
             int textW = Math.Max(50, rightEdge - tx);
-            TextRenderer.DrawText(g, _app, new Font(Font, FontStyle.Bold),
+            TextRenderer.DrawText(g, _app, Theme.Bold(Font),
                 new Rectangle(tx, (int)(u * 0.35F), textW, (int)(u * 1.4F)),
                 _active ? Theme.Err : Theme.Text,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
@@ -322,7 +322,7 @@ namespace Win11Privacy
         private int _textLeft, _textWidth, _titleH, _whatH, _valueW;
         private bool _inLayout;
 
-        protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); _bold = new Font(Font, FontStyle.Bold); Relayout(); }
+        protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); _bold = Theme.Bold(Font); Relayout(); }
         protected override void OnResize(EventArgs e) { base.OnResize(e); Relayout(); }
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; Invalidate(); }
@@ -356,7 +356,7 @@ namespace Win11Privacy
             _inLayout = true;
             try
             {
-                if (_bold == null) _bold = new Font(Font, FontStyle.Bold);
+                if (_bold == null) _bold = Theme.Bold(Font);
                 int u = U;
                 int box = (int)(u * 1.15F);
                 _textLeft = (int)(u * 0.6F) + box + (int)(u * 0.7F);
@@ -410,7 +410,7 @@ namespace Win11Privacy
                     using (Pen pen = new Pen(Theme.AccentText, 1.8F))
                     {
                         pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round;
-                        float cx = bx + box * 0.5F, cy = by + box * 0.55F;
+                        float cy = by + box * 0.55F;
                         g.DrawLine(pen, bx + box * 0.24F, cy, bx + box * 0.43F, by + box * 0.72F);
                         g.DrawLine(pen, bx + box * 0.43F, by + box * 0.72F, bx + box * 0.78F, by + box * 0.28F);
                     }
@@ -472,7 +472,7 @@ namespace Win11Privacy
         private bool HasButton { get { return AppPath.Length > 0; } }
 
         protected override void OnFontChanged(EventArgs e)
-        { base.OnFontChanged(e); _bold = new Font(Font, FontStyle.Bold); Height = (int)(Font.Height * 2.4F); }
+        { base.OnFontChanged(e); _bold = Theme.Bold(Font); Height = (int)(Font.Height * 2.4F); }
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; _btnHover = false; Invalidate(); }
         protected override void OnEnter(EventArgs e) { base.OnEnter(e); Invalidate(); }
@@ -514,7 +514,7 @@ namespace Win11Privacy
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
             int u = Font.Height;
-            if (_bold == null) _bold = new Font(Font, FontStyle.Bold);
+            if (_bold == null) _bold = Theme.Bold(Font);
 
             if (_hover)
             {

@@ -60,7 +60,7 @@ OneDrive: синхронизация и реклама	OneDrive: sync and ads
 Отключение слежения за датчиками…	Turning sensor watch off…
 Стереть неотправленную телеметрию	Wipe unsent telemetry
 вы сразу увидите уведомление.\n\n	you will see an alert at once.\n\n
-25 адресов Microsoft в файл hosts.	25 Microsoft addresses into hosts.
+Адреса телеметрии Microsoft — в файл hosts.	Microsoft telemetry addresses, written to the hosts file.
 Можно убрать — ставится без спроса	Can be removed — installed unasked
 Не удалось запустить PowerShell:\n	Could not start PowerShell:\n
 Не установлено на этом компьютере.	Not installed on this computer.

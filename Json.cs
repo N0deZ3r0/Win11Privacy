@@ -12,9 +12,9 @@ namespace Win11Privacy
     {
         public static object Parse(string s)
         {
+            if (s == null) return null;
             int i = 0;
-            object v = ParseValue(s, ref i);
-            return v;
+            return ParseValue(s, ref i);
         }
 
         public static Dictionary<string, object> ParseObject(string s)
@@ -103,9 +103,11 @@ namespace Win11Privacy
                         case 'r': sb.Append('\r'); break;
                         case 't': sb.Append('\t'); break;
                         case 'u':
-                            if (i + 4 <= s.Length)
+                            // битый код символа не должен ронять разбор всего ответа
+                            int code;
+                            if (i + 4 <= s.Length &&
+                                int.TryParse(s.Substring(i, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out code))
                             {
-                                int code = int.Parse(s.Substring(i, 4), NumberStyles.HexNumber);
                                 sb.Append((char)code);
                                 i += 4;
                             }

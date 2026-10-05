@@ -111,43 +111,53 @@ jobs:
               /resource:app.ico,app.ico /resource:app.png,app.png `
               *.cs
           if ($LASTEXITCODE -ne 0) { throw "тестовая сборка интерфейса не удалась" }
+          # Тестовая сборка печатает в UTF-8, и читать её надо так же. Иначе
+          # «ОБРЕЗАНО» и «ВЫЛЕЗ» приходят вопросительными знаками, и проверки
+          # ниже не срабатывают — так и было, пока кодировку не задали явно.
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           $env:WIN11_TEST_MOCK = '1'
           $env:WIN11_TEST_DELAY = '1500'
           $env:WIN11_TEST_DUMP = '1'      # вместе со снимком печатается геометрия страницы
           $pages = @('home','settings','xray','dossier','audit','monitor','apps','startup','guard','changes','timeline','log','about')
           $bad = 0
-          foreach ($lang in @('ru','en')) {
-              if ($lang -eq 'en') { $env:WIN11_TEST_EN = '1' } else { Remove-Item Env:WIN11_TEST_EN -ErrorAction SilentlyContinue }
-              foreach ($page in $pages) {
-                  $env:WIN11_TEST_PAGE = $page
-                  $shot = "shot-$lang-$page.png"
-                  $env:WIN11_TEST_SHOT = $shot
-                  $out = (& .\uitest.exe 2>&1 | Out-String)
-                  $count = 0
-                  if ($out -match 'controls=(\d+)') { $count = [int]$Matches[1] }
-                  if ($out -notmatch 'UITEST ok') {
-                      Write-Host "::error::страница $page ($lang) не открылась"
-                      Write-Host $out
-                      $bad++
-                  } elseif (-not (Test-Path $shot)) {
-                      Write-Host "::error::страница $page ($lang) не дала снимок"
-                      $bad++
-                  } elseif ($count -lt 3) {
-                      Write-Host "::error::страница $page ($lang) осталась пустой (контролов: $count)"
-                      $bad++
-                  } elseif ($out -match 'ОБРЕЗАНО') {
-                      Write-Host "::error::на странице $page ($lang) обрезан текст"
-                      Write-Host (($out -split "`n" | Where-Object { $_ -match 'ОБРЕЗАНО' }) -join "`n")
-                      $bad++
-                  } elseif ($out -match 'ВЫЛЕЗ') {
-                      Write-Host "::error::на странице $page ($lang) элемент вылез за родителя"
-                      Write-Host (($out -split "`n" | Where-Object { $_ -match 'ВЫЛЕЗ' }) -join "`n")
-                      $bad++
-                  } else {
-                      Write-Host ("  ok: {0} ({1}), контролов: {2}" -f $page, $lang, $count)
+          # два размера окна: обычный и самый маленький — там текст обрезается первым
+          foreach ($size in @('normal', 'min')) {
+              if ($size -eq 'min') { $env:WIN11_TEST_SIZE = 'min' } else { Remove-Item Env:WIN11_TEST_SIZE -ErrorAction SilentlyContinue }
+              foreach ($lang in @('ru','en')) {
+                  if ($lang -eq 'en') { $env:WIN11_TEST_EN = '1' } else { Remove-Item Env:WIN11_TEST_EN -ErrorAction SilentlyContinue }
+                  foreach ($page in $pages) {
+                      $what = "$page ($lang, $size)"
+                      $env:WIN11_TEST_PAGE = $page
+                      $shot = "shot-$size-$lang-$page.png"
+                      $env:WIN11_TEST_SHOT = $shot
+                      $out = (& .\uitest.exe 2>&1 | Out-String)
+                      $count = 0
+                      if ($out -match 'controls=(\d+)') { $count = [int]$Matches[1] }
+                      if ($out -notmatch 'UITEST ok') {
+                          Write-Host "::error::страница $what не открылась"
+                          Write-Host $out
+                          $bad++
+                      } elseif (-not (Test-Path $shot)) {
+                          Write-Host "::error::страница $what не дала снимок"
+                          $bad++
+                      } elseif ($count -lt 3) {
+                          Write-Host "::error::страница $what осталась пустой (контролов: $count)"
+                          $bad++
+                      } elseif ($out -match 'ОБРЕЗАНО') {
+                          Write-Host "::error::на странице $what обрезан текст"
+                          Write-Host (($out -split "`n" | Where-Object { $_ -match 'ОБРЕЗАНО' }) -join "`n")
+                          $bad++
+                      } elseif ($out -match 'ВЫЛЕЗ') {
+                          Write-Host "::error::на странице $what элемент вылез за родителя"
+                          Write-Host (($out -split "`n" | Where-Object { $_ -match 'ВЫЛЕЗ' }) -join "`n")
+                          $bad++
+                      } else {
+                          Write-Host ("  ok: {0}, контролов: {1}" -f $what, $count)
+                      }
                   }
               }
           }
+          Remove-Item Env:WIN11_TEST_SIZE -ErrorAction SilentlyContinue
           # окно первого запуска: его видят раньше всего остального
           $env:WIN11_TEST_WELCOME = '1'
           $env:WIN11_TEST_PAGE = 'home'
@@ -170,7 +180,7 @@ jobs:
           }
           Remove-Item uitest.exe, shot-*.png -Force -ErrorAction SilentlyContinue
           if ($bad -gt 0) { throw "страниц с ошибками: $bad" }
-          Write-Host "Интерфейс: все страницы открылись на двух языках"
+          Write-Host "Интерфейс: все страницы открылись на двух языках и в двух размерах окна"
 
       - name: Собрать Win11Privacy.exe
         shell: pwsh

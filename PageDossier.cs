@@ -24,6 +24,7 @@ namespace Win11Privacy
             int u = Font.Height;
             TableLayoutPanel page = new TableLayoutPanel();
             page.ColumnCount = 1; page.RowCount = 4;
+            page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             page.BackColor = Theme.WindowBg;
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -67,7 +68,7 @@ namespace Win11Privacy
             ModernButton dossierReport = new ModernButton(L.T("Сохранить отчёт"), false);
             dossierReport.Click += OnSaveReport;
             foreach (ModernButton b in new[] { _btnDossierRefresh, _btnDossierAll, _btnDossierWipe, dossierReport })
-            { b.Font = b.Primary ? new Font(Font, FontStyle.Bold) : Font; b.Margin = new Padding((int)(u * 0.4F), 0, 0, (int)(u * 0.3F)); db.Controls.Add(b); }
+            { b.Font = b.Primary ? Theme.Bold(Font) : Font; b.Margin = new Padding((int)(u * 0.4F), 0, 0, (int)(u * 0.3F)); db.Controls.Add(b); }
             ci.Controls.Add(db, 0, 1);
             ctl.Controls.Add(ci);
             page.Controls.Add(ctl, 0, 1);
@@ -316,11 +317,10 @@ namespace Win11Privacy
         private void OnDossierWipe(object sender, EventArgs e)
         {
             List<string> ids = new List<string>();
-            List<string> names = new List<string>();
             foreach (Control c in _dossierList.Controls)
             {
                 WipeRow w = c as WipeRow;
-                if (w != null && w.CanWipe && w.Checked) { ids.Add(w.Id); names.Add(w.Id); }
+                if (w != null && w.CanWipe && w.Checked) ids.Add(w.Id);
             }
             if (ids.Count == 0)
             { MessageBox.Show(this, L.T("Отметьте галочками, какие следы стереть."), L.T("Ничего не выбрано"), MessageBoxButtons.OK, MessageBoxIcon.Information); return; }

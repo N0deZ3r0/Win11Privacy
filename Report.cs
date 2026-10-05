@@ -27,15 +27,19 @@ namespace Win11Privacy
 
         private void OnSaveReport(object sender, EventArgs e)
         {
-            SaveFileDialog sd = new SaveFileDialog();
-            sd.Filter = L.T("HTML-отчёт (*.html)|*.html");
-            sd.FileName = "otchet-privatnost-" + DateTime.Now.ToString("yyyy-MM-dd") + ".html";
-            if (sd.ShowDialog(this) != DialogResult.OK) return;
+            string path;
+            using (SaveFileDialog sd = new SaveFileDialog())
+            {
+                sd.Filter = L.T("HTML-отчёт (*.html)|*.html");
+                sd.FileName = "otchet-privatnost-" + DateTime.Now.ToString("yyyy-MM-dd") + ".html";
+                if (sd.ShowDialog(this) != DialogResult.OK) return;
+                path = sd.FileName;
+            }
             try
             {
-                File.WriteAllText(sd.FileName, BuildReportHtml(), new UTF8Encoding(true));
-                _status.Text = L.T("Отчёт сохранён: ") + Path.GetFileName(sd.FileName);
-                try { Process.Start(sd.FileName); } catch { }
+                File.WriteAllText(path, BuildReportHtml(), new UTF8Encoding(true));
+                _status.Text = L.T("Отчёт сохранён: ") + Path.GetFileName(path);
+                try { Process.Start(path); } catch { }
             }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, L.T("Ошибка"), MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
@@ -49,7 +53,7 @@ namespace Win11Privacy
         private string BuildReportHtml()
         {
             StringBuilder h = new StringBuilder();
-            h.Append("<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\">");
+            h.Append("<!doctype html><html lang=\"" + (L.English ? "en" : "ru") + "\"><head><meta charset=\"utf-8\">");
             h.Append(L.T("<title>Отчёт о приватности Windows 11</title><style>"));
             h.Append("body{font-family:'Segoe UI',system-ui,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;background:#fafafa;color:#1b1b1b;line-height:1.55}");
             h.Append("h1{font-size:28px;margin:0 0 4px}h2{font-size:19px;margin:32px 0 10px;border-bottom:2px solid #e3e3e3;padding-bottom:6px}");
@@ -84,7 +88,7 @@ namespace Win11Privacy
                 {
                     Dictionary<string, object> g = Json.Obj(o);
                     int go = Json.GetInt(g, "ok"), gt = Json.GetInt(g, "total");
-                    h.Append("<tr><td>").Append(Esc(Json.GetStr(g, "title"))).Append("</td><td class=\"")
+                    h.Append("<tr><td>").Append(Esc(L.T(Json.GetStr(g, "title")))).Append("</td><td class=\"")
                      .Append(go == gt ? "ok" : "bad").Append("\">").Append(go).Append(" / ").Append(gt).Append("</td></tr>");
                 }
                 h.Append("</table>");
@@ -121,9 +125,9 @@ namespace Win11Privacy
                 foreach (object o in Json.GetArr(_lastXray, "categories"))
                 {
                     Dictionary<string, object> c = Json.Obj(o);
-                    h.Append("<tr><td>").Append(Esc(Json.GetStr(c, "name"))).Append("</td><td>").Append(Json.GetInt(c, "count"))
+                    h.Append("<tr><td>").Append(Esc(L.T(Json.GetStr(c, "name")))).Append("</td><td>").Append(Json.GetInt(c, "count"))
                      .Append("</td><td>").Append(Esc(Json.GetStr(c, "share"))).Append("%</td><td>")
-                     .Append(Esc(Json.GetStr(c, "what"))).Append("</td></tr>");
+                     .Append(Esc(L.T(Json.GetStr(c, "what")))).Append("</td></tr>");
                 }
                 h.Append("</table>");
                 foreach (object o in Json.GetArr(_lastXray, "categories"))
@@ -131,7 +135,7 @@ namespace Win11Privacy
                     Dictionary<string, object> c = Json.Obj(o);
                     Dictionary<string, object> sm = Json.GetObj(c, "sample");
                     if (sm == null) continue;
-                    h.Append(L.T("<h2>Пример настоящего события: ")).Append(Esc(Json.GetStr(c, "name"))).Append("</h2>");
+                    h.Append(L.T("<h2>Пример настоящего события: ")).Append(Esc(L.T(Json.GetStr(c, "name")))).Append("</h2>");
                     h.Append("<div class=\"sub\">").Append(Esc(Json.GetStr(sm, "name"))).Append(" · ").Append(Esc(Json.GetStr(sm, "time"))).Append("</div>");
                     h.Append("<pre>").Append(Esc(Json.GetStr(sm, "payload"))).Append("</pre>");
                     break;   // одного примера в отчёте достаточно
@@ -269,7 +273,7 @@ namespace Win11Privacy
                 foreach (object co in Json.GetArr(_lastSpy, "caps"))
                 {
                     Dictionary<string, object> c = Json.Obj(co);
-                    string capTitle = Json.GetStr(c, "title");
+                    string capTitle = L.T(Json.GetStr(c, "title"));
                     int n = 0;
                     foreach (object io in Json.GetArr(c, "items"))
                     {
@@ -293,7 +297,7 @@ namespace Win11Privacy
                 foreach (object o in Json.GetArr(_lastFoot, "items"))
                 {
                     Dictionary<string, object> it = Json.Obj(o);
-                    h.Append("<tr><td>").Append(Esc(Json.GetStr(it, "title"))).Append("</td><td>")
+                    h.Append("<tr><td>").Append(Esc(L.T(Json.GetStr(it, "title")))).Append("</td><td>")
                      .Append(Esc(Json.GetStr(it, "value"))).Append("</td></tr>");
                 }
                 h.Append("</table>");

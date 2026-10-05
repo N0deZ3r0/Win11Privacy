@@ -142,7 +142,7 @@ namespace Win11Privacy
             col.Margin = new Padding(0);
 
             Label t = new Label();
-            t.Text = title; t.Font = new Font(Font, FontStyle.Bold); t.ForeColor = Theme.Text;
+            t.Text = title; t.Font = Theme.Bold(Font); t.ForeColor = Theme.Text;
             t.AutoSize = true; t.Margin = new Padding(0, 0, 0, (int)(u * 0.25F));
             Label b = new Label();
             b.Text = body; b.ForeColor = Theme.TextDim; b.AutoSize = true; b.Margin = new Padding(0);

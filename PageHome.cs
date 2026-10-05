@@ -33,6 +33,7 @@ namespace Win11Privacy
             TableLayoutPanel page = new TableLayoutPanel();
             _homePage = page;
             page.ColumnCount = 1; page.RowCount = 5;
+            page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             page.BackColor = Theme.WindowBg;
             page.Dock = DockStyle.Top;
             page.AutoSize = true; page.AutoSizeMode = AutoSizeMode.GrowAndShrink;
@@ -107,9 +108,10 @@ namespace Win11Privacy
 
             TableLayoutPanel bi = new TableLayoutPanel();
             bi.Dock = DockStyle.Fill; bi.BackColor = Theme.CardBg;
-            bi.ColumnCount = 3; bi.RowCount = 2;
+            bi.ColumnCount = 3; bi.RowCount = 3;
             bi.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             bi.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            bi.RowStyles.Add(new RowStyle(SizeType.AutoSize));                         // кнопки — на узком окне
             bi.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, (int)(u * 7.4F)));
             bi.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             bi.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -147,7 +149,7 @@ namespace Win11Privacy
             _msYear    = new MiniStat(L.T("уйдёт за год"), GClock, Theme.Err);
             _msBlocked = new MiniStat(L.T("доменов молчат"), GFire, Theme.Accent);
             foreach (MiniStat m in new[] { _msEvents, _msYear, _msBlocked })
-            { m.Font = Font; m.Margin = new Padding(0, 0, (int)(u * 1.0F), 0); minis.Controls.Add(m); }
+            { m.Font = Font; m.Margin = new Padding(0, 0, (int)(u * 0.9F), 0); minis.Controls.Add(m); }
             verdict.Controls.Add(_verdictTitle, 0, 0);
             verdict.Controls.Add(_verdictSub, 0, 1);
             bi.Controls.Add(verdict, 1, 0);
@@ -161,7 +163,7 @@ namespace Win11Privacy
             actions.Margin = new Padding((int)(u * 0.6F), 0, 0, 0);
             _homeActions = actions;
             ModernButton bApply = new ModernButton(L.T("Настроить и применить"), true);
-            bApply.Font = new Font(Font, FontStyle.Bold);
+            bApply.Font = Theme.Bold(Font);
             bApply.Click += delegate { Navigate("settings"); };
             ModernButton bAudit = new ModernButton(L.T("Проверить"), false);
             bAudit.Font = Font;
@@ -179,7 +181,8 @@ namespace Win11Privacy
             // --- карточки разделов с живыми статусами --------------------------
             TileGrid quick = new TileGrid();
             quick.Dock = DockStyle.Fill; quick.AutoSize = true; quick.Font = Font;
-            quick.MinTileWidthU = 13.0F; quick.TileHeightU = 4.0F; quick.MaxCols = 3;
+            // плитка не уже своего статуса: в три колонки «29.08 — обновление Windows» обрывалось
+            quick.MinTileWidthU = 17.2F; quick.TileHeightU = 4.0F; quick.MaxCols = 3;
             quick.Margin = new Padding(0, 0, 0, (int)(u * 0.7F));
             quick.Resize += delegate { FitHomeHeight(); };
             _qcXray    = new ActionCard(L.T("Рентген"), GXray, Theme.Warn);
@@ -233,36 +236,73 @@ namespace Win11Privacy
             return scroll;
         }
 
-        // На узком окне кнопки встают столбиком, на широком — в один ряд
+        // Кнопки статусной панели: на широком окне — в ряд справа от вердикта,
+        // на среднем — столбиком, а на узком уходят отдельной строкой вниз.
+        // Столбик справа отнимал у вердикта ширину, и текст обрывался.
         private void LayoutHomeActions(Control band)
         {
-            if (_homeActions == null || band == null) return;
+            TableLayoutPanel grid = _homeActions == null ? null : _homeActions.Parent as TableLayoutPanel;
+            if (grid == null || band == null) return;
             int u = Font.Height;
-            bool row = band.ClientSize.Width >= u * 58;
+            int w = band.ClientSize.Width;
+            bool below = w < u * 50;
+            bool row = below || w >= u * 58;
             FlowDirection want = row ? FlowDirection.LeftToRight : FlowDirection.TopDown;
-            if (_homeActions.FlowDirection == want) return;
-            _homeActions.SuspendLayout();
+            if (_homeActions.FlowDirection == want && (grid.GetRow(_homeActions) == 2) == below) return;
+            grid.SuspendLayout();
             _homeActions.FlowDirection = want;
             foreach (Control c in _homeActions.Controls)
-                c.Margin = row ? new Padding((int)(u * 0.4F), 0, 0, 0)
+                c.Margin = below ? new Padding(0, 0, (int)(u * 0.4F), 0)
+                         : row ? new Padding((int)(u * 0.4F), 0, 0, 0)
                                : new Padding(0, 0, 0, (int)(u * 0.35F));
-            _homeActions.ResumeLayout(true);
+            grid.SetCellPosition(_homeActions, new TableLayoutPanelCellPosition(below ? 0 : 2, below ? 2 : 0));
+            grid.SetColumnSpan(_homeActions, below ? 3 : 1);
+            // свою колонку кнопки освобождают: иначе она раздувается под ряд, который тянется через все три
+            grid.ColumnStyles[2].SizeType = below ? SizeType.Absolute : SizeType.AutoSize;
+            grid.ColumnStyles[2].Width = 0;
+            _homeActions.Anchor = below ? AnchorStyles.Left : AnchorStyles.Right;
+            _homeActions.Margin = below ? new Padding(0, (int)(u * 0.6F), 0, 0) : new Padding((int)(u * 0.6F), 0, 0, 0);
+            grid.ResumeLayout(true);
+            _homePage.RowStyles[2].Height = (int)(u * (below ? 12.2F : 9.4F));
+            FitHomeHeight();
         }
 
-        // Ряд кнопок: выровнен вправо и сам переносится, если не хватает ширины
+        // Карточка управления: описание сверху, ряд кнопок снизу. Ряд выровнен
+        // вправо и переносится, когда не хватает ширины, а карточка подрастает:
+        // на узком окне кнопки наезжали на описание.
         private void AttachButtonRow(FlowLayoutPanel row, Control card)
         {
             row.FlowDirection = FlowDirection.LeftToRight;
-            row.WrapContents = true;
             row.AutoSize = true;
             row.Anchor = AnchorStyles.Right;
+            WrapToWidth(row, card);
+            Label hint = null;
+            EventHandler grow = delegate
+            {
+                TableLayoutPanel page = card.Parent as TableLayoutPanel;
+                int w = card.ClientSize.Width - card.Padding.Horizontal;
+                int at = page == null ? -1 : page.GetRow(card);     // пока карточку добавляют, строки у неё ещё нет
+                if (at < 0 || at >= page.RowStyles.Count || hint == null || w <= 120) return;
+                int u = Font.Height;
+                int text = TextRenderer.MeasureText(hint.Text, hint.Font, new Size(w, 0), TextFormatFlags.WordBreak).Height;
+                int need = text + WrappedHeight(row, w) + row.Margin.Vertical +
+                           card.Padding.Vertical + card.Margin.Vertical + (int)(u * 0.3F);
+                RowStyle style = page.RowStyles[at];
+                int h = Math.Max((int)(u * 7.6F), need);
+                if (style.SizeType != SizeType.Absolute || (int)style.Height == h) return;
+                // Мы внутри раскладки страницы: высоту строки, изменённую сейчас,
+                // она уже не учтёт. Меняем следующим шагом, когда раскладка закончится.
+                if (IsHandleCreated) BeginInvoke((MethodInvoker)delegate { style.Height = h; });
+                else style.Height = h;
+            };
             card.Resize += delegate
             {
-                int w = card.ClientSize.Width - card.Padding.Horizontal;
-                if (w <= 120 || row.MaximumSize.Width == w) return;
-                row.MaximumSize = new Size(w, 0);
-                row.PerformLayout();
-                if (row.Parent != null) row.Parent.PerformLayout();
+                if (hint == null && row.Parent != null)
+                {
+                    foreach (Control c in row.Parent.Controls) if (c is Label) hint = (Label)c;
+                    if (hint != null) hint.TextChanged += grow;     // описание меняется по ходу работы
+                }
+                grow(card, EventArgs.Empty);
             };
         }
 
@@ -274,7 +314,7 @@ namespace Win11Privacy
             c.Padding = new Padding((int)(u * 0.8F), (int)(u * 0.55F), (int)(u * 0.8F), (int)(u * 0.5F));
             Label l = new Label();
             l.Text = title; l.Dock = DockStyle.Top; l.AutoSize = false;
-            l.Height = (int)(u * 1.7F); l.Font = new Font(Font, FontStyle.Bold); l.ForeColor = Theme.Text;
+            l.Height = (int)(u * 1.7F); l.Font = Theme.Bold(Font); l.ForeColor = Theme.Text;
             l.TextAlign = ContentAlignment.MiddleLeft; l.BackColor = Theme.CardBg;
             c.Controls.Add(l);
             return c;

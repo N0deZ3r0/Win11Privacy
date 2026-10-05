@@ -362,7 +362,7 @@ namespace Win11Privacy
             _map["Отключение слежения за датчиками…"] = "Turning sensor watch off…";
             _map["Стереть неотправленную телеметрию"] = "Wipe unsent telemetry";
             _map["вы сразу увидите уведомление.\n\n"] = "you will see an alert at once.\n\n";
-            _map["25 адресов Microsoft в файл hosts."] = "25 Microsoft addresses into hosts.";
+            _map["Адреса телеметрии Microsoft — в файл hosts."] = "Microsoft telemetry addresses, written to the hosts file.";
             _map["Можно убрать — ставится без спроса"] = "Can be removed — installed unasked";
             _map["Не удалось запустить PowerShell:\n"] = "Could not start PowerShell:\n";
             _map["Не установлено на этом компьютере."] = "Not installed on this computer.";

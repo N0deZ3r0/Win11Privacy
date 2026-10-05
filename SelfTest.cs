@@ -39,6 +39,7 @@ namespace Win11Privacy
 
             Versions();
             Commands();
+            Arguments();
             Verdict();
             Answers();
 
@@ -81,6 +82,19 @@ namespace Win11Privacy
             Check("сканирование рентгена не меняет", !MainForm.EngineWrites("-XrayScan -XrayHours 24"));
             Check("включение записи рентгена меняет", MainForm.EngineWrites("-XrayEnable"));
             Check("пустая строка ничего не меняет", !MainForm.EngineWrites(""));
+        }
+
+        // --- аргументы при перезапуске с правами администратора -------------- //
+        private static void Arguments()
+        {
+            Console.WriteLine();
+            Console.WriteLine("Командная строка при перезапуске");
+            Check("простые ключи остаются как есть",
+                  MainForm.QuoteArgs(new[] { "--audit", "--silent" }) == "--audit --silent");
+            string q = MainForm.QuoteArgs(new[] { "--profile", @"C:\My Files\p.json", "--silent" });
+            Check("путь с пробелом берётся в кавычки", q == @"--profile ""C:\My Files\p.json"" --silent", "получено: " + q);
+            Check("пустой аргумент не пропадает", MainForm.QuoteArgs(new[] { "a", "", "b" }) == "a \"\" b");
+            Check("без аргументов — пустая строка", MainForm.QuoteArgs(new string[0]) == "");
         }
 
         // --- вердикт о версии на GitHub -------------------------------------- //
@@ -131,6 +145,9 @@ namespace Win11Privacy
             Check("null не роняет разбор", Json.GetStr(d, "empty") == "");
             Check("обрезанный ответ не роняет разбор", Json.ParseObject("{\"ok\":1,") == null ||
                                                        Json.GetInt(Json.ParseObject("{\"ok\":1,"), "ok") == 1);
+            Check("битый код символа не роняет разбор", Json.GetStr(Json.ParseObject(@"{""a"":""x\uZZZZy""}"), "a").StartsWith("x"));
+            Check("код символа читается", Json.GetStr(Json.ParseObject(@"{""a"":""\u0416""}"), "a") == "Ж");
+            Check("пустой ответ не роняет разбор", Json.ParseObject(null) == null && Json.ParseObject("") == null);
         }
     }
 }

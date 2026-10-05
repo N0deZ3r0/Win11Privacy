@@ -398,7 +398,7 @@ namespace Win11Privacy
                 TextRenderer.DrawText(g, _data[i].Key, Font,
                     new Rectangle(lx + (int)(u * 1.1F), ly, Width - lx - (int)(u * 1.1F) - ps.Width - (int)(u * 0.6F), (int)(u * 1.5F)),
                     Theme.TextDim, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
-                TextRenderer.DrawText(g, pct, new Font(Font, FontStyle.Bold),
+                TextRenderer.DrawText(g, pct, Theme.Bold(Font),
                     new Rectangle(0, ly, Width - (int)(u * 0.3F), (int)(u * 1.5F)),
                     Theme.Text, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
                 ly += (int)(u * 1.55F);
