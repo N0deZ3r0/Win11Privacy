@@ -237,6 +237,61 @@ if ($ipFound.Count -eq $ipFns.Count) {
     Check 'разбор имён укладывается в отведённое время' ($ipSw.Elapsed.TotalSeconds -lt 6) ("заняло: {0:N1} с" -f $ipSw.Elapsed.TotalSeconds)
 }
 
+# Блок в hosts: программа обязана узнавать свой блок и убирать его целиком.
+# Метки были по-русски, а файл пишется в ASCII — они превращались в «?»,
+# блок дописывался заново при каждом применении, и откат его не находил.
+$hostsFns = @('Test-HostsBlock', 'Apply-Hosts', 'Remove-HostsBlock')
+$hostsFound = @()
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($hostsFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $hostsFound += $fn.Name }
+}
+foreach ($a in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                                              $n.Left.Extent.Text -like '$script:HostsMark*' }, $true)) {
+    Invoke-Expression $a.Extent.Text
+}
+Check 'работа с hosts найдена в движке' ($hostsFound.Count -eq $hostsFns.Count) ("найдено: " + ($hostsFound -join ','))
+if ($hostsFound.Count -eq $hostsFns.Count) {
+    function Write-Log { param([string]$Message = '') }
+    function ipconfig { }                       # кэш DNS настоящей системы не трогаем
+    $DryRun = $false
+    $script:BackupDir = ''
+    $script:HostsDomains = @('telemetry.example', 'vortex.example')
+    $script:HostsPath = Join-Path $env:TEMP ('win11privacy-hosts-' + [Guid]::NewGuid().ToString('N') + '.txt')
+    try {
+        $own = @('# моя строка', '127.0.0.1 localhost')
+        Set-Content -LiteralPath $script:HostsPath -Value $own -Encoding Default
+        Check 'в чистом файле блока нет' (-not (Test-HostsBlock))
+        Apply-Hosts
+        Check 'после записи блок узнаётся' (Test-HostsBlock)
+        Apply-Hosts
+        $marks = @(Get-Content -LiteralPath $script:HostsPath | Where-Object { $_ -match $script:HostsMarkRegex })
+        Check 'повторное применение не дописывает второй блок' ($marks.Count -eq 2) ("строк-меток: " + $marks.Count)
+        Remove-HostsBlock
+        $left = @(Get-Content -LiteralPath $script:HostsPath)
+        Check 'откат убирает блок целиком' (-not (Test-HostsBlock) -and -not ($left -match 'telemetry\.example'))
+        Check 'чужие строки остаются как были' (($left -join '|') -eq ($own -join '|')) ("получено: " + ($left -join '|'))
+
+        # блок от прежних версий: метки побиты в «?», и таких блоков два подряд
+        $old = @('', '# --- Win11Privacy: ?????????? ?????????? (??????) ---', '0.0.0.0 telemetry.example',
+                 '# --- Win11Privacy: ?????????? ?????????? (?????) ---')
+        Set-Content -LiteralPath $script:HostsPath -Value ($own + $old + $old) -Encoding Default
+        Check 'блок прежних версий узнаётся' (Test-HostsBlock)
+        Remove-HostsBlock
+        $left = @(Get-Content -LiteralPath $script:HostsPath)
+        Check 'блоки прежних версий убираются все' (($left -join '|') -eq ($own -join '|')) ("получено: " + ($left -join '|'))
+
+        # закрывающую метку стёрли руками: чужое после блока трогать нельзя
+        Set-Content -LiteralPath $script:HostsPath -Encoding Default -Value @(
+            $script:HostsMarkStart, '0.0.0.0 telemetry.example', '10.0.0.5 nas.local')
+        Remove-HostsBlock
+        $left = @(Get-Content -LiteralPath $script:HostsPath)
+        Check 'без закрывающей метки чужие строки не теряются' (($left -join '|') -eq '10.0.0.5 nas.local') ("получено: " + ($left -join '|'))
+    } finally {
+        Remove-Item -LiteralPath $script:HostsPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path Function:\ipconfig -ErrorAction SilentlyContinue
+    }
+}
+
 # --------------------------------------------------------------------------- #
 Write-Host ''
 Write-Host 'Порядок объявлений в движке'

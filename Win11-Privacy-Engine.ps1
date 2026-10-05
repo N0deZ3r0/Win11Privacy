@@ -157,11 +157,16 @@ $ChangeItems  = Expand-List $ChangeItems
 # =========================================================================== #
 #  Константы
 # =========================================================================== #
-# Версия. Должна совпадать с MainForm.AppVersion в интерфейсе -- сборка это
+# Версия. Должна совпадать с AppInfo.Version в интерфейсе -- сборка это
 # проверяет, чтобы вшитый движок и окно не рассказывали о себе разное.
 $script:EngineVersion  = '1.10.1'
-$script:HostsMarkStart = '# --- Win11Privacy: блокировка телеметрии (начало) ---'
-$script:HostsMarkEnd   = '# --- Win11Privacy: блокировка телеметрии (конец) ---'
+# Метки блока в hosts — только латиницей. Раньше они были по-русски, а hosts
+# пишется в ASCII: кириллица превращалась в «?», и своего блока программа
+# потом не узнавала — дописывала его заново при каждом применении, а откат
+# его не убирал. По шаблону узнаются и новые метки, и прежние, уже побитые.
+$script:HostsMarkStart = '# --- Win11Privacy: telemetry block (begin) ---'
+$script:HostsMarkEnd   = '# --- Win11Privacy: telemetry block (end) ---'
+$script:HostsMarkRegex = '^# --- Win11Privacy: .+ ---\s*$'
 $script:FwGroup        = 'Win11Privacy'
 # Обычно данные лежат в ProgramData. В переносимом режиме интерфейс
 # передаёт -DataRoot, и всё остаётся рядом с exe — на чужом компьютере
@@ -360,10 +365,17 @@ function Split-TaskPath {
 
 function Ensure-DataDir { if (-not (Test-Path -LiteralPath $script:DataDir)) { New-Item -ItemType Directory -Path $script:DataDir -Force | Out-Null } }
 
-function Save-Json { param([string]$Name, $Object) Ensure-DataDir; ($Object | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $script:DataDir $Name) -Encoding UTF8 }
-# Дописывает накопленный журнал «что было до нас» к changes.json. Раньше это
-# делалось только в самом конце применения модулей — теперь любая команда,
-# меняющая систему, может сохранить свой след для отката одной кнопкой.
+# Файл пишется рядом и подменяет прежний одним движением: обрыв на середине
+# записи (выключили питание, прервали движок) не оставит от журнала отката
+# половину — а журнал единственный путь назад.
+function Save-Json {
+    param([string]$Name, $Object)
+    Ensure-DataDir
+    $path = Join-Path $script:DataDir $Name
+    $tmp = $path + '.tmp'
+    ($Object | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $tmp -Encoding UTF8
+    Move-Item -LiteralPath $tmp -Destination $path -Force
+}
 # --- Резервная копия и точка восстановления --------------------------------- #
 #  Делаются не «на всякий случай» при каждом запуске, а ровно перед первым
 #  настоящим изменением. Если всё уже настроено, на рабочем столе не появится
@@ -491,6 +503,9 @@ function Compress-Journal {
     return $out.ToArray()
 }
 
+# Дописывает накопленный журнал «что было до нас» к changes.json. Раньше это
+# делалось только в самом конце применения модулей — теперь любая команда,
+# меняющая систему, может сохранить свой след для отката одной кнопкой.
 function Save-JournalEntries {
     param([switch]$Quiet)
     if ($DryRun -or $script:Journal.Count -eq 0) { return }
@@ -1283,11 +1298,11 @@ $script:HostsDomains = @(
     'oca.telemetry.microsoft.com.nsatc.net','sqm.telemetry.microsoft.com.nsatc.net',
     'telecommand.telemetry.microsoft.com.nsatc.net','vortex-sandbox.data.microsoft.com',
     'cs11.wpc.v0cdn.net','cs1137.wpc.gammacdn.net','modern.watson.data.microsoft.com',
-    'browser.events.data.msn.com','self.events.data.microsoft.com',
+    'browser.events.data.msn.com',
     'activity.windows.com','licensing.mp.microsoft.com')
 $script:HostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
 
-function Test-HostsBlock { try { return (@(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop) -contains $script:HostsMarkStart) } catch { return $false } }
+function Test-HostsBlock { try { return [bool](@(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop) -match $script:HostsMarkRegex) } catch { return $false } }
 
 function Apply-Hosts {
     if ($DryRun) { Write-Log ("   [тест] будет заблокировано доменов: {0}" -f $script:HostsDomains.Count); return }
@@ -1307,13 +1322,27 @@ function Apply-Hosts {
 
 function Remove-HostsBlock {
     try {
-        $lines = Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop
-        $s = [Array]::IndexOf($lines, $script:HostsMarkStart); $e = [Array]::IndexOf($lines, $script:HostsMarkEnd)
-        if ($s -ge 0 -and $e -gt $s) {
-            $new = @()
-            if ($s -gt 0) { $new += $lines[0..($s-1)] }
-            if ($e -lt ($lines.Count - 1)) { $new += $lines[($e+1)..($lines.Count-1)] }
-            Set-Content -LiteralPath $script:HostsPath -Value $new -Encoding ASCII -Force
+        $lines = @(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop)
+        $keep = New-Object System.Collections.Generic.List[string]
+        $inside = $false; $found = 0
+        foreach ($l in $lines) {
+            if ($l -match $script:HostsMarkRegex) {
+                if (-not $inside) {
+                    $found++
+                    # пустую строку перед блоком ставили мы сами
+                    if ($keep.Count -gt 0 -and $keep[$keep.Count - 1] -eq '') { $keep.RemoveAt($keep.Count - 1) }
+                }
+                $inside = -not $inside
+                continue
+            }
+            # Внутри блока убираем только свои строки. Чужая строка значит, что
+            # закрывающую метку кто-то стёр: дальше идёт уже не наше.
+            if ($inside -and $l -notmatch '^\s*(0\.0\.0\.0\s+\S+)?\s*$') { $inside = $false }
+            if (-not $inside) { $keep.Add($l) }
+        }
+        if ($found -gt 0) {
+            # Default, а не ASCII: чужие строки с нелатинскими буквами остаются как были
+            Set-Content -LiteralPath $script:HostsPath -Value $keep.ToArray() -Encoding Default -Force -ErrorAction Stop
             ipconfig /flushdns | Out-Null
             Write-Log '   [+] блок блокировки доменов удалён'
         } else { Write-Log '   [-] блока в hosts нет' }
@@ -3733,21 +3762,24 @@ if ($Audit) {
 function Restore-Journal {
     $j = Load-Json 'changes.json'
     if (-not $j -or -not $j.items) { Write-Log '   [-] журнал пуст — возвращать нечего'; return @{ restored = 0; failed = 0 } }
-    $items = @($j.items)
-    [array]::Reverse($items)
-    $ok = 0; $bad = 0; $seen = @{}; $startBack = 0
-    foreach ($e in $items) {
+    # Журнал идёт от старых записей к новым, и про каждый параметр нужна
+    # первая: она помнит состояние до нас. Раньше список переворачивался, и у
+    # журнала с повторами (версии до схлопывания) возвращалось то значение,
+    # которое программа сама же записала в прошлый раз.
+    $ok = 0; $seen = @{}; $startBack = 0
+    $failed = New-Object System.Collections.Generic.List[object]
+    foreach ($e in @($j.items)) {
         # записи автозагрузки возвращаем тем же способом, каким гасили
         if ("$($e.kind)" -eq 'startup') {
             $key = "startup|$($e.id)"
             if ($seen.ContainsKey($key)) { continue }
             $seen[$key] = $true
             $r = Set-StartupState ([string]$e.id) ("$($e.old)" -eq 'On')
-            if ($r.ok) { $startBack++ } else { $bad++ }
+            if ($r.ok) { $startBack++ } else { $failed.Add($e) }
             continue
         }
         if ("$($e.kind)" -ne 'reg') { continue }
-        $key = "$($e.path)|$($e.name)"
+        $key = ("$($e.path)|$($e.name)").ToLowerInvariant()
         if ($seen.ContainsKey($key)) { continue }      # только самое раннее состояние
         $seen[$key] = $true
         try {
@@ -3758,12 +3790,19 @@ function Restore-Journal {
                 Remove-ItemProperty -LiteralPath $e.path -Name $e.name -Force -ErrorAction SilentlyContinue
             }
             $ok++
-        } catch { $bad++ }
+        } catch { $failed.Add($e) }
     }
+    $bad = $failed.Count
     Write-Log ("   [+] возвращено параметров реестра: {0}" -f $ok)
     if ($startBack -gt 0) { Write-Log ("   [+] возвращено записей автозагрузки: {0}" -f $startBack) }
-    if ($bad -gt 0) { Write-Log ("   [!] не удалось вернуть: {0}" -f $bad) }
-    try { Remove-Item -LiteralPath (Join-Path $script:DataDir 'changes.json') -Force -ErrorAction SilentlyContinue } catch { }
+    # Что вернуть не удалось, остаётся в журнале: раньше он стирался целиком,
+    # даже когда откат прошёл не весь, и вторая попытка была невозможна.
+    if ($bad -gt 0) {
+        Write-Log ("   [!] не удалось вернуть: {0} -- эти записи остались в журнале" -f $bad)
+        Save-Json 'changes.json' @{ items = $failed.ToArray(); updated = (Get-Date).ToString('s') }
+    } else {
+        try { Remove-Item -LiteralPath (Join-Path $script:DataDir 'changes.json') -Force -ErrorAction SilentlyContinue } catch { }
+    }
     return @{ restored = $ok; startup = $startBack; failed = $bad }
 }
 
