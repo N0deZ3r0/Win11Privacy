@@ -258,8 +258,12 @@ if ($hostsFound.Count -eq $hostsFns.Count) {
     $script:HostsDomains = @('telemetry.example', 'vortex.example')
     $script:HostsPath = Join-Path $env:TEMP ('win11privacy-hosts-' + [Guid]::NewGuid().ToString('N') + '.txt')
     try {
-        $own = @('# моя строка', '127.0.0.1 localhost')
-        Set-Content -LiteralPath $script:HostsPath -Value $own -Encoding Default
+        # Чужая строка с нелатинской буквой задаётся байтом, а не текстом: в
+        # какой кодировке работает машина сборки, заранее неизвестно, а
+        # сохраниться строка обязана в любой.
+        [IO.File]::WriteAllBytes($script:HostsPath,
+            [byte[]]([Text.Encoding]::ASCII.GetBytes('# caf') + 0xE9 + [Text.Encoding]::ASCII.GetBytes("`r`n127.0.0.1 localhost`r`n")))
+        $own = @(Get-Content -LiteralPath $script:HostsPath)
         Check 'в чистом файле блока нет' (-not (Test-HostsBlock))
         Apply-Hosts
         Check 'после записи блок узнаётся' (Test-HostsBlock)
