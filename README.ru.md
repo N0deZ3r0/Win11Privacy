@@ -9,6 +9,7 @@
 
 [![Сборка](https://github.com/N0deZ3r0/Win11Privacy/actions/workflows/build.yml/badge.svg)](https://github.com/N0deZ3r0/Win11Privacy/actions/workflows/build.yml)
 [![Скачать](https://img.shields.io/github/v/release/N0deZ3r0/Win11Privacy?label=%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C)](https://github.com/N0deZ3r0/Win11Privacy/releases/latest)
+[![winget](https://img.shields.io/winget/v/N0deZ3r0.Win11Privacy?label=winget)](https://github.com/microsoft/winget-pkgs/tree/master/manifests/n/N0deZ3r0/Win11Privacy)
 [![Лицензия](https://img.shields.io/badge/%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F-MIT-blue)](LICENSE)
 ![Windows 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows)
 
@@ -101,6 +102,14 @@ Paint при этом работают на обеих версиях и при�
 ---
 
 ## Скачать и запустить
+
+**Через winget:**
+
+```
+winget install N0deZ3r0.Win11Privacy
+```
+
+Затем запускайте командой `Win11Privacy` в новом окне терминала. Или скачайте вручную:
 
 1. Возьмите `Win11Privacy.exe` из [релизов](https://github.com/N0deZ3r0/Win11Privacy/releases/latest).
 2. Правый клик по файлу → **Свойства** → внизу галочка **«Разблокировать»** → ОК.

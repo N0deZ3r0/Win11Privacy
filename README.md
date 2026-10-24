@@ -9,6 +9,7 @@ about you. Watches so that updates do not quietly turn the tracking back on.**
 
 [![Build](https://github.com/N0deZ3r0/Win11Privacy/actions/workflows/build.yml/badge.svg)](https://github.com/N0deZ3r0/Win11Privacy/actions/workflows/build.yml)
 [![Download](https://img.shields.io/github/v/release/N0deZ3r0/Win11Privacy?label=download)](https://github.com/N0deZ3r0/Win11Privacy/releases/latest)
+[![winget](https://img.shields.io/winget/v/N0deZ3r0.Win11Privacy?label=winget)](https://github.com/microsoft/winget-pkgs/tree/master/manifests/n/N0deZ3r0/Win11Privacy)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![Windows 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows)
 
@@ -103,6 +104,14 @@ settings and can be switched with a button on the "About" page.
 ---
 
 ## Download and run
+
+**Via winget:**
+
+```
+winget install N0deZ3r0.Win11Privacy
+```
+
+Then start it with `Win11Privacy` from a new terminal window. Or download it by hand:
 
 1. Take `Win11Privacy.exe` from [Releases](https://github.com/N0deZ3r0/Win11Privacy/releases/latest).
 2. Right-click the file → **Properties** → tick **Unblock** at the bottom → OK.
