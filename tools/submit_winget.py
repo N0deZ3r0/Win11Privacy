@@ -150,7 +150,7 @@ def main():
         '- [x] Have you checked that there aren\'t other open [pull requests](https://github.com/microsoft/winget-pkgs/pulls) '
         'for the same manifest update/change?\n'
         '- [x] Have you validated your manifest locally with `winget validate --manifest <path>`?\n'
-        '- [x] Does your manifest conform to the [1.6 schema](https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest/schema/1.6.0)?\n\n'
+        '- [x] Does your manifest conform to the [1.28 schema](https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest/schema/1.28.0)?\n\n'
         'A single portable executable published in the project\'s GitHub release; the SHA256 above\n'
         'matches `SHA256SUMS.txt` of that release. The program changes system settings and asks for\n'
         'administrator rights itself, hence `ElevationRequirement: elevatesSelf`.\n'

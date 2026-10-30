@@ -34,7 +34,8 @@ except Exception:
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKG_ID = 'N0deZ3r0.Win11Privacy'
 REPO = 'N0deZ3r0/Win11Privacy'
-SCHEMA = '1.6.0'
+SCHEMA = '1.28.0'
+SCHEMA_URL = 'https://aka.ms/winget-manifest.%s.1.28.0.schema.json'
 
 
 def read_version():
@@ -54,7 +55,8 @@ def read_sha(path):
     sys.exit('в %s нет строки про Win11Privacy.exe' % path)
 
 
-VERSION_YAML = u"""# Создано tools/make_winget.py — правьте генератор, а не этот файл
+VERSION_YAML = u"""# yaml-language-server: $schema={schema_url_version}
+# Создано tools/make_winget.py — правьте генератор, а не этот файл
 PackageIdentifier: {pkg}
 PackageVersion: {ver}
 DefaultLocale: en-US
@@ -62,7 +64,8 @@ ManifestType: version
 ManifestVersion: {schema}
 """
 
-INSTALLER_YAML = u"""# Создано tools/make_winget.py — правьте генератор, а не этот файл
+INSTALLER_YAML = u"""# yaml-language-server: $schema={schema_url_installer}
+# Создано tools/make_winget.py — правьте генератор, а не этот файл
 PackageIdentifier: {pkg}
 PackageVersion: {ver}
 InstallerType: portable
@@ -79,7 +82,8 @@ ManifestType: installer
 ManifestVersion: {schema}
 """
 
-LOCALE_YAML = u"""# Создано tools/make_winget.py — правьте генератор, а не этот файл
+LOCALE_YAML = u"""# yaml-language-server: $schema={schema_url_locale}
+# Создано tools/make_winget.py — правьте генератор, а не этот файл
 PackageIdentifier: {pkg}
 PackageVersion: {ver}
 PackageLocale: en-US
@@ -137,7 +141,10 @@ def main():
         os.makedirs(out)
 
     fields = dict(pkg=PKG_ID, ver=version, schema=SCHEMA, repo=REPO, owner=owner,
-                  sha=sha, date=date, publisher=owner)
+                  sha=sha, date=date, publisher=owner,
+                  schema_url_version=SCHEMA_URL % 'version',
+                  schema_url_installer=SCHEMA_URL % 'installer',
+                  schema_url_locale=SCHEMA_URL % 'defaultLocale')
     files = {
         PKG_ID + '.yaml': VERSION_YAML,
         PKG_ID + '.installer.yaml': INSTALLER_YAML,
