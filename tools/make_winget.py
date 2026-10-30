@@ -34,7 +34,7 @@ except Exception:
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKG_ID = 'N0deZ3r0.Win11Privacy'
 REPO = 'N0deZ3r0/Win11Privacy'
-SCHEMA = '1.6.0'
+SCHEMA = '1.28.0'
 
 
 def read_version():
