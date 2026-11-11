@@ -44,10 +44,7 @@ Windows, and the engine is embedded in the exe.
 
 | Файл / File | Зачем / What for |
 |---|---|
-| `Win11Privacy.exe` | Само приложение / The application |
-| `Win11-Privacy-Engine.ps1` | Движок отдельно — можно изучить и запустить без интерфейса / The engine on its own, to read or run without the window |
-| `SHA256SUMS.txt` | Контрольные суммы / Checksums |
-| `winget-manifest.zip` | Манифест winget этой версии / The winget manifest for this version |
+{files}
 
 Проверить скачанный файл / Verify the download:
 ```
@@ -56,6 +53,14 @@ Get-FileHash Win11Privacy.exe -Algorithm SHA256
 
 Все изменения по версиям / All changes by version: [CHANGELOG.md]({repo}/blob/main/CHANGELOG.md)
 """
+
+
+FILES = [
+    ('Win11Privacy.exe', u'Само приложение / The application'),
+    ('Win11-Privacy-Engine.ps1', u'Движок отдельно — можно изучить и запустить без интерфейса / The engine on its own, to read or run without the window'),
+    ('SHA256SUMS.txt', u'Контрольные суммы / Checksums'),
+    ('winget-manifest.zip', u'Манифест winget этой версии / The winget manifest for this version'),
+]
 
 
 def heading_version(line):
@@ -92,6 +97,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--version', required=True)
     ap.add_argument('--out')
+    # Старые релизы выходили не со всеми файлами: у первых нет контрольных
+    # сумм, манифест winget появился с 1.9.0. В таблице — только приложенные.
+    ap.add_argument('--assets', help='comma-separated file names attached to the release (default: all)')
     ap.add_argument('--repo', default=os.environ.get('GITHUB_SERVER_URL', 'https://github.com') + '/' +
                     os.environ.get('GITHUB_REPOSITORY', 'N0deZ3r0/Win11Privacy'))
     a = ap.parse_args()
@@ -102,7 +110,13 @@ def main():
     if not body:
         sys.exit(u'в CHANGELOG.md нет раздела «## %s» — опишите, что нового в этой версии' % a.version)
     title = u'не выпущено' if a.version.lower() in UNRELEASED else u'v' + a.version.lstrip('v')
-    notes = u'## Приватность Windows 11 — %s\n\n%s\n%s' % (title, body, FOOTER.replace('{repo}', a.repo))
+    present = [n.strip() for n in a.assets.split(',')] if a.assets else [n for n, _ in FILES]
+    rows = u'\n'.join(u'| `%s` | %s |' % (n, d) for n, d in FILES if n in present)
+    footer = FOOTER.replace('{repo}', a.repo).replace('{files}', rows)
+    if 'SHA256SUMS.txt' not in present:
+        # нечем сверять — и предлагать сверку незачем
+        footer = footer.split(u'Проверить скачанный файл')[0].rstrip() + u'\n\n' + footer.split(u'```\n', 2)[-1].lstrip()
+    notes = u'## Приватность Windows 11 — %s\n\n%s\n%s' % (title, body, footer)
     if a.out:
         io.open(a.out, 'w', encoding='utf-8', newline='\n').write(notes)
         print(u'описание релиза: %s (%d строк)' % (a.out, notes.count('\n') + 1))

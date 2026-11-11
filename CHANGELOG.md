@@ -69,3 +69,313 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - Clearing the unsent telemetry removes only the queue and the traces. Before, it also took the diagnostics settings and could hang on a folder.
 - On first start the Overview showed empty sections until a manual check.
 - After collapsing and expanding the sidebar the settings list kept a horizontal scrollbar; sidebar items jerked during the animation; a focus frame stayed around the menu button after a click.
+
+## 1.10.2 — 2026-10-30
+
+### Что нового
+
+- Блок в `hosts` помечается латиницей. Раньше метки были кириллицей, файл пишется в ASCII — и они превращались в «?»: программа не узнавала свой блок, дописывала его при каждом применении, а откат его не убирал. Блоки прежних версий теперь узнаются и убираются, чужие строки `hosts` не портятся.
+- Откат по журналу: что вернуть не удалось, остаётся в журнале для повторной попытки, а при повторах возвращается самое раннее значение. Файлы данных пишутся целиком или никак — обрыв не оставит половину журнала.
+- Узкое окно: кнопки и текст не уезжают за край и не обрезаются; сборка проверяет и обычную, и самую маленькую ширину.
+- «Прервать» и закрытие окна останавливают нужный запуск движка; коды возврата `--audit` и `--silent` больше не теряются; первый запуск с `--portable` действительно переносимый.
+- Английский отчёт и описания категорий рентгена переведены полностью.
+- Манифест winget по схеме 1.28, в README — установка через winget.
+
+### What's new
+
+- The block in `hosts` is marked in Latin letters. The markers used to be Cyrillic, and since the file is written in ASCII they turned into "?": the program did not recognise its own block, appended it again on every run, and the rollback did not remove it. Blocks from earlier versions are now recognised and removed, and other lines in `hosts` are left intact.
+- Rollback from the journal: whatever could not be restored stays in the journal for another try, and with repeated entries the earliest value is restored. Data files are written whole or not at all, so an interrupted run never leaves half a journal.
+- Narrow window: buttons and text no longer run off the edge or get cut; the build checks both the normal and the smallest width.
+- Stop and closing the window stop the right engine run; the exit codes of `--audit` and `--silent` are no longer lost; the first start with `--portable` is really portable.
+- The English report and the X-ray category descriptions are fully translated.
+- winget manifest schema 1.28, and winget installation in the README.
+
+## 1.10.1 — 2026-09-10
+
+### Что нового
+
+- Шаг «Брандмауэр: адреса сбора телеметрии» больше не выглядит зависшим: имена спрашиваются у DNS разом, ответа ждём не дольше 8 секунд. Раньше, особенно за VPN, шаг шёл до двух с половиной минут без единой строки в журнале.
+- Чистка временных файлов показывает шаг в начале, а не по окончании.
+- Отправка манифеста в каталог winget не падает, если форк каталога не синхронизировался.
+
+### What's new
+
+- The "Firewall: telemetry addresses" step no longer looks frozen: all names are resolved at once and the wait is capped at 8 seconds. Before, especially behind a VPN, the step could run for two and a half minutes without a single line in the log.
+- Temporary file cleanup shows each step when it starts, not when it ends.
+- Submitting the manifest to the winget catalogue no longer fails when the catalogue fork is out of sync.
+
+## 1.10.0 — 2026-09-10
+
+### Что нового
+
+- 244 настройки вместо 191, 30 модулей: всё сверено с официальным списком Microsoft «Manage connections from Windows OS components to Microsoft services».
+- Разрешения приложений политикой: 16 политик (контакты, календарь, звонки, почта, сообщения, задачи, уведомления, радио, голос…). Политику, в отличие от переключателя, не вернут ни приложение, ни обновление. Сюда же — сведения учётной записи: без них новые Windows Age API не отдают приложению возраст.
+- Новые разделы: «Камера, микрофон и фон приложений» (по умолчанию выключен) и «Фоновые обращения в сеть» — 12 безопасных пунктов из списка Microsoft.
+- Телеметрия совместимости (CEIP, опись программ, AIT, Steps Recorder, задача Compatibility Appraiser Exp) и 9 задач отчётов об использовании функций.
+- «Досье» показывает ещё 9 категорий разрешений (ИИ-модели Windows, ключи доступа, USB, Bluetooth, COM-порты, Wi-Fi), «Цифровой след» видит и стирает 5 журналов Windows о работе с программами.
+- Опасное из списка Microsoft (корневые сертификаты, синхронизация времени, лицензии, wlidsvc, KMS) сознательно не трогается.
+
+### What's new
+
+- 244 settings instead of 191, 30 modules: everything is checked against Microsoft's own list "Manage connections from Windows OS components to Microsoft services".
+- App permissions by policy: 16 policies (contacts, calendar, calls, email, messages, tasks, notifications, radios, voice…). Unlike a switch, a policy cannot be turned back on by an app or an update. Account information is part of it: without it the new Windows Age APIs give an app nothing.
+- New sections: "Camera, microphone and background apps" (off by default) and "Background network calls" — 12 safe items from Microsoft's list.
+- Compatibility telemetry (CEIP, program inventory, AIT, Steps Recorder, the Compatibility Appraiser Exp task) and 9 feature-usage report tasks.
+- The Dossier shows 9 more permission categories (Windows AI models, passkeys, USB, Bluetooth, COM ports, Wi-Fi); the digital trace finds and wipes 5 Windows logs about program activity.
+- The risky items on Microsoft's list (root certificates, time sync, licensing, wlidsvc, KMS) are deliberately left alone.
+
+## 1.9.2 — 2026-09-06
+
+### Что нового
+
+- Английский интерфейс перестал быть наполовину русским: переведены строки, которые приходят от движка данными, — факты рентгена, категории телеметрии, названия приложений, «было / стало» на «Изменениях». Проверка перевода теперь читает и движок.
+- Манифест уходит в каталог winget сам, следом за релизом.
+- Скриншоты в README пересняты на обоих языках.
+
+### What's new
+
+- The English interface is no longer half Russian: strings the engine sends as data are translated — X-ray facts, telemetry categories, app names, "was / now" on the Changes page. The translation check now reads the engine too.
+- The manifest goes to the winget catalogue by itself, right after the release.
+- README screenshots retaken in both languages.
+
+## 1.9.1 — 2026-09-06
+
+### Что нового
+
+- **Важно для тех, кто поставил 1.9.0:** там откат не работал — схлопывание журнала теряло поля свежих записей. Исправлено и проверяется применением с откатом на живой системе.
+- Программа запускается в одном экземпляре, журнал отката пишется под общесистемным замком и больше не растёт без предела.
+- Страж проверяет систему через 5 минут после установки обновления Windows, а не ждёт расписания.
+- Видно ход проверки («15 / 34» и раздел), журнал выполнения сохраняется в файл, по разделам можно ходить с клавиатуры, экранный диктор читает подписи.
+- В свойствах файла — правильная версия (раньше было 5.0.0.0).
+
+### What's new
+
+- **Important if you installed 1.9.0:** its rollback did not work — compacting the journal lost the fields of fresh entries. Fixed, and now checked by applying and rolling back on a live system.
+- A single instance: a second launch shows the open window; the undo journal is written under a system-wide lock and no longer grows without limit.
+- The guard checks the system 5 minutes after a Windows update is installed instead of waiting for its schedule.
+- Check progress is visible ("15 / 34" and the section), the run log can be saved to a file, the sections work from the keyboard, and the screen reader reads the controls.
+- The file properties show the right version (it used to say 5.0.0.0).
+
+## 1.9.0 — 2026-09-06
+
+### Что нового
+
+- Движок распаковывается в `ProgramData\Win11Privacy\bin` с правами только для администраторов и перед каждым запуском сверяется по SHA-256 с тем, что вшито в exe.
+- Журнал отката пишется по ходу работы, а не один раз в конце: прерванный прогон больше не оставляет изменения без возможности вернуть.
+- Кнопка «Прервать», вопрос при закрытии во время работы, понятное окно ошибки и `crash.log` вместо системного диалога.
+- Окно первого запуска: один вопрос вместо тринадцати разделов; оно ничего не применяет, только отмечает набор.
+- Группы в боковой панели, полоса внимания на «Обзоре», проверка обновления по кнопке — сама программа в сеть не выходит. Профиль помнит отдельные пункты внутри модулей.
+- README на двух языках; к релизу прикладывается манифест winget.
+
+### What's new
+
+- The engine is unpacked into `ProgramData\Win11Privacy\bin`, writable by administrators only, and checked against the SHA-256 of what is embedded in the exe before every launch.
+- The undo journal is written as the work goes, not once at the end: an interrupted run no longer leaves changes that cannot be reverted.
+- A Stop button, a question when closing mid-run, a clear error window and `crash.log` instead of the system dialog.
+- A first-run window: one question instead of thirteen sections; it applies nothing, it only ticks a set.
+- Sidebar groups, an attention strip on the Overview, an update check on a button — the program never goes online by itself. A profile remembers individual items inside modules.
+- A bilingual README; the winget manifest is attached to the release.
+
+## 1.8.0 — 2026-09-04
+
+### Что нового
+
+- Честный индекс на любой Windows: 12 настроек, которых до Windows 11 нет (Copilot, Recall, Click to Do, виджеты), на Windows 10 не считаются ни в плюс, ни в минус.
+- «Windows не разрешает» показывается только после настоящего отказа, а не всякий раз, когда значение не задано.
+- Переносимый режим: файл `portable.txt` рядом с exe или ключ `--portable` — и всё хранится в папке рядом с программой.
+- «Обзор»: карточки «Автозапуск» и «Хронология».
+- Сборка ловит обрезанный текст, а не только вылезший за край.
+
+### What's new
+
+- An honest index on any Windows: 12 settings that do not exist before Windows 11 (Copilot, Recall, Click to Do, widgets) count neither way on Windows 10.
+- "Windows does not allow it" appears only after a real refusal, not whenever a value is unset.
+- Portable mode: a `portable.txt` file next to the exe or the `--portable` switch keeps everything in a folder beside the program.
+- Overview: Startup and Timeline cards.
+- The build catches cut-off text, not only text that spills over the edge.
+
+## 1.7.2 — 2026-09-03
+
+### Что нового
+
+- Плитки на «Проверке» больше не обрезают подпись и не пропадают на узком окне: подпись переносится на две строки, а плитки в ряд сужаются, но остаются на месте.
+
+### What's new
+
+- The tiles on the Verify page no longer cut their captions or disappear in a narrow window: captions wrap to two lines, and tiles in a row shrink but stay in place.
+
+## 1.7.1 — 2026-09-02
+
+### Что нового
+
+- Настройки, которые Windows не отдаёт даже администратору, больше не тянут индекс вниз: они показываются отдельно и в итог не входят. На Home индекс может честно дойти до 100 %.
+- Страж сам делает дневной замер телеметрии — хронология заполняется без кнопки (раньше замер молча не сохранялся).
+- HTML-отчёт: разделы «Что о вас узнали» и «Хронология».
+- Журнал тише: без чужих английских строк и без «перезагрузите компьютер», когда ничего не менялось.
+
+### What's new
+
+- Settings that Windows withholds even from administrators no longer drag the index down: they are shown separately and left out of the total. On Home the index can honestly reach 100%.
+- The guard takes the daily telemetry measurement itself, so the timeline fills without a button (before, the measurement was silently not saved).
+- HTML report: "What they learned about you" and "Timeline" sections.
+- A quieter log: no stray English lines, and no "restart your computer" when nothing changed.
+
+## 1.7.0 — 2026-09-02
+
+### Что нового
+
+- «Что о вас узнали»: из событий телеметрии вытаскиваются факты — установленные программы, модель и серийные номера железа, подключённые устройства, метки, по которым события сводят в один профиль, часовой пояс.
+- Хронология приватности: телеметрия по дням, обращения к датчикам, правки программы, возвраты стража и обновления Windows — на одной оси.
+- Возврат из резервной копии реестра одной кнопкой: программа сама находит копии.
+- «Что изменится»: список «сейчас → станет» до того, как нажать «Применить».
+
+### What's new
+
+- "What they learned about you": facts pulled out of the telemetry events — installed programs, hardware model and serial numbers, connected devices, the tags events are joined into one profile by, the time zone.
+- Privacy timeline: telemetry by day, sensor access, the program's own changes, guard reversions and Windows updates — on one axis.
+- Restore from a registry backup with one click: the program finds the backups itself.
+- "What will change": a "now → after" list before you press Apply.
+
+## 1.6.6 — 2026-09-01
+
+### Что нового
+
+- Резервная копия и точка восстановления делаются только перед первым настоящим изменением, а не на каждом запуске; страж копий не делает вовсе.
+- Счёт веток в копии честный, невыгруженные ветки названы поимённо, а одна нечитаемая ветка больше не обрывает всю копию.
+
+### What's new
+
+- The registry backup and the restore point are made only right before the first real change, not on every run; the guard makes none at all.
+- The count of backed-up keys is honest, keys that could not be exported are named, and one unreadable key no longer aborts the whole backup.
+
+## 1.6.5 — 2026-09-01
+
+### Что нового
+
+- «Уже настроено» узнают все виды настроек: VS Code, переменные среды, службы, задачи. Раньше они переписывались при каждом запуске и выдавали себя за изменения.
+
+### What's new
+
+- Every kind of setting now recognises "already set": VS Code, environment variables, services, tasks. Before, they were rewritten on every run and showed up as changes.
+
+## 1.6.4 — 2026-09-01
+
+### Что нового
+
+- Резервная копия реестра снова охватывает все ключи, которые программа меняет, включая политики виджетов и сессии трассировки.
+
+### What's new
+
+- The registry backup again covers every key the program changes, including widget policies and trace sessions.
+
+## 1.6.3 — 2026-09-01
+
+### Что нового
+
+- Политика, которую Windows не отдаёт даже администратору (например, виджеты на Home), больше не считается ошибкой программы: она идёт отдельной строкой «Windows не разрешила», с подсказкой обходного пути — удалить пакет виджетов на странице «Приложения».
+
+### What's new
+
+- A policy that Windows withholds even from administrators (such as widgets on Home) is no longer counted as the program's error: it gets its own "Windows did not allow it" line with a workaround — remove the widgets package on the Apps page.
+
+## 1.6.2 — 2026-09-01
+
+### Что нового
+
+- Отказ реестра объясняется до конца: программа проверяет, закрыт ключ целиком или Windows держит один параметр.
+- У модулей появились подсказки обходного пути; чистка больше не сыпет ошибками на папках без файлов.
+
+### What's new
+
+- Registry refusals are explained in full: the program checks whether the whole key is locked or Windows holds on to one value.
+- Modules got workaround hints; cleanup no longer spills errors on folders without files.
+
+## 1.6.1 — 2026-09-01
+
+### Что нового
+
+- Неудачная запись больше не попадает в журнал отката как изменение.
+- При отказе — вторая попытка обычным API реестра и понятное объяснение, что именно не так.
+- Доску виджетов можно удалить на странице «Приложения» — на Home это единственный надёжный способ.
+
+### What's new
+
+- A failed write no longer lands in the undo journal as a change.
+- On a refusal there is a second attempt through the plain registry API and a clear explanation of what went wrong.
+- The widgets board can be removed on the Apps page — on Home that is the only reliable way.
+
+## 1.6.0 — 2026-09-01
+
+### Что нового
+
+- **Важно:** начиная с 1.1.0 настройки реестра писались под числовыми именами («0», «1» вместо AllowTelemetry) и ничего не меняли. Исправлено; мусор прежних версий программа находит и убирает сама.
+- Страница «Автозапуск»: что стартует вместе с Windows и зачем; отключение обратимо и попадает в общий откат.
+- Запрет выхода в сеть отдельной программе прямо из «Монитора»; монитор учитывает и разрешённые соединения, а не только отказы.
+- Наборы «Базовый / Строгий / Максимум».
+- Страница «Изменения»: каждая правка с прежним значением и возврат отдельной строки.
+- «О программе»: что программа хранит о вас, с кнопкой стереть; выбор темы и частоты проверок стража. HTML-отчёт переведён на английский.
+
+### What's new
+
+- **Important:** since 1.1.0 registry settings were written under numeric names ("0", "1" instead of AllowTelemetry) and changed nothing. Fixed; the program finds and removes the leftovers of earlier versions by itself.
+- A Startup page: what launches with Windows and why; disabling is reversible and part of the general rollback.
+- Block a single program from the network right from the Monitor; the monitor counts allowed connections, not only refusals.
+- Basic / Strict / Maximum presets.
+- A Changes page: every edit with its previous value, and reverting a single row.
+- About: what the program keeps about you, with a button to erase it; theme choice and guard frequency. The HTML report is translated to English.
+
+## 1.3.0 — 2026-09-01
+
+### Что нового
+
+- Отключение сессий трассировки (ETW), которые Windows запускает при загрузке помимо службы DiagTrack.
+- Доказательство результата: что было до программы и что стало — сборщики, задачи, домены, правила брандмауэра, события в сутки.
+- Полный английский перевод, включая названия всех 191 настройки.
+
+### What's new
+
+- Turning off the trace sessions (ETW) Windows starts at boot besides the DiagTrack service.
+- Proof of the result: what it was before the program and what it is now — collectors, tasks, domains, firewall rules, events per day.
+- A complete English translation, including the names of all 191 settings.
+
+## 1.2.0 — 2026-09-01
+
+### Что нового
+
+- Откат одной кнопкой по журналу изменений — ручной импорт `.reg` больше не нужен.
+- 25 категорий разрешений приложений вместо 6, в том числе у программ, которые разрешение имеют, но ещё не пользовались.
+- 181 настройка вместо 147: 24 задачи планировщика, 40 доменов телеметрии, модуль OneDrive.
+- Английский интерфейс; к релизу прикладываются контрольные суммы SHA-256.
+
+### What's new
+
+- One-click rollback from the change journal — no manual `.reg` import any more.
+- 25 app permission categories instead of 6, including apps that hold a permission but have not used it yet.
+- 181 settings instead of 147: 24 scheduled tasks, 40 telemetry domains, a OneDrive module.
+- An English interface; SHA-256 checksums are attached to the release.
+
+## 1.1.0 — 2026-09-01
+
+### Что нового
+
+- Запрет доступа к камере, микрофону и геолокации прямо в «Досье».
+- Настройка по отдельным пунктам: модуль раскрывается в список, лишнее можно снять.
+- Блокировка адресов сбора данных в брандмауэре и запрет шифрованного DNS (DoH) в Windows, Edge и Chrome — через него телеметрия обходит `hosts`.
+- Удаление предустановленных приложений с защитой системных компонентов.
+
+### What's new
+
+- Revoking camera, microphone and location access right in the Dossier.
+- Per-item settings: a module expands into a list and anything unwanted can be unticked.
+- Blocking data-collection addresses in the firewall and turning off encrypted DNS (DoH) in Windows, Edge and Chrome — telemetry bypasses `hosts` through it.
+- Removing preinstalled apps, with system components protected.
+
+## 1.0.0 — 2026-09-01
+
+### Что нового
+
+- Первая версия. Отключает сбор данных Microsoft (реестр, службы, задачи, `hosts`, брандмауэр), показывает, что уже собрано (рентген телеметрии, досье по датчикам и цифровому следу), а страж возвращает настройки, сбитые обновлениями. Снимки состояния, чистка, светлая и тёмная темы. Ничего устанавливать не нужно.
+
+### What's new
+
+- The first version. Turns off Microsoft's data collection (registry, services, tasks, `hosts`, firewall), shows what has already been collected (telemetry X-ray, a dossier of sensors and the digital trace), and a guard puts back settings knocked out by updates. State snapshots, cleanup, light and dark themes. Nothing to install.
