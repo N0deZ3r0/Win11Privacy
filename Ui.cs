@@ -43,57 +43,60 @@ namespace Win11Privacy
         public static void Apply(bool dark)
         {
             Dark = dark;
+            // Строгая палитра «консоли»: графит, один синий акцент. Зелёный,
+            // жёлтый и красный — только там, где они значат состояние. Второй
+            // акцент равен первому: градиенты, где они ещё остались, плоские.
             if (dark)
             {
-                WindowBg   = Color.FromArgb(0x15, 0x17, 0x1C);
-                CardBg     = Color.FromArgb(0x1E, 0x22, 0x2A);
-                CardBorder = Color.FromArgb(0x2B, 0x30, 0x3B);
-                RowHover   = Color.FromArgb(0x27, 0x2C, 0x37);
-                LogBg      = Color.FromArgb(0x12, 0x14, 0x19);
-                Text       = Color.FromArgb(0xF2, 0xF4, 0xF8);
-                TextDim    = Color.FromArgb(0xA9, 0xB1, 0xBF);
-                TextFaint  = Color.FromArgb(0x74, 0x7C, 0x8B);
-                Accent     = Color.FromArgb(0x4C, 0xC2, 0xFF);
-                Accent2    = Color.FromArgb(0x47, 0x83, 0xFF);
-                AccentHover= Color.FromArgb(0x7E, 0xD3, 0xFF);
-                AccentText = Color.FromArgb(0x0A, 0x18, 0x28);
-                Warn       = Color.FromArgb(0xF6, 0xB1, 0x5C);
-                Ok         = Color.FromArgb(0x74, 0xD9, 0x8C);
-                Err        = Color.FromArgb(0xFF, 0x82, 0x78);
-                ButtonBg   = Color.FromArgb(0x28, 0x2D, 0x38);
-                ButtonHover= Color.FromArgb(0x31, 0x37, 0x44);
-                ButtonBorder=Color.FromArgb(0x3C, 0x43, 0x52);
-                BadgeBg    = Color.FromArgb(0x1D, 0x3A, 0x55);
-                TrackOff   = Color.FromArgb(0x8E, 0x96, 0xA5);
-                Knob       = Color.FromArgb(0xE8, 0xEC, 0xF2);
-                SideTop    = Color.FromArgb(0x11, 0x13, 0x19);
-                SideBottom = Color.FromArgb(0x0D, 0x0F, 0x14);
+                WindowBg   = Color.FromArgb(0x0E, 0x10, 0x13);
+                CardBg     = Color.FromArgb(0x15, 0x18, 0x1D);
+                CardBorder = Color.FromArgb(0x26, 0x2B, 0x33);
+                RowHover   = Color.FromArgb(0x1C, 0x20, 0x27);
+                LogBg      = Color.FromArgb(0x0B, 0x0D, 0x10);
+                Text       = Color.FromArgb(0xE6, 0xE9, 0xEE);
+                TextDim    = Color.FromArgb(0x9A, 0xA3, 0xAF);
+                TextFaint  = Color.FromArgb(0x69, 0x71, 0x7D);
+                Accent     = Color.FromArgb(0x2F, 0x74, 0xE8);
+                Accent2    = Accent;
+                AccentHover= Color.FromArgb(0x4A, 0x88, 0xEE);
+                AccentText = Color.White;
+                Warn       = Color.FromArgb(0xD9, 0xA2, 0x3B);
+                Ok         = Color.FromArgb(0x3F, 0xB2, 0x7F);
+                Err        = Color.FromArgb(0xE5, 0x53, 0x4B);
+                ButtonBg   = Color.FromArgb(0x1A, 0x1E, 0x24);
+                ButtonHover= Color.FromArgb(0x22, 0x27, 0x30);
+                ButtonBorder=Color.FromArgb(0x2E, 0x34, 0x3D);
+                BadgeBg    = Color.FromArgb(0x16, 0x24, 0x3D);
+                TrackOff   = Color.FromArgb(0x6B, 0x73, 0x7F);
+                Knob       = Color.FromArgb(0xE6, 0xE9, 0xEE);
+                SideTop    = Color.FromArgb(0x0B, 0x0D, 0x10);
+                SideBottom = SideTop;
             }
             else
             {
-                WindowBg   = Color.FromArgb(0xF4, 0xF6, 0xFA);
+                WindowBg   = Color.FromArgb(0xF3, 0xF4, 0xF6);
                 CardBg     = Color.White;
-                CardBorder = Color.FromArgb(0xE3, 0xE7, 0xEF);
-                RowHover   = Color.FromArgb(0xF0, 0xF3, 0xF8);
-                LogBg      = Color.FromArgb(0xFA, 0xFB, 0xFD);
-                Text       = Color.FromArgb(0x1A, 0x1D, 0x23);
-                TextDim    = Color.FromArgb(0x5B, 0x63, 0x6F);
-                TextFaint  = Color.FromArgb(0x8A, 0x93, 0xA1);
-                Accent     = Color.FromArgb(0x0F, 0x6C, 0xBD);
-                Accent2    = Color.FromArgb(0x4F, 0x6B, 0xED);
-                AccentHover= Color.FromArgb(0x2B, 0x84, 0xD6);
+                CardBorder = Color.FromArgb(0xDC, 0xE0, 0xE5);
+                RowHover   = Color.FromArgb(0xEE, 0xF0, 0xF3);
+                LogBg      = Color.FromArgb(0xF8, 0xF9, 0xFA);
+                Text       = Color.FromArgb(0x1C, 0x20, 0x26);
+                TextDim    = Color.FromArgb(0x57, 0x60, 0x6A);
+                TextFaint  = Color.FromArgb(0x86, 0x8E, 0x98);
+                Accent     = Color.FromArgb(0x1F, 0x6F, 0xEB);
+                Accent2    = Accent;
+                AccentHover= Color.FromArgb(0x1A, 0x5F, 0xD0);
                 AccentText = Color.White;
-                Warn       = Color.FromArgb(0xB4, 0x53, 0x09);
-                Ok         = Color.FromArgb(0x1E, 0x8E, 0x3E);
-                Err        = Color.FromArgb(0xC4, 0x2B, 0x1C);
-                ButtonBg   = Color.FromArgb(0xFB, 0xFC, 0xFE);
-                ButtonHover= Color.FromArgb(0xF0, 0xF3, 0xF8);
-                ButtonBorder=Color.FromArgb(0xD5, 0xDA, 0xE4);
-                BadgeBg    = Color.FromArgb(0xE1, 0xEF, 0xFB);
-                TrackOff   = Color.FromArgb(0x84, 0x8D, 0x9B);
-                Knob       = Color.FromArgb(0x56, 0x60, 0x70);
-                SideTop    = Color.FromArgb(0xFB, 0xFC, 0xFE);
-                SideBottom = Color.FromArgb(0xED, 0xF1, 0xF7);
+                Warn       = Color.FromArgb(0x9A, 0x67, 0x00);
+                Ok         = Color.FromArgb(0x1A, 0x7F, 0x37);
+                Err        = Color.FromArgb(0xCF, 0x22, 0x2E);
+                ButtonBg   = Color.White;
+                ButtonHover= Color.FromArgb(0xF2, 0xF4, 0xF7);
+                ButtonBorder=Color.FromArgb(0xD0, 0xD5, 0xDC);
+                BadgeBg    = Color.FromArgb(0xE3, 0xED, 0xFD);
+                TrackOff   = Color.FromArgb(0x8C, 0x94, 0x9E);
+                Knob       = Color.FromArgb(0x57, 0x60, 0x6A);
+                SideTop    = Color.FromArgb(0xEB, 0xED, 0xF0);
+                SideBottom = SideTop;
             }
         }
 
@@ -174,6 +177,14 @@ namespace Win11Privacy
                 (int)(a.G + (b.G - a.G) * t),
                 (int)(a.B + (b.B - a.B) * t));
         }
+
+        // Цвет означает состояние (норма / внимание / проблема)? Только такие
+        // цвета и красят числа и значки; всё остальное — нейтральный текст.
+        public static bool IsStatus(Color c)
+        {
+            int v = c.ToArgb();
+            return v == Warn.ToArgb() || v == Err.ToArgb() || v == Ok.ToArgb();
+        }
     }
 
     // ====================================================================== //
@@ -225,9 +236,6 @@ namespace Win11Privacy
         }
     }
 
-    // ====================================================================== //
-    //  Карточка со скруглёнными углами
-    // ====================================================================== //
     // Строка списка, которую можно отфильтровать поиском по странице
     internal interface IFilterable { string FilterText { get; } }
 
@@ -244,6 +252,9 @@ namespace Win11Privacy
     }
 #endif
 
+    // ====================================================================== //
+    //  Карточка со скруглёнными углами
+    // ====================================================================== //
     internal class Card : Panel
     {
         public Card()
@@ -261,25 +272,46 @@ namespace Win11Privacy
             if (Width < 6 || Height < 6) return;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             RectangleF r = new RectangleF(0.5F, 0.5F, Width - 1, Height - 1);
-            using (GraphicsPath p = Theme.RoundRect(r, 12))
+            using (GraphicsPath p = Theme.RoundRect(r, 8))
             {
                 using (SolidBrush b = new SolidBrush(Theme.CardBg)) g.FillPath(b, p);
                 using (Pen pen = new Pen(Theme.CardBorder)) g.DrawPath(pen, p);
             }
-            // тонкий блик по верхней кромке — как в Fluent
-            using (Pen pen = new Pen(Color.FromArgb(Theme.Dark ? 22 : 40, Color.White)))
-                g.DrawLine(pen, 12, 1, Width - 12, 1);
         }
     }
 
     // ====================================================================== //
-    //  Переключатель в стиле Windows 11 с плавной анимацией
+    //  Рамка фокуса — только для того, кто ходит клавиатурой. После щелчка
+    //  мышью она висела вокруг элемента, пока фокус не уйдёт.
+    // ====================================================================== //
+    internal static class FocusCue
+    {
+        [DllImport("user32.dll")]
+        private static extern short GetKeyState(int key);
+
+        // Фокус пришёл с клавиатуры: в этот момент нажат Tab или стрелка
+        public static bool FromKeyboard()
+        {
+            foreach (int k in new int[] { 0x09, 0x25, 0x26, 0x27, 0x28 })
+                if ((GetKeyState(k) & 0x8000) != 0) return true;
+            return false;
+        }
+    }
+
+    // ====================================================================== //
+    //  Переключатель. Дорожка-«пилюля» с пропорциями Windows 11 (2:1),
+    //  выключенный — спокойная серая заливка, включённый — акцент с лёгким
+    //  бликом сверху. Ручка с мягкой тенью, на нажатии вытягивается, ход —
+    //  150 мс с плавным торможением. Рамка фокуса — только с клавиатуры.
     // ====================================================================== //
     internal class ToggleSwitch : Control
     {
         private bool _checked;
-        private float _pos;            // 0 = выкл, 1 = вкл
-        private bool _hover;
+        private float _pos;            // 0 = выкл, 1 = вкл (то, что нарисовано)
+        private float _from;
+        private int _t0;
+        private bool _hover, _down, _keyFocus;
+        private const int AnimMs = 150;
         private readonly Timer _anim = new Timer();
 
         public event EventHandler CheckedChanged;
@@ -292,12 +324,17 @@ namespace Win11Privacy
             BackColor = Color.Transparent;
             Cursor = Cursors.Hand;
             TabStop = true;
-            _anim.Interval = 15;
+            _anim.Interval = 10;
             _anim.Tick += delegate
             {
                 float target = _checked ? 1F : 0F;
-                _pos += (target - _pos) * 0.35F;
-                if (Math.Abs(target - _pos) < 0.02F) { _pos = target; _anim.Stop(); }
+                float k = (Environment.TickCount - _t0) / (float)AnimMs;
+                if (k >= 1F) { _pos = target; _anim.Stop(); }
+                else
+                {
+                    float e = 1F - (1F - k) * (1F - k) * (1F - k);
+                    _pos = _from + (target - _from) * e;
+                }
                 Invalidate();
             };
             FitToFont();
@@ -310,7 +347,8 @@ namespace Win11Privacy
             {
                 if (_checked == value) return;
                 _checked = value;
-                if (IsHandleCreated && Visible) _anim.Start(); else _pos = value ? 1F : 0F;
+                if (IsHandleCreated && Visible) { _from = _pos; _t0 = Environment.TickCount; _anim.Start(); }
+                else _pos = value ? 1F : 0F;
                 Invalidate();
                 if (CheckedChanged != null) CheckedChanged(this, EventArgs.Empty);
             }
@@ -319,59 +357,162 @@ namespace Win11Privacy
         private void FitToFont()
         {
             int u = Font.Height;
-            Size = new Size((int)(u * 2.7F), (int)(u * 1.35F));
+            Size = new Size((int)(u * 2.6F), (int)(u * 1.45F));
         }
 
         protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); FitToFont(); }
         protected override void OnClick(EventArgs e) { base.OnClick(e); Checked = !Checked; }
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; _down = false; Invalidate(); }
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button == MouseButtons.Left) { _down = true; _keyFocus = false; Invalidate(); }
+        }
+        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); _down = false; Invalidate(); }
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
             if (e.KeyCode == Keys.Space) { Checked = !Checked; e.Handled = true; }
         }
-        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
-        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); _keyFocus = FocusCue.FromKeyboard(); Invalidate(); }
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); _keyFocus = false; Invalidate(); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
+            Draw(e.Graphics, Focused && _keyFocus);
+        }
 
-            float h = Height - 2;
-            RectangleF track = new RectangleF(1, 1, Width - 2, h);
+        private void Draw(Graphics g, bool focusRing)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            int u = Font.Height;
+            bool dark = Theme.Dark;
             float t = _pos;
 
-            Color trackFill = Theme.Mix(Theme.CardBg, Enabled ? Theme.Accent : Theme.TextFaint, t);
-            if (_hover && t > 0.5F && Enabled) trackFill = Theme.AccentHover;
-            Color trackBorder = Theme.Mix(Theme.TrackOff, Enabled ? Theme.Accent : Theme.TextFaint, t);
+            // по краям — место под рамку фокуса
+            int inset = Math.Max(2, (int)Math.Round(u * 0.12F));
+            float h = Height - inset * 2;
+            float w = Math.Min(Width - inset * 2, h * 2F);
+            RectangleF track = new RectangleF(Width - inset - w, inset, w, h);
 
+            Color offFill = dark ? (_hover ? Color.FromArgb(0x34, 0x3C, 0x48) : Color.FromArgb(0x29, 0x30, 0x3A))
+                                 : (_hover ? Color.FromArgb(0xCF, 0xD5, 0xDD) : Color.FromArgb(0xDC, 0xE1, 0xE7));
+            Color offEdge = dark ? Color.FromArgb(0x4A, 0x54, 0x63) : Color.FromArgb(0xC4, 0xCB, 0xD4);
+            Color onFill = _hover ? Theme.AccentHover : Theme.Accent;
+            Color knobOff = dark ? (_hover ? Color.FromArgb(0xD5, 0xDA, 0xE1) : Color.FromArgb(0xB4, 0xBC, 0xC7)) : Color.White;
+            Color knobOn = Color.White;
+            if (!Enabled)
+            {
+                offFill = dark ? Color.FromArgb(0x22, 0x27, 0x2E) : Color.FromArgb(0xE6, 0xE9, 0xED);
+                offEdge = offFill;
+                onFill = Theme.Mix(Theme.CardBg, Theme.Accent, 0.4F);
+                knobOff = dark ? Color.FromArgb(0x55, 0x5C, 0x67) : Color.FromArgb(0xF4, 0xF5, 0xF7);
+                knobOn = Theme.Mix(Color.White, onFill, 0.35F);
+            }
+
+            Color fill = Theme.Mix(offFill, onFill, t);
+            Color edge = Theme.Mix(offEdge, onFill, t);
             using (GraphicsPath p = Theme.RoundRect(track, h / 2))
             {
-                using (SolidBrush b = new SolidBrush(trackFill)) g.FillPath(b, p);
-                using (Pen pen = new Pen(trackBorder, 1.2F)) g.DrawPath(pen, p);
+                using (SolidBrush b = new SolidBrush(fill)) g.FillPath(b, p);
+                // лёгкий блик сверху на включённом
+                if (t > 0.01F && Enabled)
+                {
+                    RectangleF hl = new RectangleF(track.X, track.Y - 1, track.Width, track.Height + 2);
+                    using (LinearGradientBrush lb = new LinearGradientBrush(hl,
+                        Color.FromArgb((int)(34 * t), Color.White), Color.FromArgb(0, Color.White), LinearGradientMode.Vertical))
+                    {
+                        Blend bl = new Blend();
+                        bl.Positions = new float[] { 0F, 0.55F, 1F };
+                        bl.Factors = new float[] { 0F, 1F, 1F };      // к середине блик сходит на нет
+                        lb.Blend = bl;
+                        g.FillPath(lb, p);
+                    }
+                }
+                using (Pen pen = new Pen(edge, 1F)) g.DrawPath(pen, p);
             }
 
-            float knobD = h * (0.62F + (_hover ? 0.06F : 0F));
-            float x0 = 1 + (h - knobD) / 2;
-            float x1 = Width - 1 - (h - knobD) / 2 - knobD;
+            // ручка: на нажатии вытягивается к середине
+            float pad = Math.Max(2F, h * 0.15F);
+            float kd = h - pad * 2;
+            float kw = kd + (_down && Enabled ? h * 0.24F : 0F);
+            float x0 = track.X + pad;
+            float x1 = track.Right - pad - kw;
             float kx = x0 + (x1 - x0) * t;
-            float ky = 1 + (h - knobD) / 2;
-            Color knob = Theme.Mix(Theme.Knob, Theme.AccentText, t);
-            if (!Enabled) knob = Theme.TextFaint;
-            using (SolidBrush b = new SolidBrush(knob)) g.FillEllipse(b, kx, ky, knobD, knobD);
-
-            if (Focused)
+            float ky = track.Y + pad;
+            if (Enabled)
             {
-                using (Pen pen = new Pen(Theme.TextDim, 1F))
-                {
-                    pen.DashStyle = DashStyle.Dot;
-                    using (GraphicsPath p = Theme.RoundRect(new RectangleF(-1, -1, Width + 1, Height + 1), Height / 2))
-                        g.DrawPath(pen, p);
-                }
+                float sy = Math.Max(1F, u * 0.05F);
+                using (GraphicsPath sp = Theme.RoundRect(new RectangleF(kx, ky + sy, kw, kd), kd / 2))
+                using (SolidBrush sb = new SolidBrush(Color.FromArgb(dark ? 90 : 45, Color.Black)))
+                    g.FillPath(sb, sp);
+            }
+            using (GraphicsPath kp = Theme.RoundRect(new RectangleF(kx, ky, kw, kd), kd / 2))
+            {
+                using (SolidBrush kb = new SolidBrush(Theme.Mix(knobOff, knobOn, t)))
+                    g.FillPath(kb, kp);
+                // белая ручка на светло-серой дорожке без контура теряется
+                if (!dark && Enabled && t < 0.99F)
+                    using (Pen kpen = new Pen(Color.FromArgb((int)(55 * (1F - t)), 0x1C, 0x20, 0x26), 1F))
+                        g.DrawPath(kpen, kp);
+            }
+
+            if (focusRing)
+            {
+                float o = inset - 0.75F;
+                RectangleF fr = new RectangleF(track.X - o, track.Y - o, track.Width + o * 2, track.Height + o * 2);
+                using (GraphicsPath fp = Theme.RoundRect(fr, fr.Height / 2))
+                using (Pen pen = new Pen(Theme.Accent, 1.5F))
+                    g.DrawPath(pen, fp);
             }
         }
+
+#if UITEST
+        // WIN11_TEST_TOGGLES=путь.png: все состояния переключателя в обеих
+        // темах — в натуральную величину и увеличенные втрое
+        internal static void RenderSheet(string path, Font font)
+        {
+            bool wasDark = Theme.Dark;
+            string[] names = { "off", "off+hover", "on", "on+hover", "pressed", "focus", "half", "disabled off", "disabled on" };
+            float[] pos = { 0F, 0F, 1F, 1F, 1F, 1F, 0.5F, 0F, 1F };
+            ToggleSwitch ts = new ToggleSwitch();
+            ts.Font = font;
+            int cw = ts.Width + 16, ch = ts.Height + 12, zoom = 3;
+            using (Bitmap sheet = new Bitmap(cw * names.Length * zoom, (ch + ch * zoom) * 2))
+            using (Graphics sg = Graphics.FromImage(sheet))
+            {
+                sg.InterpolationMode = InterpolationMode.NearestNeighbor;
+                sg.PixelOffsetMode = PixelOffsetMode.Half;
+                for (int row = 0; row < 2; row++)
+                {
+                    Theme.Apply(row == 0);
+                    int y0 = row * (ch + ch * zoom);
+                    using (SolidBrush bg = new SolidBrush(Theme.CardBg))
+                        sg.FillRectangle(bg, 0, y0, sheet.Width, ch + ch * zoom);
+                    for (int i = 0; i < names.Length; i++)
+                    {
+                        ts._pos = pos[i];
+                        ts._hover = names[i].Contains("hover") || names[i] == "pressed";
+                        ts._down = names[i] == "pressed";
+                        ts.Enabled = !names[i].StartsWith("disabled");
+                        using (Bitmap cell = new Bitmap(cw, ch))
+                        using (Graphics g = Graphics.FromImage(cell))
+                        {
+                            g.Clear(Theme.CardBg);
+                            g.TranslateTransform(8, 6);
+                            ts.Draw(g, names[i] == "focus");
+                            sg.DrawImage(cell, i * cw * zoom + (cw * zoom - cw) / 2, y0);
+                            sg.DrawImage(cell, new Rectangle(i * cw * zoom, y0 + ch, cw * zoom, ch * zoom));
+                        }
+                    }
+                }
+                sheet.Save(path);
+            }
+            Theme.Apply(wasDark);
+        }
+#endif
     }
 
     // ====================================================================== //
@@ -427,20 +568,18 @@ namespace Win11Privacy
             RectangleF r = new RectangleF(0.5F, 0.5F, Width - 1, Height - 1);
             if (Primary)
             {
-                // акцентный градиент — как у топовых панелей
-                Color c1 = Theme.Accent, c2 = Theme.Accent2;
-                if (_hover) { c1 = Theme.Mix(c1, Color.White, 0.15F); c2 = Theme.Mix(c2, Color.White, 0.15F); }
-                if (_down)  { c1 = Theme.Mix(c1, Color.Black, 0.12F); c2 = Theme.Mix(c2, Color.Black, 0.12F); }
+                // ровная заливка акцентом, без градиента
+                Color c1 = Theme.Accent;
+                if (_hover) c1 = Theme.AccentHover;
+                if (_down)  c1 = Theme.Mix(c1, Color.Black, 0.12F);
                 Color fg = Theme.AccentText;
                 if (!Enabled)
                 {
                     c1 = Theme.Mix(Theme.CardBg, Theme.Accent, 0.30F);
-                    c2 = Theme.Mix(Theme.CardBg, Theme.Accent2, 0.30F);
                     fg = Theme.Mix(Theme.AccentText, Theme.CardBg, 0.45F);
                 }
-                using (GraphicsPath p = Theme.RoundRect(r, 8))
-                using (LinearGradientBrush lb = new LinearGradientBrush(
-                    new RectangleF(0, 0, Math.Max(1, Width), Math.Max(1, Height)), c1, c2, LinearGradientMode.Horizontal))
+                using (GraphicsPath p = Theme.RoundRect(r, 6))
+                using (SolidBrush lb = new SolidBrush(c1))
                     g.FillPath(lb, p);
                 TextRenderer.DrawText(g, Text, Font, ClientRectangle, fg,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
@@ -462,7 +601,7 @@ namespace Win11Privacy
                 border = Theme.ButtonBorder;
             }
 
-            using (GraphicsPath p = Theme.RoundRect(r, 8))
+            using (GraphicsPath p = Theme.RoundRect(r, 6))
             {
                 if (bg.A > 0) using (SolidBrush b = new SolidBrush(bg)) g.FillPath(b, p);
                 if (border.A > 0) using (Pen pen = new Pen(border)) g.DrawPath(pen, p);
@@ -481,7 +620,7 @@ namespace Win11Privacy
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            Text = text.ToUpperInvariant();
+            Text = text;
             BackColor = Theme.CardBg;
             TabStop = false;
         }
@@ -495,21 +634,14 @@ namespace Win11Privacy
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
             int u = Font.Height;
-            // акцентная чёрточка перед заголовком секции
-            float barW = u * 0.26F, barH = u * 0.85F;
-            using (GraphicsPath p = Theme.RoundRect(new RectangleF(1, Height - barH - u * 0.12F, barW, barH), barW / 2F))
-            using (LinearGradientBrush lb = new LinearGradientBrush(
-                new RectangleF(0, Height - barH - u * 0.2F, Math.Max(1F, barW), barH + 1), Theme.Accent, Theme.Accent2, LinearGradientMode.Vertical))
-                g.FillPath(lb, p);
-            using (Font f = new Font(Font.FontFamily, Font.Size * 0.82F, FontStyle.Bold))
-            {
-                Rectangle r = new Rectangle((int)(barW + u * 0.45F), 0, Width - (int)(barW + u * 0.45F), Height);
-                TextRenderer.DrawText(g, Text, f, r, Theme.TextDim,
-                    TextFormatFlags.Left | TextFormatFlags.Bottom | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
-            }
+            // заголовок раздела списка — обычным регистром, приглушённым
+            // цветом, без цветных полосок
+            Font f = Theme.Sized(Font.Name, Font.SizeInPoints * 0.9F, FontStyle.Bold);
+            Rectangle r = new Rectangle((int)(u * 0.55F), 0, Width - (int)(u * 0.55F), Height - (int)(u * 0.15F));
+            TextRenderer.DrawText(g, Text, f, r, Theme.TextDim,
+                TextFormatFlags.Left | TextFormatFlags.Bottom | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
         }
     }
 
@@ -590,6 +722,26 @@ namespace Win11Privacy
         private int _textLeft, _textWidth, _titleH, _descH;
         private bool _inLayout;
 
+        // правый край чипа: чуть левее переключателя
+        private int ChipRight { get { return Width - Toggle.Width - (int)(U * 1.6F); } }
+
+        // ширина колонки чипа — по самому длинному варианту, одна на все строки
+        private int ChipColumnWidth()
+        {
+            using (Font cf = new Font(Font.FontFamily, Font.Size * 0.85F))
+                return TextRenderer.MeasureText("▾ 88" + SettingsWord(88), cf, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding).Width + (int)(U * 0.9F);
+        }
+
+        // «1 настройка», «4 настройки», «16 настроек»; по-английски — setting / settings
+        internal static string SettingsWord(int n)
+        {
+            if (L.English) return n == 1 ? " setting" : " settings";
+            int m10 = n % 10, m100 = n % 100;
+            if (m10 == 1 && m100 != 11) return " настройка";
+            if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return " настройки";
+            return " настроек";
+        }
+
         private void Relayout()
         {
             if (_inLayout || Width < 40) return;
@@ -600,8 +752,11 @@ namespace Win11Privacy
                 int u = U;
                 int badge = (int)(u * 2.2F);
                 _textLeft = (int)(u * 0.8F) + badge + (int)(u * 0.75F);
-                int right = Width - Toggle.Width - (int)(u * 1.0F);
-                _textWidth = Math.Max(60, right - _textLeft - (int)(u * 0.6F));
+                // Текст кончается до колонки чипа «N настроек» во всех строках —
+                // и с чипом, и без. Раньше описание уходило под чип, а строки с
+                // чипом и без переносились в разных местах: колонка «гуляла».
+                int right = ChipRight - ChipColumnWidth() - (int)(u * 0.8F);
+                _textWidth = Math.Max(60, right - _textLeft);
 
                 _titleH = TextRenderer.MeasureText(Title, _bold, new Size(_textWidth, 0),
                     TextFormatFlags.WordBreak | TextFormatFlags.NoPadding).Height;
@@ -636,10 +791,8 @@ namespace Win11Privacy
             int bx = (int)(u * 0.8F);
             int by = (Height - badge) / 2;
             bool on = Toggle.Checked;
-            Color badgeBg = on ? Theme.BadgeBg : Theme.Mix(Theme.CardBg, Theme.TextFaint, 0.18F);
-            Color glyphColor = !Enabled ? Theme.TextFaint : (Hard ? Theme.Warn : (on ? Theme.Accent : Theme.TextDim));
-            using (GraphicsPath p = Theme.RoundRect(new RectangleF(bx, by, badge, badge), badge * 0.3F))
-            using (SolidBrush b = new SolidBrush(badgeBg)) g.FillPath(b, p);
+            // одноцветный значок без подложки: включённое и так видно по переключателю
+            Color glyphColor = !Enabled ? Theme.TextFaint : (on ? Theme.TextDim : Theme.TextFaint);
 
             Font iconFont = Theme.IconFont(Font.Size * 1.25F);
             Rectangle badgeRect = new Rectangle(bx, by, badge, badge);
@@ -657,7 +810,7 @@ namespace Win11Privacy
             }
 
             int padY = (int)(u * 0.6F);
-            Color titleColor = !Enabled ? Theme.TextFaint : (Hard ? Theme.Warn : Theme.Text);
+            Color titleColor = !Enabled ? Theme.TextFaint : Theme.Text;
             TextRenderer.DrawText(g, Title, _bold ?? Font, new Rectangle(_textLeft, padY, _textWidth, _titleH), titleColor,
                 TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
             TextRenderer.DrawText(g, Description, Font,
@@ -667,19 +820,19 @@ namespace Win11Privacy
             // чип с числом настроек внутри модуля
             if (SubCount > 0)
             {
-                string chip = (Expanded ? "\u25B4 " : "\u25BE ") + SubCount + L.T(" настроек");
+                string chip = (Expanded ? "\u25B4 " : "\u25BE ") + SubCount + SettingsWord(SubCount);
                 using (Font cf = new Font(Font.FontFamily, Font.Size * 0.85F))
                 {
                     Size cs = TextRenderer.MeasureText(g, chip, cf, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
                     int cw = cs.Width + (int)(u * 0.9F), ch = (int)(u * 1.4F);
-                    int cx = Width - Toggle.Width - (int)(u * 1.6F) - cw;
+                    int cx = ChipRight - cw;
                     _chipRect = new Rectangle(cx, padY + (_titleH - ch) / 2, cw, ch);
-                    using (GraphicsPath p = Theme.RoundRect(new RectangleF(_chipRect.X + 0.5F, _chipRect.Y + 0.5F, cw - 1, ch - 1), ch / 2F))
+                    using (GraphicsPath p = Theme.RoundRect(new RectangleF(_chipRect.X + 0.5F, _chipRect.Y + 0.5F, cw - 1, ch - 1), 4))
                     {
-                        using (SolidBrush b = new SolidBrush(Expanded ? Theme.Mix(Theme.CardBg, Theme.Accent, 0.22F) : Theme.ButtonBg)) g.FillPath(b, p);
-                        using (Pen pen = new Pen(Expanded ? Theme.Accent : Theme.ButtonBorder)) g.DrawPath(pen, p);
+                        using (SolidBrush b = new SolidBrush(Expanded ? Theme.BadgeBg : Theme.CardBg)) g.FillPath(b, p);
+                        using (Pen pen = new Pen(Expanded ? Theme.Mix(Theme.CardBorder, Theme.Accent, 0.6F) : Theme.CardBorder)) g.DrawPath(pen, p);
                     }
-                    TextRenderer.DrawText(g, chip, cf, _chipRect, Expanded ? Theme.Accent : Theme.TextDim,
+                    TextRenderer.DrawText(g, chip, cf, _chipRect, Expanded ? Theme.Text : Theme.TextDim,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
                 }
             }
@@ -704,7 +857,11 @@ namespace Win11Privacy
             BackColor = Theme.CardBg;
         }
 
-        protected override void OnResize(EventArgs e) { base.OnResize(e); Restack(); }
+        // Строки подгоняем под новую ширину ДО того, как прокрутка пересчитает
+        // свой диапазон. Иначе при резком сужении (панель разделов развернулась
+        // за один шаг) диапазон считался по строкам старой ширины, появлялась
+        // горизонтальная полоса и так и оставалась, хотя строки уже влезали.
+        protected override void OnResize(EventArgs e) { Restack(); base.OnResize(e); }
         protected override void OnControlAdded(ControlEventArgs e) { base.OnControlAdded(e); Restack(); }
 
         public void Restack()
@@ -867,11 +1024,17 @@ namespace Win11Privacy
         protected override void OnTextChanged(EventArgs e)
         { base.OnTextChanged(e); AccessibleName = Text; }
 
-        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
-        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+        // Рамка фокуса нужна тому, кто идёт по разделам клавиатурой. После
+        // щелчка мышью она оставалась вокруг кнопки сворачивания и висела,
+        // пока фокус не уйдёт. Теперь рамка — только если фокус пришёл с
+        // клавиатуры (Tab или стрелка нажаты в этот момент).
+        private bool _keyFocus;
+
+        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); _keyFocus = FocusCue.FromKeyboard(); Invalidate(); }
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); _keyFocus = false; Invalidate(); }
 
         protected override void OnMouseDown(MouseEventArgs e)
-        { base.OnMouseDown(e); if (CanFocus) Focus(); }
+        { base.OnMouseDown(e); _keyFocus = false; if (CanFocus) Focus(); Invalidate(); }
 
         // Enter и пробел открывают раздел — как щелчок мышью
         protected override bool IsInputKey(Keys keyData)
@@ -901,66 +1064,65 @@ namespace Win11Privacy
             RectangleF r = new RectangleF(4, 2, Width - 8, Height - 4);
             if (_hover && !Selected)
             {
-                using (GraphicsPath p = Theme.RoundRect(r, 7))
-                using (SolidBrush b = new SolidBrush(Color.FromArgb(Theme.Dark ? 26 : 22, Theme.Text)))
+                using (GraphicsPath p = Theme.RoundRect(r, 6))
+                using (SolidBrush b = new SolidBrush(Color.FromArgb(Theme.Dark ? 14 : 12, Theme.Text)))
                     g.FillPath(b, p);
             }
             // Идущему по разделам табуляцией нужно видеть, где он сейчас
-            if (Focused && !Selected)
+            if (Focused && _keyFocus && !Selected)
             {
-                using (GraphicsPath p = Theme.RoundRect(r, 7))
+                using (GraphicsPath p = Theme.RoundRect(r, 6))
                 using (Pen pen = new Pen(Theme.Accent, 1.4F))
                     g.DrawPath(pen, p);
             }
 
-            Color fg = Selected ? Theme.AccentText : Theme.TextDim;
-            Font icon = Theme.IconFont(Font.Size * 1.15F);
+            Color fg = Selected ? Theme.Text : Theme.TextDim;
+            if (_hover && !Selected) fg = Theme.Text;
+            Font icon = Theme.IconFont(Font.Size * 1.1F);
+            // Отметка у раздела — одна неброская точка «загляните сюда».
+            // Подписи «вкл» и «!» в цветных пилюлях пестрили панель.
+            float dot = u * 0.36F;
+
+            // Значок стоит на одном месте при любой ширине пункта: в свёрнутой
+            // панели это ровно её середина. Раньше в свёрнутом виде он
+            // центрировался по текущей ширине, а в развёрнутом прижимался
+            // влево — на середине анимации все значки перепрыгивали, и
+            // пункты дёргались.
+            int gx = (int)(u * 1.0F), gw = (int)(u * 1.4F);
+            Rectangle gr = new Rectangle(gx, 0, gw, Height);
+            if (icon != null && !string.IsNullOrEmpty(Glyph))
+                TextRenderer.DrawText(g, Glyph, icon, gr, fg,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            else if (Compact)
+                TextRenderer.DrawText(g, Text.Length > 0 ? Text.Substring(0, 1) : "", Theme.Bold(Font), gr, fg,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
             if (Compact)
             {
-                if (icon != null && !string.IsNullOrEmpty(Glyph))
-                    TextRenderer.DrawText(g, Glyph, icon, new Rectangle(0, 0, Width, Height), fg,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-                else
-                    TextRenderer.DrawText(g, Text.Length > 0 ? Text.Substring(0, 1) : "", Theme.Bold(Font),
-                        new Rectangle(0, 0, Width, Height), fg,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
                 if (!string.IsNullOrEmpty(Badge))
-                {
-                    float d = u * 0.5F;
-                    using (SolidBrush b = new SolidBrush(Selected ? Theme.AccentText : Theme.Accent))
-                        g.FillEllipse(b, Width / 2F + u * 0.55F, Height / 2F - u * 0.95F, d, d);
-                }
+                    using (SolidBrush b = new SolidBrush(Theme.Warn))
+                        g.FillEllipse(b, gx + gw / 2F + u * 0.55F, Height / 2F - u * 0.75F, dot, dot);
                 return;
             }
 
-            int gx = (int)(u * 1.0F);
-            if (icon != null && !string.IsNullOrEmpty(Glyph))
-                TextRenderer.DrawText(g, Glyph, icon, new Rectangle(gx, 0, (int)(u * 1.6F), Height), fg,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-
-            int tx = gx + (int)(u * 2.0F);
-            TextRenderer.DrawText(g, Text, Selected ? Theme.Bold(Font) : Font,
-                new Rectangle(tx, 0, Width - tx - (int)(u * 1.6F), Height), fg,
+            // Строка раскладывается по ширине развёрнутого пункта, а не по
+            // текущей: при сворачивании её просто срезает край и она гаснет,
+            // а не пересокращается многоточием на каждом кадре.
+            int full = Math.Max(Width, FullWidth);
+            int tx = gx + (int)(u * 1.9F);
+            float fade = Math.Max(0F, Math.Min(1F, (Width - u * 6F) / (u * 3F)));
+            Color tc = fade >= 1F ? fg : Theme.Mix(Theme.SideTop, fg, fade);
+            TextRenderer.DrawText(g, Text, Font,
+                new Rectangle(tx, 0, full - tx - (int)(u * 1.4F), Height), tc,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
 
             if (!string.IsNullOrEmpty(Badge))
-            {
-                using (Font bf = new Font(Font.FontFamily, Font.Size * 0.8F, FontStyle.Bold))
-                {
-                    Size bs = TextRenderer.MeasureText(Badge, bf);
-                    int bw = bs.Width + (int)(u * 0.8F);
-                    int bh = (int)(u * 1.25F);
-                    RectangleF br = new RectangleF(Width - bw - (int)(u * 0.6F), (Height - bh) / 2F, bw, bh);
-                    Color bBg = Selected ? Color.FromArgb(70, Theme.AccentText) : Theme.Accent;
-                    Color bFg = Theme.AccentText;
-                    using (GraphicsPath p = Theme.RoundRect(br, bh / 2F))
-                    using (SolidBrush b = new SolidBrush(bBg)) g.FillPath(b, p);
-                    TextRenderer.DrawText(g, Badge, bf, Rectangle.Round(br), bFg,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-                }
-            }
+                using (SolidBrush b = new SolidBrush(Theme.Warn))
+                    g.FillEllipse(b, full - u * 0.9F - dot, (Height - dot) / 2F, dot, dot);
         }
+
+        // Ширина пункта в развёрнутой панели (0 — текущая)
+        public int FullWidth;
     }
 
     // ====================================================================== //
@@ -990,10 +1152,15 @@ namespace Win11Privacy
                 g.FillRectangle(b, ClientRectangle);
             if (Width < 12 || Height < 12) return;
             RectangleF r = new RectangleF(0.5F, 0.5F, Width - 1, Height - 1);
+            bool status = Theme.IsStatus(Accent);
             using (GraphicsPath p = Theme.RoundRect(r, 8))
-            using (SolidBrush b = new SolidBrush(Theme.CardBg)) g.FillPath(b, p);
-            using (GraphicsPath p = Theme.RoundRect(new RectangleF(0.5F, 0.5F, 3.5F, Height - 1), 2))
-            using (SolidBrush b = new SolidBrush(Accent)) g.FillPath(b, p);
+            {
+                using (SolidBrush b = new SolidBrush(Theme.CardBg)) g.FillPath(b, p);
+                using (Pen pen = new Pen(Theme.CardBorder)) g.DrawPath(pen, p);
+            }
+            // цветная кромка — только у плитки о состоянии (внимание, проблема)
+            if (status)
+                using (SolidBrush b = new SolidBrush(Accent)) g.FillRectangle(b, 1, (int)(Height * 0.22F), 2, Height - 2 * (int)(Height * 0.22F));
 
             int u = Font.Height;
             int left = (int)(u * 0.9F);
@@ -1002,20 +1169,20 @@ namespace Win11Privacy
             // Заголовок плитки — в одну строку, а на узкой плитке в две. Раньше
             // он обрывался многоточием («ОБРАЩЕНИЯ К ТЕЛЕ…»), и понять, что
             // означает число под ним, было нельзя. Всё, что ниже, сдвигается.
-            string cap = Caption.ToUpperInvariant();
-            Font cf = Theme.Sized(Font.Name, Font.SizeInPoints * 0.8F, FontStyle.Bold);
+            string cap = Caption;
+            Font cf = Theme.Sized(Font.Name, Font.SizeInPoints * 0.9F, FontStyle.Regular);
             int line = TextRenderer.MeasureText(g, "X", cf).Height;
             Size capNeed = TextRenderer.MeasureText(g, cap, cf, new Size(textW, 0), TextFormatFlags.WordBreak);
             int capH = capNeed.Height > line ? line * 2 : line;
             int shift = capH - line;
-            TextRenderer.DrawText(g, cap, cf, new Rectangle(left, (int)(u * 0.5F), textW, capH), Theme.TextFaint,
+            TextRenderer.DrawText(g, cap, cf, new Rectangle(left, (int)(u * 0.5F), textW, capH), Theme.TextDim,
                 TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
 #if UITEST
             if (capNeed.Height > capH || capNeed.Width > textW) ClipWatch.Note("StatTile.Caption", Caption, capNeed.Width, textW);
 #endif
             TextRenderer.DrawText(g, Value, Theme.Sized(Font.Name, Font.SizeInPoints * 1.45F, FontStyle.Bold),
                 new Rectangle((int)(u * 0.85F), (int)(u * 1.55F) + shift, Width - (int)(u * 1.4F), (int)(u * 2.2F)),
-                Accent, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+                status ? Accent : Theme.Text, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
             if (!string.IsNullOrEmpty(Sub))
             {
                 // Подпись переносится на вторую строку, а если и так не влезает —
@@ -1063,17 +1230,14 @@ namespace Win11Privacy
         {
             Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
             int u = Font.Height;
+            // отмеченная строка — только точка и цвет значения, без красной заливки
             if (_flag)
-            {
-                using (GraphicsPath p = Theme.RoundRect(new RectangleF(0.5F, 1.5F, Width - 1, Height - 3), 5))
-                using (SolidBrush b = new SolidBrush(Theme.Mix(Theme.CardBg, Theme.Err, 0.14F))) g.FillPath(b, p);
-                using (SolidBrush b = new SolidBrush(Theme.Err)) g.FillEllipse(b, u * 0.5F, (Height - u * 0.5F) / 2F, u * 0.5F, u * 0.5F);
-            }
-            int lx = _flag ? (int)(u * 1.5F) : (int)(u * 0.4F);
-            Size vs = TextRenderer.MeasureText(_val, Theme.Bold(Font));
+                using (SolidBrush b = new SolidBrush(Theme.Err)) g.FillEllipse(b, u * 0.45F, (Height - u * 0.4F) / 2F, u * 0.4F, u * 0.4F);
+            int lx = _flag ? (int)(u * 1.3F) : (int)(u * 0.4F);
+            Size vs = TextRenderer.MeasureText(_val, Font);
             TextRenderer.DrawText(g, _key, Font, new Rectangle(lx, 0, Width - lx - vs.Width - (int)(u * 0.8F), Height),
-                _flag ? Theme.Err : Theme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
-            TextRenderer.DrawText(g, _val, Theme.Bold(Font), new Rectangle(0, 0, Width - (int)(u * 0.4F), Height),
+                Theme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+            TextRenderer.DrawText(g, _val, Font, new Rectangle(0, 0, Width - (int)(u * 0.4F), Height),
                 _flag ? Theme.Err : Theme.TextDim, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
         }
     }
@@ -1297,15 +1461,16 @@ namespace Win11Privacy
             if (icon != null) TextRenderer.DrawText(g, glyph, icon, new Rectangle((int)(u * 0.3F), 0, (int)(u * 1.4F), HeadH), Theme.TextDim, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
             int tx = (int)(u * 1.9F);
-            string score = _ok + "/" + _total;
-            Size ss = TextRenderer.MeasureText(score, Theme.Bold(Font));
-            TextRenderer.DrawText(g, _title, Theme.Bold(Font), new Rectangle(tx, 0, Width - tx - ss.Width - (int)(u * 2.2F), HeadH),
+            // справа — точка состояния и «17 из 17» обычным текстом, без цветной пилюли
+            string score = _ok + " " + L.T("из") + " " + _total;
+            Size ss = TextRenderer.MeasureText(score, Font);
+            TextRenderer.DrawText(g, _title, Font, new Rectangle(tx, 0, Width - tx - ss.Width - (int)(u * 2.4F), HeadH),
                 Theme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
-
-            int chipW = ss.Width + (int)(u * 1.0F); int chipH = (int)(u * 1.35F);
-            RectangleF chip = new RectangleF(Width - chipW - (int)(u * 0.5F), (HeadH - chipH) / 2F, chipW, chipH);
-            using (GraphicsPath p = Theme.RoundRect(chip, chipH / 2F)) using (SolidBrush b = new SolidBrush(Theme.Mix(Theme.CardBg, badge, 0.22F))) g.FillPath(b, p);
-            TextRenderer.DrawText(g, score, Theme.Bold(Font), Rectangle.Round(chip), badge, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            int sx = Width - ss.Width - (int)(u * 0.6F);
+            TextRenderer.DrawText(g, score, Font, new Rectangle(sx, 0, ss.Width, HeadH), Theme.TextDim,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+            float dd = u * 0.4F;
+            using (SolidBrush b = new SolidBrush(badge)) g.FillEllipse(b, sx - u * 0.45F - dd, (HeadH - dd) / 2F, dd, dd);
 
             if (_open)
             {

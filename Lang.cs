@@ -6,27 +6,43 @@ using System.Threading;
 namespace Win11Privacy
 {
     // ================================================================== //
-    //  Язык интерфейса. По умолчанию берётся язык Windows: русский —
-    //  как есть, всё остальное — английский. Переключается на странице
-    //  «О программе» и запоминается вместе с размером окна.
+    //  Язык интерфейса. По умолчанию — язык Windows, и он проверяется при
+    //  каждом запуске: русский — как есть, любой другой — английский.
+    //  На странице «О программе» можно закрепить русский или английский.
     // ================================================================== //
     internal static class L
     {
         private static bool _en;
-        private static bool _explicit;
+        private static int _choice;            // 0 — как в Windows, 1 — русский, 2 — английский
         private static Dictionary<string, string> _map;
 
         public static bool English
         {
             get { return _en; }
-            set { _en = value; _explicit = true; }
+            set { _en = value; _choice = value ? 2 : 1; }
+        }
+
+        // Выбор языка: 0 — как в Windows, 1 — русский, 2 — английский
+        public static int Choice
+        {
+            get { return _choice; }
+            set
+            {
+                _choice = (value == 1 || value == 2) ? value : 0;
+                _en = _choice == 0 ? SystemEnglish() : _choice == 2;
+            }
+        }
+
+        // Язык интерфейса Windows: русский — как есть, любой другой — английский
+        public static bool SystemEnglish()
+        {
+            try { return !Thread.CurrentThread.CurrentUICulture.TwoLetterISOLanguageName.Equals("ru", StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
         }
 
         public static void DetectFromSystem()
         {
-            if (_explicit) return;
-            try { _en = !Thread.CurrentThread.CurrentUICulture.TwoLetterISOLanguageName.Equals("ru", StringComparison.OrdinalIgnoreCase); }
-            catch { _en = false; }
+            if (_choice == 0) _en = SystemEnglish();
         }
 
         public static string T(string ru)
@@ -43,7 +59,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(1170, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1510, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -1214,6 +1230,346 @@ namespace Win11Privacy
             _map["Какие программы обращались к данным и камере, что запускалось и что отправлял клиент телеметрии."] = "Which programs accessed your data and camera, what was launched and what the telemetry client sent.";
             _map["Адреса сайтов и служб, к которым недавно обращался компьютер."] = "Addresses of sites and services the computer contacted recently.";
             _map["задача "] = "task ";
+            _map["Номер устройства (GDID)"] = "Device ID (GDID)";
+            _map["По нему Microsoft узнаёт компьютер даже через VPN. Отключает службы, которые его передают, и закрывает их серверы; вход в учётную запись остаётся. Перестанут работать «Связь с телефоном» и обмен с устройствами поблизости. Если Магазин перестанет скачивать — снимите пункт DoSvc."] = "Microsoft recognises the computer by it even through a VPN. Turns off the services that send it and blocks their servers; the Microsoft account sign-in keeps working. Phone Link and nearby sharing stop working. If the Store stops downloading, untick the DoSvc item.";
+            _map["Номер устройства в учётной записи Microsoft (GDID)"] = "Device ID in the Microsoft account (GDID)";
+            _map["служба CDPSvc: регистрация компьютера в каталоге устройств Microsoft — выкл"] = "CDPSvc service: registering the computer in Microsoft's device directory — off";
+            _map["служба CDPUserSvc: то же для каждого пользователя — выкл"] = "CDPUserSvc service: the same for each user — off";
+            _map["служба DoSvc (Delivery Optimization): передача номера устройства — выкл"] = "DoSvc service (Delivery Optimization): reporting the device ID — off";
+            _map["серверы каталога устройств и Delivery Optimization — в hosts"] = "device directory and Delivery Optimization servers — into hosts";
+            _map["есть — в отчёт не выводится"] = "present — not included in the report";
+            _map["Номер устройства"] = "Device ID";
+            _map["Microsoft выдаёт компьютеру номер (GDID) и узнаёт его по нему при любом IP, даже через VPN.\n"] = "Microsoft gives the computer a number (GDID) and recognises it by that number whatever the IP, even through a VPN.\n";
+            _map["Отключённая телеметрия его не останавливает: номер уходит через другие службы."] = "Turning telemetry off does not stop it: the number goes out through other services.";
+            _map["Не передавать"] = "Stop sending";
+            _map["Сменить номер"] = "Change the ID";
+            _map["Запретить выдачу"] = "Block issuing";
+            _map["Вернуть как было"] = "Restore";
+            _map["Чтение номера устройства…"] = "Reading the device ID…";
+            _map["запуск автоматически"] = "starts automatically";
+            _map["запуск по требованию"] = "starts on demand";
+            _map["запуск при загрузке"] = "starts at boot";
+            _map["Нажмите «Обновить», чтобы прочитать состояние"] = "Press \"Refresh\" to read the current state";
+            _map["Номер"] = "ID";
+            _map["Windows его сейчас не хранит"] = "Windows does not hold one now";
+            _map["выдан серверами Microsoft"] = "issued by Microsoft's servers";
+            _map["закрыта"] = "blocked";
+            _map["частично"] = "partly";
+            _map["идёт"] = "active";
+            _map["Передача"] = "Sending";
+            _map["службы CDPSvc, DoSvc и их серверы"] = "CDPSvc, DoSvc and their servers";
+            _map["Выдача нового"] = "New ID issuing";
+            _map["открыта"] = "open";
+            _map["сервер login.live.com"] = "the login.live.com server";
+            _map["Копий на диске"] = "Copies on disk";
+            _map["в реестре и учётных данных"] = "in the registry and credentials";
+            _map["Сейчас"] = "Now";
+            _map["Выдаётся при входе в Windows и привязан к установке Windows, а не к железу. По нему Microsoft связывает ваши действия с этим компьютером при любом IP."] = "Issued when you sign in and tied to this Windows installation, not to the hardware. Microsoft uses it to link what you do to this computer whatever the IP.";
+            _map["Передача номера"] = "Sending the ID";
+            _map["CDPSvc регистрирует компьютер в каталоге устройств Microsoft, DoSvc сообщает номер. DiagTrack тут ни при чём."] = "CDPSvc registers the computer in Microsoft's device directory, DoSvc reports the ID. DiagTrack has nothing to do with it.";
+            _map["Выдача нового номера"] = "Issuing a new ID";
+            _map["Сервер выдачи закрыт: стёртый номер Windows заменить нечем."] = "The issuing server is blocked: Windows has nothing to replace an erased ID with.";
+            _map["Сервер выдачи открыт: стёртый номер Windows сразу заменит новым."] = "The issuing server is open: Windows will replace an erased ID with a new one right away.";
+            _map["Вход в Windows"] = "Windows sign-in";
+            _map["Через учётную запись Microsoft: запретить выдачу номера нельзя — без сервера выдачи она не работает."] = "With a Microsoft account: issuing cannot be blocked, because the account does not work without the issuing server.";
+            _map["Локальная учётная запись: доступны все три действия."] = "Local account: all three actions are available.";
+            _map["учётная запись Microsoft"] = "Microsoft account";
+            _map["локальная"] = "local";
+            _map["Что можно сделать"] = "What you can do";
+            _map["Отключает CDPSvc, CDPUserSvc и DoSvc и закрывает серверы каталога устройств. Вход в учётную запись остаётся; «Связь с телефоном» и обмен с устройствами поблизости перестанут работать."] = "Turns off CDPSvc, CDPUserSvc and DoSvc and blocks the device directory servers. Account sign-in keeps working; Phone Link and nearby sharing stop working.";
+            _map["сделано"] = "done";
+            _map["Стирает «личность» устройства — Windows получит новый номер. Магазин, Xbox и OneDrive попросят войти заново. Старый номер у Microsoft останется, а войдя той же учётной записью, вы привяжете к ней и новый."] = "Erases the device's identity, so Windows gets a new ID. The Store, Xbox and OneDrive will ask you to sign in again. Microsoft keeps the old ID, and signing in with the same account links the new one to it too.";
+            _map["Закрывает сервер выдачи и стирает номер: нового Windows не получит. Только для входа без учётной записи Microsoft — Магазин, Xbox и OneDrive перестанут работать."] = "Blocks the issuing server and erases the ID, so Windows gets no new one. Only for signing in without a Microsoft account: the Store, Xbox and OneDrive stop working.";
+            _map["недоступно"] = "unavailable";
+            _map["Службы и серверы — как до программы. Стёртый номер не вернётся: Windows получит новый."] = "Services and servers go back to how they were before the program. An erased ID does not come back: Windows gets a new one.";
+            _map["Службы"] = "Services";
+            _map[", работает"] = ", running";
+            _map[". Номер виден только вам — наружу программа ничего не отправляет.\n"] = ". Only you can see the ID — the program sends nothing out.\n";
+            _map["Старые записи Microsoft не стереть ничем: всё здесь меняет только то, что будет дальше."] = "Nothing can erase Microsoft's existing records: everything here only changes what happens from now on.";
+            _map["Будут отключены службы CDPSvc, CDPUserSvc и DoSvc, а серверы каталога устройств Microsoft закрыты в hosts.\n\n"] = "The CDPSvc, CDPUserSvc and DoSvc services will be turned off and Microsoft's device directory servers blocked in hosts.\n\n";
+            _map["Вход в учётную запись Microsoft останется. Перестанут работать «Связь с телефоном» и обмен с устройствами поблизости. "] = "Microsoft account sign-in keeps working. Phone Link and nearby sharing stop working. ";
+            _map["Если Магазин перестанет скачивать приложения, верните DoSvc на странице «Изменения».\n\nПродолжить?"] = "If the Store stops downloading apps, restore DoSvc on the Changes page.\n\nContinue?";
+            _map["Не передавать номер"] = "Stop sending the device ID";
+            _map["Номер будет стёрт вместе с «личностью» устройства. Сервер выдачи закрыт — нового номера Windows не получит.\n\nПродолжить?"] = "The ID will be erased together with the device's identity. The issuing server is blocked, so Windows will get no new ID.\n\nContinue?";
+            _map["Номер будет стёрт вместе с «личностью» устройства, и Windows получит новый при следующем обращении к учётной записи Microsoft.\n\n"] = "The ID will be erased together with the device's identity, and Windows will get a new one the next time it contacts the Microsoft account.\n\n";
+            _map["• Магазин, Xbox и OneDrive могут попросить войти заново.\n"] = "• The Store, Xbox and OneDrive may ask you to sign in again.\n";
+            _map["• Старый номер у Microsoft останется — стереть чужие записи нельзя.\n"] = "• Microsoft keeps the old ID — records held elsewhere cannot be erased.\n";
+            _map["• Войдя той же учётной записью, вы привяжете к ней и новый номер.\n\nПродолжить?"] = "• Signing in with the same account links the new ID to it too.\n\nContinue?";
+            _map["Сменить номер устройства"] = "Change the device ID";
+            _map["Смена номера устройства…"] = "Changing the device ID…";
+            _map["Вы входите в Windows через учётную запись Microsoft. Без сервера выдачи номера она перестанет работать, поэтому запрет недоступен.\n\n"] = "You sign in to Windows with a Microsoft account. It stops working without the issuing server, so blocking is not available.\n\n";
+            _map["Чтобы им воспользоваться, сначала перейдите на локальную учётную запись: Параметры → Учётные записи → Ваши данные."] = "To use it, first switch to a local account: Settings → Accounts → Your info.";
+            _map["Запретить выдачу номера"] = "Block issuing the device ID";
+            _map["Сервер, который выдаёт номер (login.live.com), будет закрыт в hosts и брандмауэре, передача номера отключена, а сам номер стёрт отовсюду.\n\n"] = "The server that issues the ID (login.live.com) will be blocked in hosts and the firewall, sending the ID turned off, and the ID itself erased everywhere.\n\n";
+            _map["Нового номера Windows не получит. Вход в учётную запись Microsoft, Магазин, Xbox и OneDrive перестанут работать, пока запрет стоит. "] = "Windows will get no new ID. Microsoft account sign-in, the Store, Xbox and OneDrive stop working while the block is on. ";
+            _map["Снять его — «Вернуть как было» здесь или общий откат.\n\nПродолжить?"] = "To lift it, use \"Restore\" here or the general undo.\n\nContinue?";
+            _map["Службы получат тот тип запуска, что был до программы, а блоки серверов номера будут убраны из hosts и брандмауэра.\n\n"] = "The services get back the startup type they had before the program, and the ID server blocks are removed from hosts and the firewall.\n\n";
+            _map["Стёртый раньше номер не вернётся: Windows получит новый.\n\nПродолжить?"] = "An ID erased earlier does not come back: Windows gets a new one.\n\nContinue?";
+            _map["Возврат…"] = "Restoring…";
+            _map["Запрет выдачи номера устройства"] = "Block issuing the device ID";
+            _map["сервер выдачи номера (login.live.com, account.live.com) — в hosts"] = "the ID issuing server (login.live.com, account.live.com) — into hosts";
+            _map["исходящие службы учётных записей Microsoft (wlidsvc) — блок"] = "outgoing traffic of the Microsoft account service (wlidsvc) — blocked";
+            _map["номер устройства стёрт отовсюду, где Windows его хранит"] = "device ID erased from everywhere Windows keeps it";
+            _map["номера нет"] = "no ID";
+            _map["номер на месте"] = "ID present";
+            _map["недоступно при входе через учётную запись Microsoft"] = "unavailable when signing in with a Microsoft account";
+            _map["недоступно на компьютере организации"] = "unavailable on an organisation's computer";
+            _map["компьютер в домене организации"] = "the computer is in an organisation's domain";
+            _map["компьютер подключён к Entra ID организации"] = "the computer is joined to an organisation's Entra ID";
+            _map["в Windows добавлена рабочая или учебная учётная запись"] = "a work or school account is added to Windows";
+            _map["компьютер под управлением организации (MDM)"] = "the computer is managed by an organisation (MDM)";
+            _map["По этому номеру Microsoft узнаёт компьютер даже через VPN и выдаёт его по запросу властей. Не передавать, сменить или запретить выдачу — на вкладке «Номер устройства»."] = "Microsoft recognises the computer by this number even through a VPN and hands it over when the authorities ask. To stop sending it, change it or block issuing, use the Device ID tab.";
+            _map["Для других ПК"] = "For other PCs";
+            _map["Куда сложить набор для других компьютеров"] = "Where to put the set for other computers";
+            _map["Win11Privacy — набор для других компьютеров\r\n\r\n"] = "Win11Privacy — set for other computers\r\n\r\n";
+            _map["apply.cmd  — применить выбранные настройки (разделов: "] = "apply.cmd  — apply the chosen settings (sections: ";
+            _map["revert.cmd — вернуть всё, что программа изменила, по журналу изменений.\r\n\r\n"] = "revert.cmd — undo everything the program changed, from its change log.\r\n\r\n";
+            _map["Запускайте от имени администратора. Подходит и для развёртывания: групповая политика, Intune, скрипт входа.\r\n"] = "Run as administrator. Also suitable for deployment: Group Policy, Intune, a logon script.\r\n";
+            _map["Журнал отката хранится на каждом компьютере в C:\\ProgramData\\Win11Privacy.\r\n"] = "The undo log is kept on each computer in C:\\ProgramData\\Win11Privacy.\r\n";
+            _map["Настройки пользователя ложатся во все профили и в профиль по умолчанию — так они сработают и при запуске от имени SYSTEM.\r\n"] = "User settings go into every profile and the default profile, so they work even when run as SYSTEM.\r\n";
+            _map["Настройки пользователя ложатся только тому, от чьего имени запущен файл. Для запуска от имени SYSTEM включите «Для всех пользователей» и выгрузите набор заново.\r\n"] = "User settings go only to the account that runs the file. To run as SYSTEM, turn on \"For all users\" and export the set again.\r\n";
+            _map["Набор для других компьютеров сохранён: "] = "Set for other computers saved: ";
+            _map["Для всех пользователей"] = "For all users";
+            _map["Настройки пользователя ложатся и в другие профили этого компьютера, и в профиль по умолчанию — новые пользователи получат их сразу."] = "User settings also go into the other profiles on this computer and into the default profile, so new users get them straight away.";
+            _map["Программа разрешит имя каждого сервера сбора данных так же, как это сделает любая программа,\n"] = "The program will resolve the name of every data-collection server the same way any program would,\n";
+            _map["и попробует открыть к нему соединение. Данные не отправляются: соединение сразу закрывается.\n\n"] = "and try to open a connection to it. No data is sent: the connection is closed at once.\n\n";
+            _map["Займёт до 15 секунд. Продолжить?"] = "It takes up to 15 seconds. Continue?";
+            _map["Проверить утечки"] = "Leak test";
+            _map["Проверка утечек…"] = "Testing for leaks…";
+            _map["Не удалось провести проверку."] = "The test could not be run.";
+            _map["Доступны — отправка дойдёт"] = "Reachable — data would get through";
+            _map["Закрыты брандмауэром или недоступны"] = "Blocked by the firewall or unreachable";
+            _map["Закрыты в hosts"] = "Blocked in hosts";
+            _map["Имя не отвечает — сервера нет"] = "Name does not resolve — no server";
+            _map["Ни один сервер сбора не отвечает: отправка телеметрии отсюда не дойдёт."] = "No data-collection server answers: telemetry from here will not get through.";
+            _map[" серверов отвечают. Закрыть их — модули «Блокировка доменов» и «Блокировка адресов телеметрии»."] = " servers answer. To block them, use the \"Domain blocking\" and \"Telemetry address blocking\" modules.";
+            _map["\nШифрованный DNS не запрещён: браузер с ним обойдёт блокировку в hosts."] = "\nEncrypted DNS is not blocked: a browser using it bypasses hosts blocking.";
+            _map["Проверка утечек"] = "Leak test";
+            _map["Закрыть"] = "Close";
+            _map["Монитор включит правила брандмауэра для служб телеметрии и начнёт\nвести журнал исходящих соединений — разрешённых и заблокированных.\n"] = "The monitor will enable firewall rules for telemetry services and start\nlogging outgoing connections, both allowed and blocked.\n";
+            _map["Журнал безопасности при этом вырастет до 128 МБ, чтобы не вытеснять другие записи.\n\nПродолжить?"] = "The Security log will grow to 128 MB so other entries are not pushed out.\n\nContinue?";
+            _map["Не следить за новыми"] = "Stop watching for new";
+            _map["Следить за новыми"] = "Watch for new";
+            _map["Отключение слежения за сетью…"] = "Turning off network watch…";
+            _map["Каждые 15 минут программа будет сверять журнал брандмауэра. Если в сеть впервые выйдет\n"] = "Every 15 minutes the program will check the firewall log. If a NEW program goes online\n";
+            _map["НОВАЯ программа — придёт уведомление, а здесь, на «Мониторе», её можно будет отрезать.\n\n"] = "for the first time, you get a notification, and here on the Monitor page you can cut it off.\n\n";
+            _map["Первый час слежение учится: всё, что выходит в сеть, считается своим.\n\nПродолжить?"] = "For the first hour it learns: everything that goes online counts as known.\n\nContinue?";
+            _map["Следить за новыми программами"] = "Watch for new programs";
+            _map["Включение слежения за сетью…"] = "Turning on network watch…";
+            _map["Впервые вышли в сеть — можно закрыть выход"] = "Went online for the first time — can be cut off";
+            _map["Программы, выходившие в сеть, — по ним слежение замечает новые"] = "Programs that have gone online — network watch uses them to spot new ones";
+            _map["осторожно"] = "careful";
+            _map["с последствиями"] = "side effects";
+            _map["На Home и Pro Windows всё равно оставит «обязательные данные»: полностью выключает только Enterprise и Education."] = "On Home and Pro, Windows still keeps \"required data\": only Enterprise and Education turn it off fully.";
+            _map["Win+V перестанет показывать историю скопированного."] = "Win+V will stop showing your clipboard history.";
+            _map["Буфер обмена не будет общим с телефоном и другими компьютерами."] = "The clipboard will no longer be shared with your phone and other computers.";
+            _map["Голосовой ввод и диктовка через облако Microsoft перестанут работать."] = "Voice typing and dictation through Microsoft's cloud will stop working.";
+            _map["Поиск в Пуске будет искать только на компьютере, без результатов из интернета."] = "Start search will look only on this computer, with no web results.";
+            _map["Карты, погода и автоматический часовой пояс не узнают, где вы."] = "Maps, weather and the automatic time zone will not know where you are.";
+            _map["Потерянный ноутбук нельзя будет найти через «Поиск устройства»."] = "A lost laptop cannot be found with Find my device.";
+            _map["Приложения из Магазина не узнают ваше имя, аватар и возраст."] = "Store apps will not know your name, picture and age.";
+            _map["Почта из Магазина не увидит ваши письма, пока вы не разрешите её вручную."] = "Store mail apps will not see your email until you allow them manually.";
+            _map["Календарь из Магазина не увидит ваши события, пока вы не разрешите его вручную."] = "Store calendar apps will not see your events until you allow them manually.";
+            _map["Приложения не смогут связываться с телефоном и устройствами Bluetooth без вашего разрешения."] = "Apps cannot talk to your phone or Bluetooth devices without your permission.";
+            _map["Камера перестанет работать в приложениях Магазина. В браузерах и обычных программах — работает."] = "The camera stops working in Store apps. It keeps working in browsers and regular programs.";
+            _map["Микрофон перестанет работать в приложениях Магазина. В браузерах и обычных программах — работает."] = "The microphone stops working in Store apps. It keeps working in browsers and regular programs.";
+            _map["Приложения из Магазина не будут присылать уведомления и обновляться, пока закрыты."] = "Store apps will not send notifications or refresh while closed.";
+            _map["Сетевые игры Xbox, которым нужен Teredo, могут не подключаться."] = "Xbox online games that need Teredo may fail to connect.";
+            _map["OneDrive перестанет синхронизировать файлы. Сами файлы на диске остаются."] = "OneDrive stops syncing files. The files on disk stay.";
+            _map["Нужна, если компьютером управляет организация (MDM). Дома не используется."] = "Needed when an organisation manages the computer (MDM). Not used at home.";
+            _map["Проверяет лицензии приложений Магазина. Если купленные приложения перестанут запускаться — снимите этот пункт."] = "Checks Store app licences. If purchased apps stop launching, untick this item.";
+            _map["Родительский контроль Microsoft Family перестанет работать."] = "Microsoft Family parental controls stop working.";
+            _map["Защитник теряет облачную проверку: новые угрозы он будет узнавать позже."] = "Defender loses cloud protection and will recognise new threats later.";
+            _map["Подозрительные файлы не уйдут на анализ в Microsoft."] = "Suspicious files will not be sent to Microsoft for analysis.";
+            _map["Ваши DNS-запросы снова видит провайдер. Зато hosts работает для всех программ."] = "Your provider sees your DNS queries again. In return, hosts works for every program.";
+            _map["Windows Update и Магазин не затрагиваются. Изредка перестают уходить отчёты об ошибках."] = "Windows Update and the Store are not affected. Occasionally error reports stop going out.";
+            _map["На тех же адресах иногда живут другие службы Microsoft — если что-то отвалится, снимите пункт."] = "Other Microsoft services sometimes share these addresses; if something breaks, untick the item.";
+            _map["«Связь с телефоном» и обмен с устройствами поблизости перестанут работать."] = "Phone Link and nearby sharing stop working.";
+            _map["Если Магазин перестанет скачивать приложения — снимите этот пункт."] = "If the Store stops downloading apps, untick this item.";
+            _map["Вход в учётную запись Microsoft, Магазин, Xbox и OneDrive перестанут работать."] = "Microsoft account sign-in, the Store, Xbox and OneDrive stop working.";
+            _map["блок установлен"] = "block in place";
+            _map["нет блока"] = "no block";
+            _map["блок устарел"] = "block out of date";
+            _map["адреса заблокированы"] = "addresses blocked";
+            _map["адреса устарели"] = "addresses out of date";
+            _map["нет правила"] = "no rule";
+            _map["Монитор фиксирует попытки программ отправить данные наружу и показывает, кто и куда стучится. Использует брандмауэр и журнал безопасности Windows."] = "The monitor records attempts to send data out and shows who knocks where. It uses the firewall and the Windows security log.";
+            _map["Выгрузка файлов в облако и реклама OneDrive. Файлы на диске остаются."] = "Uploading files to the cloud and OneDrive ads. Files on disk stay.";
+            _map["Контакты, календарь, почта, возраст — под запретом политики, обновлением не вернуть."] = "Contacts, calendar, email, age — blocked by policy that updates cannot undo.";
+            _map["Что Windows сама скачивает и отправляет: шрифты, карты, модели, Teredo."] = "What Windows downloads and sends on its own: fonts, maps, models, Teredo.";
+            _map["Номер, по которому Microsoft узнаёт ПК даже через VPN. Подробно — на своей вкладке."] = "The number Microsoft recognises the PC by, even through a VPN. Details on its own tab.";
+            _map["Брандмауэр закрывает сами адреса сбора — в обход hosts не пройти."] = "The firewall blocks the collection addresses themselves, so going around hosts fails.";
+            _map["Камера, микрофон и фон для приложений Магазина. Браузеры не затрагивает."] = "Camera, microphone and background for Store apps. Browsers are not affected.";
+            _map["Без DoH браузеры не обойдут блокировку доменов. Запросы снова видит провайдер."] = "Without DoH, browsers cannot bypass domain blocking. Your provider sees queries again.";
+            _map["Облачная синхронизация и копия"] = "Cloud sync and backup";
+            _map["Список приложений, Wi-Fi, язык и согласия, которые Windows сама выгружает в облако."] = "App list, Wi-Fi, language and consents that Windows uploads to the cloud on its own.";
+            _map["Перед крупным обновлением Windows проверка совместимости будет знать о ваших программах меньше."] = "Before a major Windows upgrade, the compatibility check will know less about your programs.";
+            _map["Тема, язык и другие настройки не переедут на новый компьютер сами — их придётся задать заново."] = "Theme, language and other settings won't move to a new PC on their own — you'll have to set them again.";
+            _map["На новом компьютере Windows не предложит заново поставить ваши приложения."] = "On a new PC, Windows won't offer to reinstall your apps.";
+            _map["Копия в OneDrive перестанет обновляться сама. Если рассчитываете на неё при переезде — снимите пункт."] = "The OneDrive backup stops updating on its own. If you rely on it to move to a new PC, untick this.";
+            _map["Пароли Wi-Fi не будут переезжать на другие ваши компьютеры."] = "Wi-Fi passwords won't move to your other PCs.";
+            _map["Click to Do: скачивание моделей ИИ — выкл"] = "Click to Do: AI model downloads — off";
+            _map["не скачивать прогноз нагрузки энергосети"] = "don't download the power grid forecast";
+            _map["синхронизация параметров между устройствами — выкл"] = "settings sync between devices — off";
+            _map["синхронизацию параметров не включить обратно в Параметрах"] = "settings sync can't be turned back on in Settings";
+            _map["копия списка приложений в облако — выкл"] = "app list backup to the cloud — off";
+            _map["внеплановая копия списка приложений — выкл"] = "unscheduled app list backup — off";
+            _map["архивация Windows в облако — выкл"] = "Windows Backup to the cloud — off";
+            _map["синхронизация ваших согласий на сбор данных — выкл"] = "sync of your data collection consents — off";
+            _map["синхронизация сетей Wi-Fi между устройствами — выкл"] = "Wi-Fi network sync between devices — off";
+            _map["синхронизация языковых настроек — выкл"] = "language settings sync — off";
+            _map["скачивание обоев с других ваших устройств — выкл"] = "wallpaper download from your other devices — off";
+            _map["синхронизация настроек пера — выкл"] = "pen settings sync — off";
+            _map["служба InventorySvc (опись программ и оборудования)"] = "InventorySvc service (inventory of programs and hardware)";
+            _map["задача UsageAndQualityInsights (сбор сведений об использовании)"] = "task UsageAndQualityInsights (collects usage facts)";
+            _map["Кнопка «Установить на устройство» на сайте Магазина перестанет работать. В самом Магазине всё ставится как обычно."] = "The \"Install on my device\" button on the Store website stops working. Installing from the Store app works as usual.";
+            _map["Windows перестанет сама чинить известные сбои по указанию Microsoft. Средства устранения неполадок можно запускать вручную."] = "Windows stops fixing known issues on its own on Microsoft's instructions. You can still run troubleshooters yourself.";
+            _map["Средства устранения неполадок будут работать только с тем, что есть на компьютере."] = "Troubleshooters will only use what is already on the computer.";
+            _map["установка приложений на этот ПК по команде с сайта — выкл"] = "installing apps on this PC on command from the website — off";
+            _map["не применять «исправления», присланные Microsoft"] = "don't apply \"mitigations\" sent by Microsoft";
+            _map["задача RecommendedTroubleshootingScanner (поиск «исправлений» Microsoft)"] = "task RecommendedTroubleshootingScanner (looks for Microsoft \"mitigations\")";
+            _map["средства устранения неполадок не обращаются к серверам Microsoft"] = "troubleshooters don't query Microsoft servers";
+            _map["Защитник: удалённые настройки и эксперименты (ECS) — выкл"] = "Defender: remote settings and experiments (ECS) — off";
+            _map["Новые функции и усиления защиты Защитник будет получать только с обновлениями, а не с сервера экспериментов. Базы угроз обновляются как обычно."] = "Defender will get new features and hardening only with updates, not from the experiments server. Threat definitions update as usual.";
+            _map["Картинки «Windows: интересное» на рабочем столе перестанут меняться сами."] = "Windows Spotlight pictures on the desktop will stop changing by themselves.";
+            _map["ИИ-помощники не смогут сами работать с вашими файлами и настройками Windows."] = "AI assistants won't be able to work with your files and Windows settings on their own.";
+            _map["Приложение «Архивация Windows» перестанет сохранять копию в OneDrive. Файлы на диске не трогаются."] = "The Windows Backup app will stop saving a copy to OneDrive. Files on disk are not touched.";
+            _map["Приложения из Магазина не смогут пользоваться ИИ-моделями Windows на компьютере."] = "Store apps won't be able to use the AI models Windows keeps on the computer.";
+            _map["предложения сторонних приложений в «интересном» — выкл"] = "third-party app suggestions in Spotlight — off";
+            _map["«интересное» в центре уведомлений — выкл"] = "Spotlight in the notification center — off";
+            _map["«интересное» в Параметрах — выкл"] = "Spotlight in Settings — off";
+            _map["приветственная реклама после обновлений — выкл"] = "welcome promotions after updates — off";
+            _map["обои «Windows: интересное» на рабочем столе — выкл"] = "Windows Spotlight desktop wallpaper — off";
+            _map["экран «Закрепите Copilot» при входе — выкл"] = "\"Pin Copilot\" screen at sign-in — off";
+            _map["реклама приложений в окне «Поделиться» — выкл"] = "app promotions in the Share window — off";
+            _map["Recall: выгрузка снимков — запрещена"] = "Recall: snapshot export — blocked";
+            _map["ИИ-агенты: доступ к файлам и настройкам через MCP — запрещён"] = "AI agents: access to files and settings via MCP — blocked";
+            _map["ИИ-агент в Параметрах — выкл"] = "AI agent in Settings — off";
+            _map["встроенные ИИ-модели Windows — запрещены приложениям"] = "built-in Windows AI models — blocked for apps";
+            _map["приложение «Архивация Windows» — выкл"] = "Windows Backup app — off";
+            _map["панель виджетов — выкл"] = "widgets board — off";
+            _map["виджеты на экране блокировки — выкл"] = "widgets on the lock screen — off";
+            _map["• автозащиту, слежение за датчиками и живые уведомления.\n\n"] = "• auto-protection, sensor watch and live notifications.\n\n";
+            _map["В реестре остались параметры от старых версий"] = "Leftover settings from old versions in the registry";
+            _map["Обновление Windows сбило настройки"] = "A Windows update reset some settings";
+            _map["Автозащита вернула их обратно: "] = "Auto-protection restored them: ";
+            _map["Выключение наблюдения за сетью…"] = "Turning off network watch…";
+            _map["Наблюдение включит правила брандмауэра для служб телеметрии и начнёт\nвести журнал исходящих соединений — разрешённых и заблокированных.\n"] = "Network watch will turn on firewall rules for telemetry services and start\nlogging outgoing connections, both allowed and blocked.\n";
+            _map["Включить наблюдение"] = "Turn on watch";
+            _map["Включение наблюдения за сетью…"] = "Turning on network watch…";
+            _map["Выключить наблюдение"] = "Turn off watch";
+            _map["НОВАЯ программа — придёт уведомление, а здесь, на вкладке «Сеть», её можно будет отрезать.\n\n"] = "a NEW program, you get a notification, and here on the Network tab you can cut it off.\n\n";
+            _map["наблюдение включено"] = "watch on";
+            _map["наблюдение выключено"] = "watch off";
+            _map["Включите наблюдение за сетью, чтобы начать сбор"] = "Turn on network watch to start collecting";
+            _map["Автозащита"] = "Auto-protection";
+            _map["Включение автозащиты…"] = "Turning on auto-protection…";
+            _map["Отключение автозащиты…"] = "Turning off auto-protection…";
+            _map["Проверка автозащитой…"] = "Auto-protection check…";
+            _map["Включить автозащиту"] = "Turn on auto-protection";
+            _map["Наблюдение"] = "Observation";
+            _map["Автозагрузка"] = "Startup";
+            _map["Сбор данных"] = "Data collection";
+            _map["Следы на компьютере"] = "Traces on this PC";
+            _map["Выберите, что отключить. Изменения вступают в силу после «Применить»."] = "Choose what to turn off. Changes take effect after Apply.";
+            _map["Ещё"] = "More";
+            _map["Профиль"] = "Profile";
+            _map["Свой"] = "Custom";
+            _map["Загрузить профиль…"] = "Load profile…";
+            _map["Сохранить профиль…"] = "Save profile…";
+            _map["Файл для других ПК…"] = "File for other PCs…";
+            _map["Открыть папку резервных копий"] = "Open backup folder";
+            _map["Откатить изменения…"] = "Undo changes…";
+            _map["Наблюдение за сетью фиксирует попытки программ отправить данные наружу и показывает, кто и куда стучится. Использует брандмауэр и журнал безопасности Windows."] = "Network watch records programs trying to send data out and shows who connects where. It uses the Windows firewall and security log.";
+            _map["свои правки и возвраты автозащиты. Чем дольше она стоит, тем больше видно."] = "its own changes and auto-protection restores. The longer it runs, the more you see.";
+            _map["Линии телеметрии пока нет: включите запись на вкладке «Сбор данных» и нажмите «Замерить»."] = "No telemetry line yet: turn on recording on the Data collection tab and click Measure.";
+            _map["Автозащита нашла сбитых настроек: "] = "Auto-protection found reset settings: ";
+            _map["Красная черта — обновление Windows, зелёная точка — правка программы, жёлтая — возврат автозащиты."] = "Red line: Windows update; green dot: change by this program; yellow: auto-protection restore.";
+            _map["Автозащита будет проверять каждый день. Нажмите «Включить автозащиту»."] = "Auto-protection will check every day. Click Turn on auto-protection.";
+            _map["Автозащита будет проверять раз в неделю. Нажмите «Включить автозащиту»."] = "Auto-protection will check once a week. Click Turn on auto-protection.";
+            _map["Автозащита проверяет систему по расписанию, возвращает сбитое и предупреждает."] = "Auto-protection checks the system on a schedule, restores what was reset and warns you.";
+            _map["работе автозащиты и наблюдения за сетью."] = "the work of auto-protection and network watch.";
+            _map["• Следы на компьютере: кто и когда реально включал камеру, микрофон и геолокацию — с длительностью и меткой «сейчас».\n"] = "• Traces on this PC: who actually turned on the camera, microphone and location, and when, with duration and a \"now\" mark.\n";
+            _map["• Сбор данных: настоящие события, собранные о компьютере, с сырым содержимым.\n"] = "• Data collection: the real events collected about the computer, with raw content.\n";
+            _map["• Сеть: показывает, кто и куда реально отправляет данные.\n"] = "• Network: shows who actually sends data and where.\n";
+            _map["• Автозащита: возвращает настройки, сбитые обновлениями Windows; машина времени со снимками состояния.\n"] = "• Auto-protection: restores settings reset by Windows updates; a time machine with state snapshots.\n";
+            _map["отключить без поломки системы, эта программа отключает, а автозащита не даёт вернуть обратно."] = "turn off without breaking the system, this program turns off, and auto-protection keeps it from coming back.";
+            _map["журнал изменений, снимки и эталоны сбора данных.\n\n"] = "the change log, snapshots and data collection baselines.\n\n";
+            _map["Собрать следы"] = "Collect traces";
+            _map["Следы собраны "] = "Traces collected ";
+            _map["Журнал датчиков прочитан. Нажмите «Собрать следы» — программа просканирует\n"] = "The sensor log has been read. Click Collect traces and the program will also scan\n";
+            _map["Применить настройки"] = "Apply settings";
+            _map["Программа читает настройки — это займёт несколько секунд."] = "The program is reading settings; this takes a few seconds.";
+            _map["Изменить настройки"] = "Change settings";
+            _map["Требует внимания"] = "Needs attention";
+            _map["Защита по разделам"] = "Protection by section";
+            _map[" · проверено "] = " · checked ";
+            _map["Автозащита следит, чтобы обновления Windows не вернули отключённое."] = "Auto-protection makes sure Windows updates do not bring back what you turned off.";
+            _map["Автозащита выключена: после обновлений Windows настройки могут вернуться."] = "Auto-protection is off: settings may come back after Windows updates.";
+            _map["Защита включена"] = "Protection is on";
+            _map["Защита включена частично"] = "Protection is partly on";
+            _map["Часть настроек не действует."] = "Some settings are not in effect.";
+            _map["Защита почти не настроена"] = "Protection is barely set up";
+            _map["Выберите профиль в «Настройках» и нажмите «Применить»."] = "Choose a profile in Settings and click Apply.";
+            _map["Камера или микрофон используются прямо сейчас"] = "The camera or microphone is in use right now";
+            _map["Посмотрите, какая программа к ним обратилась."] = "See which program accessed them.";
+            _map["Часть настроек не действует"] = "Some settings are not in effect";
+            _map["Windows могла вернуть их после обновления. Список — на странице «Проверка»."] = "Windows may have restored them after an update. The list is on the Check page.";
+            _map["Посмотреть"] = "View";
+            _map["Телеметрия проходит мимо блокировки"] = "Telemetry gets past the block";
+            _map["Отвечает адрес "] = "This address responds: ";
+            _map[". Включите блокировку доменов в «Настройках»."] = ". Turn on domain blocking in Settings.";
+            _map["Настроить"] = "Set up";
+            _map["Автозащита выключена"] = "Auto-protection is off";
+            _map["Без неё обновления Windows могут вернуть отключённое."] = "Without it, Windows updates may bring back what you turned off.";
+            _map["Включить"] = "Turn on";
+            _map["Наблюдение за сетью выключено"] = "Network watch is off";
+            _map["Программа не видит, какие приложения выходят в интернет."] = "The program cannot see which apps go online.";
+            _map["Лишние программы в автозагрузке"] = "Unneeded programs at startup";
+            _map["Их можно отключить: Windows работает и без них."] = "You can turn them off: Windows works without them.";
+            _map["Показать"] = "Show";
+            _map["Ничего не требует внимания"] = "Nothing needs your attention";
+            _map["Если что-то изменится, программа сообщит об этом здесь."] = "If something changes, the program will tell you here.";
+            _map["Нет данных"] = "No data";
+            _map["Включено"] = "On";
+            _map["Выключено"] = "Off";
+            _map["Частично"] = "Partly";
+            _map["Проверка сбора данных…"] = "Checking data collection…";
+            _map["На этой системе нет модуля Microsoft.DiagnosticDataViewer — просмотр собранных данных недоступен."] = "This system has no Microsoft.DiagnosticDataViewer module, so collected data cannot be viewed.";
+            _map["<h2>Кто включал камеру, микрофон и геолокацию</h2>"] = "<h2>Who turned on the camera, microphone and location</h2>";
+            _map["Включите «Следить за датчиками» на странице «Автозащита» —\n"] = "Turn on \"Watch sensors\" on the Auto-protection page —\n";
+            _map["а в «Наблюдении» — что Windows уже знает об этом компьютере."] = "and Observation shows what Windows already knows about this computer.";
+            _map["Реклама и рекомендации"] = "Ads and recommendations";
+            _map["Расширенная защита"] = "Advanced protection";
+            _map["включена"] = "on";
+            _map["выключена"] = "off";
+            _map["Все настройки действуют"] = "All settings are in effect";
+            _map["Почти все настройки действуют"] = "Almost all settings are in effect";
+            _map["Большинство настроек не действует"] = "Most settings are not in effect";
+            _map["Действует "] = "In effect: ";
+            _map["не применено "] = "not applied: ";
+            _map["Windows не отдаёт "] = "blocked by Windows: ";
+            _map["нет на этой Windows "] = "not on this Windows: ";
+            _map["неотправленной телеметрии "] = "unsent telemetry: ";
+            _map["адреса телеметрии не отвечают"] = "telemetry addresses do not respond";
+            _map["телеметрия проходит: адресов "] = "telemetry gets through, addresses: ";
+            _map["Открыть настройки"] = "Open settings";
+            _map["Проверка ещё не запускалась"] = "The check has not run yet";
+            _map["Нажмите «Проверить сейчас» — программа прочитает реальное состояние системы и покажет, что сработало, а что нет."] = "Click Check now: the program reads the actual state of the system and shows what worked and what did not.";
+            _map["Не все выбранные настройки действуют. Что исправить — ниже."] = "Not all selected settings are in effect. What to fix is listed below.";
+            _map["Язык: как в Windows"] = "Language: as in Windows";
+            _map["Язык: русский"] = "Language: Russian";
+            _map["Язык: английский"] = "Language: English";
+            _map["Журнал пока пуст"] = "The log is empty";
+            _map["службы Windows"] = "Windows services";
+            _map["планировщик задач"] = "Task Scheduler";
+            _map["переменные среды"] = "environment variables";
+            _map["автоматически"] = "automatic";
+            _map["автоматически (отложенный запуск)"] = "automatic (delayed start)";
+            _map["вручную"] = "manual";
+            _map["при загрузке системы"] = "boot";
+            _map["системная"] = "system";
+            _map["Здесь по шагам видно, что программа делает: применение и откат настроек, работа автозащиты и наблюдения за сетью. Если что-то пошло не так, сохраните журнал и приложите его к сообщению об ошибке."] = "This shows step by step what the program does: applying and undoing settings, auto-protection and network monitoring. If something goes wrong, save the log and attach it to your bug report.";
         }
     }
 }

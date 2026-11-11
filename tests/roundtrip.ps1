@@ -178,6 +178,77 @@ if (Test-Path -LiteralPath $changes) {
 }
 
 # --------------------------------------------------------------------------- #
+#  Службы, задачи, переменные среды и чужие политики. Откат должен вернуть их
+#  ровно такими, какими застал, а не «по умолчанию»: раньше задача, которую
+#  человек выключил сам, после отката включалась, DiagTrack становилась
+#  «автоматически», переменная среды пропадала, а корпоративные политики
+#  Chrome удалялись вместе с нашей одной.
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Службы, задачи, переменные среды, чужие политики'
+$stateModules = 'services,network,cloudsync,doh,app_devtools'
+$engineText = Get-Content -LiteralPath $engine -Raw -Encoding UTF8
+$taskPaths = @([regex]::Matches($engineText, "(?m)^Def '(?:network|cloudsync)' 'task' '([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+$live = @()
+foreach ($tp in $taskPaths) {
+    $leaf = Split-Path $tp -Leaf; $dir = (Split-Path $tp -Parent) + '\'
+    $t = Get-ScheduledTask -TaskPath $dir -TaskName $leaf -ErrorAction SilentlyContinue
+    if ($t -and $t.State -ne 'Disabled') { $live += @{ path = $tp; dir = $dir; leaf = $leaf } }
+}
+Check 'нашлись две включённые задачи из списка' ($live.Count -ge 2) ("нашлось: " + $live.Count)
+$svcKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\DiagTrack'
+$svcStart0 = (Get-ItemProperty -LiteralPath $svcKey -Name Start -ErrorAction SilentlyContinue).Start
+$env0 = [Environment]::GetEnvironmentVariable('POWERSHELL_UPDATECHECK', 'User')
+$chrome = 'HKLM:\SOFTWARE\Policies\Google\Chrome'
+$chromeExisted = Test-Path -LiteralPath $chrome
+$home0 = (Get-ItemProperty -LiteralPath $chrome -Name HomepageLocation -ErrorAction SilentlyContinue).HomepageLocation
+$doh0 = (Get-ItemProperty -LiteralPath $chrome -Name DnsOverHttpsMode -ErrorAction SilentlyContinue).DnsOverHttpsMode
+if ($live.Count -ge 2 -and $null -ne $svcStart0) {
+    # «человек настроил сам, до программы»
+    Disable-ScheduledTask -TaskPath $live[0].dir -TaskName $live[0].leaf -ErrorAction SilentlyContinue | Out-Null
+    Set-Service -Name DiagTrack -StartupType Manual -ErrorAction SilentlyContinue
+    [Environment]::SetEnvironmentVariable('POWERSHELL_UPDATECHECK', 'LTS', 'User')
+    if (-not $chromeExisted) { New-Item -Path $chrome -Force | Out-Null }
+    New-ItemProperty -LiteralPath $chrome -Name HomepageLocation -Value 'https://example.org/' -PropertyType String -Force | Out-Null
+
+    $out2 = Run-Engine @('-Modules', $stateModules, '-NoRestorePoint')
+    Check 'применение (службы, задачи) доработало до конца' ($out2 -match '###DONE###')
+    $t1 = Get-ScheduledTask -TaskPath $live[1].dir -TaskName $live[1].leaf -ErrorAction SilentlyContinue
+    Check 'включённая задача отключена' ($t1 -and $t1.State -eq 'Disabled')
+    Check 'DiagTrack отключена' ((Get-ItemProperty -LiteralPath $svcKey -Name Start).Start -eq 4)
+    Check 'переменная среды выставлена' ([Environment]::GetEnvironmentVariable('POWERSHELL_UPDATECHECK', 'User') -eq 'Off')
+    if (Test-Path -LiteralPath $changes) {
+        $cj3 = Get-Content -LiteralPath $changes -Raw -Encoding UTF8 | ConvertFrom-Json
+        $kinds = @($cj3.items | ForEach-Object { "$($_.kind)" } | Select-Object -Unique)
+        Check 'в журнале есть службы, задачи и переменные среды' (($kinds -contains 'svc') -and ($kinds -contains 'task') -and ($kinds -contains 'env')) ($kinds -join ',')
+        Check 'журнал нового образца' ("$($cj3.schema)" -eq '2' -and -not $cj3.legacy)
+    } else { Check 'журнал записан' $false }
+
+    $out3 = Run-Engine @('-Revert')
+    Check 'откат (службы, задачи) доработал до конца' ($out3 -match '###DONE###')
+    $t0 = Get-ScheduledTask -TaskPath $live[0].dir -TaskName $live[0].leaf -ErrorAction SilentlyContinue
+    $t1 = Get-ScheduledTask -TaskPath $live[1].dir -TaskName $live[1].leaf -ErrorAction SilentlyContinue
+    Check 'задача, выключенная до программы, осталась выключенной' ($t0 -and $t0.State -eq 'Disabled') ("состояние: " + $t0.State)
+    Check 'задача, включённая до программы, включена снова' ($t1 -and $t1.State -ne 'Disabled') ("состояние: " + $t1.State)
+    $svcStart = (Get-ItemProperty -LiteralPath $svcKey -Name Start).Start
+    Check 'DiagTrack вернулась в «вручную», а не «автоматически»' ($svcStart -eq 3) ("Start=" + $svcStart)
+    Check 'переменная среды вернулась к своему значению' ([Environment]::GetEnvironmentVariable('POWERSHELL_UPDATECHECK', 'User') -eq 'LTS')
+    Check 'чужая политика Chrome осталась' ((Get-ItemProperty -LiteralPath $chrome -Name HomepageLocation -ErrorAction SilentlyContinue).HomepageLocation -eq 'https://example.org/')
+    $dohBack = (Get-ItemProperty -LiteralPath $chrome -Name DnsOverHttpsMode -ErrorAction SilentlyContinue).DnsOverHttpsMode
+    Check 'своя политика Chrome снята' ("$dohBack" -eq "$doh0") ("DnsOverHttpsMode=" + $dohBack)
+    Check 'откат не шёл по старой схеме «по умолчанию»' ($out3 -notmatch 'журнал прежней версии')
+
+    # вернуть машину как было до теста
+    if ($live.Count -ge 1) { Enable-ScheduledTask -TaskPath $live[0].dir -TaskName $live[0].leaf -ErrorAction SilentlyContinue | Out-Null }
+    Set-ItemProperty -LiteralPath $svcKey -Name Start -Value $svcStart0 -Type DWord -ErrorAction SilentlyContinue
+    [Environment]::SetEnvironmentVariable('POWERSHELL_UPDATECHECK', $env0, 'User')
+    if ($chromeExisted) {
+        if ($null -ne $home0) { New-ItemProperty -LiteralPath $chrome -Name HomepageLocation -Value $home0 -PropertyType String -Force | Out-Null }
+        else { Remove-ItemProperty -LiteralPath $chrome -Name HomepageLocation -ErrorAction SilentlyContinue }
+    } else { Remove-Item -LiteralPath $chrome -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# --------------------------------------------------------------------------- #
 try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue } catch { }
 
 Write-Host ''

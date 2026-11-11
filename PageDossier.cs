@@ -36,7 +36,7 @@ namespace Win11Privacy
             head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             page.RowStyles[1] = new RowStyle(SizeType.Absolute, (int)(u * 7.6F));
-            head.Controls.Add(PageTitle(L.T("Досье Windows на вас")), 0, 0);
+            head.Controls.Add(PageTitle(L.T("Следы на компьютере")), 0, 0);
             page.Controls.Add(head, 0, 0);
 
             Card ctl = new Card();
@@ -58,7 +58,7 @@ namespace Win11Privacy
             FlowLayoutPanel db = new FlowLayoutPanel();
             AttachButtonRow(db, ctl);
             db.Margin = new Padding(0, (int)(u * 0.5F), 0, 0);
-            _btnDossierRefresh = new ModernButton(L.T("Собрать досье"), true);
+            _btnDossierRefresh = new ModernButton(L.T("Собрать следы"), true);
             _btnDossierRefresh.Click += delegate { RefreshDossier(); };
             _btnDossierWipe = new ModernButton(L.T("Стереть выбранное"), false);
             _btnDossierWipe.Enabled = false;
@@ -133,6 +133,7 @@ namespace Win11Privacy
         {
             if (id == "adid") return GAds;
             if (id == "machineid") return GChip;
+            if (id == "gdid") return GFinger;
             if (id == "networks") return GWifi;
             if (id == "usb") return GUsb;
             if (id == "activity") return GHist;
@@ -247,15 +248,14 @@ namespace Win11Privacy
             try { _dossierList.AutoScrollPosition = Point.Empty; } catch { }
             _dossierList.Restack();
             if (_lastFoot != null)
-                _dossierState.Text = L.T("Досье собрано ") + Json.GetStr(_lastFoot, "time") +
+                _dossierState.Text = L.T("Следы собраны ") + Json.GetStr(_lastFoot, "time") +
                     L.T(". Всё прочитано с этого компьютера, наружу ничего не отправляется.\n") +
                     L.T("Красная метка «СЕЙЧАС» — программа использует датчик прямо в эту минуту.");
             else
-                _dossierState.Text = L.T("Журнал датчиков прочитан. Нажмите «Собрать досье» — программа просканирует\n") +
+                _dossierState.Text = L.T("Журнал датчиков прочитан. Нажмите «Собрать следы» — программа просканирует\n") +
                     L.T("ещё и цифровой след на диске (рекламный ID, сети, флешки, истории).");
 
-            foreach (NavItem n in _nav)
-                if ((string)n.Tag == "dossier") { n.Badge = activeNow > 0 ? "!" : ""; n.Invalidate(); }
+            SetPageBadge("dossier", activeNow > 0 ? "!" : "");
             RefreshHome();
         }
 

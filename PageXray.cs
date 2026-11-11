@@ -36,7 +36,7 @@ namespace Win11Privacy
             head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             page.RowStyles[1] = new RowStyle(SizeType.Absolute, (int)(u * 7.6F));
-            head.Controls.Add(PageTitle(L.T("Рентген телеметрии")), 0, 0);
+            head.Controls.Add(PageTitle(L.T("Сбор данных")), 0, 0);
             _btnReport = new ModernButton(L.T("Сохранить отчёт"), false);
             _btnReport.Font = Font; _btnReport.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
             _btnReport.Click += OnSaveReport;
@@ -113,7 +113,7 @@ namespace Win11Privacy
 
         private void RunXrayStatus()
         {
-            RunJson("-XrayStatus", L.T("Проверка рентгена…"), delegate(Dictionary<string, object> d)
+            RunJson("-XrayStatus", L.T("Проверка сбора данных…"), delegate(Dictionary<string, object> d)
             {
                 if (d == null) return;
                 _xrayRecording = Json.GetBool(d, "recording");
@@ -125,12 +125,11 @@ namespace Win11Privacy
                 string s = _xrayRecording
                     ? L.T("Запись включена. Windows ведёт локальную копию событий — можно сканировать.")
                     : L.T("Запись выключена. Пока она выключена, прочитать собранные данные нельзя.");
-                if (!mod) s = L.T("На этой системе нет модуля Microsoft.DiagnosticDataViewer — рентген недоступен.");
+                if (!mod) s = L.T("На этой системе нет модуля Microsoft.DiagnosticDataViewer — просмотр собранных данных недоступен.");
                 if (db != null && Json.GetStr(db, "mb") != "0") s += L.T("\nЛокальная копия на диске: ") + Json.GetStr(db, "mb") + L.T(" МБ.");
                 Dictionary<string, object> b = Json.GetObj(d, "baseline");
                 if (b != null) s += L.T("\nЭталон «до» сохранён: ") + Json.GetStr(b, "time") + " (" + Json.GetStr(b, "perDay") + L.T(" событий в сутки).");
                 _xrayState.Text = s;
-                foreach (NavItem n in _nav) if ((string)n.Tag == "xray") { n.Badge = _xrayRecording ? "rec" : ""; n.Invalidate(); }
             });
         }
 
@@ -161,8 +160,8 @@ namespace Win11Privacy
             int perDay = Json.GetInt(d, "perDay");
             _xrayTiles.Controls.Clear();
             _xrayTiles.Controls.Add(Tile(L.T("Событий собрано"), total.ToString(), L.T("за последние ") + Json.GetInt(d, "hours") + L.T(" ч"), Theme.Accent));
-            _xrayTiles.Controls.Add(Tile(L.T("В сутки"), perDay.ToString(), Json.GetStr(d, "mbPerDay") + L.T(" МБ данных о вас"), Theme.Warn));
-            _xrayTiles.Controls.Add(Tile(L.T("Прогноз за год"), FormatBig(Json.GetInt(d, "perYear")), Json.GetStr(d, "mbPerYear") + L.T(" МБ в год"), Theme.Err));
+            _xrayTiles.Controls.Add(Tile(L.T("В сутки"), perDay.ToString(), Json.GetStr(d, "mbPerDay") + L.T(" МБ данных о вас"), Theme.Accent));
+            _xrayTiles.Controls.Add(Tile(L.T("Прогноз за год"), FormatBig(Json.GetInt(d, "perYear")), Json.GetStr(d, "mbPerYear") + L.T(" МБ в год"), Theme.Accent));
 
             if (d.ContainsKey("baselinePerDay"))
             {

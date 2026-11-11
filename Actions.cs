@@ -35,7 +35,69 @@ namespace Win11Privacy
             if (dry) extra += " -DryRun";
             if (!_optBackup.Checked) extra += " -NoBackup";
             if (!_optRestore.Checked) extra += " -NoRestorePoint";
+            if (_optProfiles != null && _optProfiles.Checked) extra += " -AllProfiles";
             RunStreaming(extra, dry ? L.T("Тестовый прогон…") : L.T("Применение настроек…"), delegate { });
+        }
+
+        // Набор для других компьютеров: тот же движок, что внутри программы, и
+        // два файла — применить и вернуть. Подходит для запуска руками от имени
+        // администратора и для развёртывания (GPO, Intune, скрипт входа).
+        private void OnExportDeploy(object sender, EventArgs e)
+        {
+            List<string> mods = SelectedModules();
+            if (mods.Count == 0) { MessageBox.Show(this, L.T("Не выбран ни один пункт."), L.T("Нечего применять"), MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            string root;
+            using (FolderBrowserDialog d = new FolderBrowserDialog())
+            {
+                d.Description = L.T("Куда сложить набор для других компьютеров");
+                if (d.ShowDialog(this) != DialogResult.OK) return;
+                root = d.SelectedPath;
+            }
+            try
+            {
+                string dir = Path.Combine(root, "Win11Privacy-Deploy");
+                Directory.CreateDirectory(dir);
+                using (Stream s = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("engine.ps1"))
+                using (FileStream f = File.Create(Path.Combine(dir, "engine.ps1")))
+                    s.CopyTo(f);
+                string args = "-Modules " + string.Join(",", mods.ToArray());
+                List<string> skip = SkippedItems();
+                if (skip.Count > 0) args += " -SkipItems " + string.Join(",", skip.ToArray());
+                if (_optProfiles != null && _optProfiles.Checked) args += " -AllProfiles";
+                // без копии на рабочий стол и точки восстановления: на чужом компьютере
+                // их некому смотреть, а журнал для отката движок ведёт всегда
+                args += " -NoBackup -NoRestorePoint";
+                File.WriteAllText(Path.Combine(dir, "apply.cmd"), DeployCmd("apply the saved privacy settings", args), new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(dir, "revert.cmd"), DeployCmd("undo everything the program changed", "-Revert"), new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(dir, "readme.txt"),
+                    L.T("Win11Privacy — набор для других компьютеров\r\n\r\n") +
+                    L.T("apply.cmd  — применить выбранные настройки (разделов: ") + mods.Count + ").\r\n" +
+                    L.T("revert.cmd — вернуть всё, что программа изменила, по журналу изменений.\r\n\r\n") +
+                    L.T("Запускайте от имени администратора. Подходит и для развёртывания: групповая политика, Intune, скрипт входа.\r\n") +
+                    L.T("Журнал отката хранится на каждом компьютере в C:\\ProgramData\\Win11Privacy.\r\n") +
+                    (_optProfiles != null && _optProfiles.Checked
+                        ? L.T("Настройки пользователя ложатся во все профили и в профиль по умолчанию — так они сработают и при запуске от имени SYSTEM.\r\n")
+                        : L.T("Настройки пользователя ложатся только тому, от чьего имени запущен файл. Для запуска от имени SYSTEM включите «Для всех пользователей» и выгрузите набор заново.\r\n")),
+                    new UTF8Encoding(true));
+                _status.Text = L.T("Набор для других компьютеров сохранён: ") + dir;
+                try { System.Diagnostics.Process.Start("explorer.exe", "\"" + dir + "\""); } catch { }
+            }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, L.T("Ошибка"), MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        }
+
+        // Командные файлы — латиницей: cmd.exe читает их в кодовой странице консоли
+        private static string DeployCmd(string what, string args)
+        {
+            return "@echo off\r\n" +
+                   "rem Win11Privacy: " + what + ".\r\n" +
+                   "rem Run as administrator, or from a deployment tool as SYSTEM.\r\n" +
+                   "net session >nul 2>&1\r\n" +
+                   "if errorlevel 1 (\r\n" +
+                   "  echo Run this file as administrator.\r\n" +
+                   "  exit /b 1\r\n" +
+                   ")\r\n" +
+                   "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0engine.ps1\" " + args + "\r\n" +
+                   "exit /b %errorlevel%\r\n";
         }
 
         // Показать список того, что реально изменится, ДО нажатия «Применить»:
@@ -62,6 +124,8 @@ namespace Win11Privacy
                         if (Json.GetBool(it, "ok")) continue;
                         inGroup.Add("      " + L.T(Json.GetStr(it, "name")) + "  :  " +
                                     L.T(Json.GetStr(it, "actual")) + "  →  " + Json.GetStr(it, "expected"));
+                        string note;
+                        if (_defNotes.TryGetValue(Json.GetStr(it, "id"), out note)) inGroup.Add("            ⚠ " + note);
                     }
                     if (inGroup.Count == 0) continue;
                     lines.Add(L.T(Json.GetStr(g, "title")) + "  (" + inGroup.Count + ")");
@@ -74,7 +138,7 @@ namespace Win11Privacy
                     return;
                 }
                 int total = 0;
-                foreach (string l in lines) if (l.StartsWith("      ")) total++;
+                foreach (string l in lines) if (l.StartsWith("      ") && !l.StartsWith("            ⚠")) total++;
                 using (ListDialog dlg = new ListDialog(L.T("Что изменится"),
                     L.T("Программа поменяет ") + total + L.T(" настроек. Слева — как сейчас, справа — как станет."),
                     lines.ToArray(), L.T("Применить"), Font, false))
@@ -90,7 +154,7 @@ namespace Win11Privacy
                 L.T("• настройки реестра — по журналу изменений, в те значения, что были до неё;\n") +
                 L.T("• службы, задачи планировщика, файл hosts, правила брандмауэра;\n") +
                 L.T("• компоненты производителя и настройки сторонних программ;\n") +
-                L.T("• стража, слежение за датчиками и живые уведомления.\n\n") +
+                L.T("• автозащиту, слежение за датчиками и живые уведомления.\n\n") +
                 L.T("Удалённые приложения не возвращаются — их можно поставить из Microsoft Store.\n\nПродолжить?"),
                 L.T("Откат изменений"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
             RunStreaming("-Revert", L.T("Откат изменений…"), delegate { RunDetect(); });
@@ -114,7 +178,8 @@ namespace Win11Privacy
                               "  \"modules\": [" + JsonStrings(SelectedModules()) + "],\n" +
                               "  \"skip\": [" + JsonStrings(SkippedItems()) + "],\n" +
                               "  \"backup\": " + (_optBackup.Checked ? "true" : "false") + ",\n" +
-                              "  \"restorePoint\": " + (_optRestore.Checked ? "true" : "false") + "\n}\n";
+                              "  \"restorePoint\": " + (_optRestore.Checked ? "true" : "false") + ",\n" +
+                              "  \"allProfiles\": " + (_optProfiles != null && _optProfiles.Checked ? "true" : "false") + "\n}\n";
                 File.WriteAllText(path, json, new UTF8Encoding(false));
                 _status.Text = L.T("Профиль сохранён: ") + Path.GetFileName(path);
             }
@@ -153,6 +218,7 @@ namespace Win11Privacy
             ApplyProfileSkip();               // если список настроек ещё читается — доснимем галочки, когда он придёт
             if (d.ContainsKey("backup")) _optBackup.Checked = Json.GetBool(d, "backup");
             if (d.ContainsKey("restorePoint")) _optRestore.Checked = Json.GetBool(d, "restorePoint");
+            if (d.ContainsKey("allProfiles") && _optProfiles != null) _optProfiles.Checked = Json.GetBool(d, "allProfiles");
         }
 
         private HashSet<string> _profileSkip;
@@ -179,10 +245,17 @@ namespace Win11Privacy
             RunAuditInner(auditArgs);
         }
 
+        // Проверка идёт ~30 секунд: второй запуск поверх первого (заход на
+        // «Проверку», пока идёт стартовая) только удвоил бы ожидание.
+        private bool _auditBusy;
+
         private void RunAuditInner(string auditArgs)
         {
+            if (_auditBusy) return;
+            _auditBusy = true;
             RunJson(auditArgs, L.T("Проверка состояния системы…"), delegate(Dictionary<string, object> d)
             {
+                _auditBusy = false;      // ответ приходит всегда, и при «Прервать» тоже
                 if (d == null) { _auditWhen.Text = L.T("Не удалось получить данные."); return; }
                 _lastAudit = d;
                 Dictionary<string, object> pf = Json.GetObj(d, "proof");
@@ -193,6 +266,47 @@ namespace Win11Privacy
         }
 
         private ModernButton _btnCleanJunk;
+
+        // Проверка утечек «в бою»: дойдёт ли соединение до серверов сбора. Проверка
+        // настроек говорит, что выставлено; эта — что получается на деле.
+        private void OnLeakTest(object sender, EventArgs e)
+        {
+            if (MessageBox.Show(this,
+                L.T("Программа разрешит имя каждого сервера сбора данных так же, как это сделает любая программа,\n") +
+                L.T("и попробует открыть к нему соединение. Данные не отправляются: соединение сразу закрывается.\n\n") +
+                L.T("Займёт до 15 секунд. Продолжить?"),
+                L.T("Проверить утечки"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            RunJson("-LeakTest", L.T("Проверка утечек…"), delegate(Dictionary<string, object> d)
+            {
+                if (d == null) { MessageBox.Show(this, L.T("Не удалось провести проверку."), L.T("Проверить утечки"), MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+                List<string> lines = new List<string>();
+                string[] order = { "open", "blocked", "hosts", "none" };
+                string[] heads = { L.T("Доступны — отправка дойдёт"), L.T("Закрыты брандмауэром или недоступны"),
+                                   L.T("Закрыты в hosts"), L.T("Имя не отвечает — сервера нет") };
+                List<object> items = Json.GetArr(d, "items");
+                for (int i = 0; i < order.Length; i++)
+                {
+                    List<string> names = new List<string>();
+                    foreach (object o in items)
+                    {
+                        Dictionary<string, object> it = Json.Obj(o);
+                        if (Json.GetStr(it, "state") == order[i]) names.Add("      " + Json.GetStr(it, "name"));
+                    }
+                    if (names.Count == 0) continue;
+                    lines.Add(heads[i] + "  (" + names.Count + ")");
+                    lines.AddRange(names);
+                }
+                int open = Json.GetInt(d, "open");
+                Dictionary<string, object> doh = Json.GetObj(d, "doh");
+                string hint = open == 0
+                    ? L.T("Ни один сервер сбора не отвечает: отправка телеметрии отсюда не дойдёт.")
+                    : open + L.T(" серверов отвечают. Закрыть их — модули «Блокировка доменов» и «Блокировка адресов телеметрии».");
+                if (doh != null && !Json.GetBool(doh, "blocked"))
+                    hint += L.T("\nШифрованный DNS не запрещён: браузер с ним обойдёт блокировку в hosts.");
+                using (ListDialog dlg = new ListDialog(L.T("Проверка утечек"), hint, lines.ToArray(), L.T("Закрыть"), Font, false))
+                    dlg.ShowDialog(this);
+            });
+        }
 
         // Старые версии писали параметры реестра под числовыми именами —
         // предлагаем убрать этот мусор, если он ещё лежит в системе.
@@ -212,12 +326,12 @@ namespace Win11Privacy
         // и это важнее свежего отчёта стража.
         private void UpdateHomeAlert()
         {
-            if (_homeAlert == null) return;
-            string text = null, btn = null;
+            string title = null, text = null, btn = null;
             Action go = null;
 
             if (_junkCount > 0)
             {
+                title = L.T("В реестре остались параметры от старых версий");
                 text = L.T("В реестре остались параметры под числовыми именами — их записали версии 1.1–1.5, и они ничего не настраивают. Найдено: ") + _junkCount + ".";
                 btn = L.T("Убрать мусор");
                 go = delegate { Navigate("audit"); OnCleanJunk(null, EventArgs.Empty); };
@@ -234,7 +348,8 @@ namespace Win11Privacy
                     if (drift > 0 && fresh)
                     {
                         List<object> kbs = Json.GetArr(gl, "hotfixes");
-                        text = L.T("Страж вернул настройки, сбитые Windows: ") + drift + L.T(" шт. Проверка ") + when + ".";
+                        title = L.T("Обновление Windows сбило настройки");
+                        text = L.T("Автозащита вернула их обратно: ") + drift + L.T(" шт. Проверка ") + when + ".";
                         if (kbs.Count > 0) text += L.T(" После обновления ") + Json.Str(kbs[0]) + ".";
                         btn = L.T("Подробнее");
                         go = delegate { Navigate("guard"); };
@@ -242,13 +357,8 @@ namespace Win11Privacy
                 }
             }
 
-            if (text == null) { _homeAlert.Visible = false; FitHomeHeight(); return; }
-            _homeAlertText.Text = text;
-            _homeAlertBtn.Text = btn;
-            _homeAlertBtn.Fit();
-            _homeAlertGo = go;
-            _homeAlert.Visible = true;
-            FitHomeHeight();
+            _homeAlertTitle = title; _homeAlertDesc = text; _homeAlertBtn = btn; _homeAlertGo = go;
+            RefreshHome();
         }
 
         private void RenderAudit(Dictionary<string, object> d)
@@ -262,25 +372,33 @@ namespace Win11Privacy
                 _btnCleanJunk.Visible = junk > 0;
                 _btnCleanJunk.Text = L.T("Убрать мусор") + (junk > 0 ? " (" + junk + ")" : "");
             }
-            _ring.SetScore(ok, total);
-            _auditHint.Visible = false;
             _auditWhen.Text = L.T("Проверено: ") + Json.GetStr(d, "time");
 
-            _auditTiles.Controls.Clear();
+            // Итог одной строкой: вывод в заголовке, подробности — пояснением.
+            // Раньше здесь были кольцо и семь плиток с крупными числами.
             int fails = total - ok;
-            _auditTiles.Controls.Add(Tile(L.T("Применено"), ok + " / " + total, L.T("настроек подтверждено"), fails == 0 ? Theme.Ok : Theme.Accent));
-            _auditTiles.Controls.Add(Tile(L.T("Не применено"), fails.ToString(), fails == 0 ? L.T("всё на месте") : L.T("требуют внимания"), fails == 0 ? Theme.Ok : Theme.Warn));
-            int blockedTiles = Json.GetInt(d, "blocked");
-            if (blockedTiles > 0)
-                _auditTiles.Controls.Add(Tile(L.T("Windows не отдаёт"), blockedTiles.ToString(), L.T("не считаются в индексе"), Theme.TextFaint));
-            int naTiles = Json.GetInt(d, "notApplicable");
-            if (naTiles > 0)
-                _auditTiles.Controls.Add(Tile(L.T("Нет на этой Windows"), naTiles.ToString(), L.T("не считаются в индексе"), Theme.TextFaint));
-            Dictionary<string, object> buf = Json.GetObj(d, "buffer");
-            if (buf != null) { string mb = Json.GetStr(buf, "mb"); _auditTiles.Controls.Add(Tile(L.T("Буфер телеметрии"), (mb == "-1" ? L.T("нет") : mb + L.T(" МБ")), Json.GetInt(buf, "files") + L.T(" файлов ждут отправки"), Theme.Accent)); }
+            int blockedN = Json.GetInt(d, "blocked");
+            int naN = Json.GetInt(d, "notApplicable");
             List<object> dns = Json.GetArr(d, "dns");
             int leaked = 0; foreach (object o in dns) if (!Json.GetBool(Json.Obj(o), "blocked")) leaked++;
-            _auditTiles.Controls.Add(Tile(L.T("Обращения к телеметрии"), dns.Count.ToString(), leaked + L.T(" проходит, по кэшу DNS"), leaked == 0 ? Theme.Ok : Theme.Err));
+            double share = total > 0 ? (double)ok / total : 0;
+            string title; Color tone; string glyph;
+            if (fails == 0) { title = L.T("Все настройки действуют"); tone = Theme.Ok; glyph = GSignOk; }
+            else if (share >= 0.85) { title = L.T("Почти все настройки действуют"); tone = Theme.Ok; glyph = GSignOk; }
+            else if (share >= 0.5) { title = L.T("Часть настроек не действует"); tone = Theme.Warn; glyph = GSignWarn; }
+            else { title = L.T("Большинство настроек не действует"); tone = Theme.Err; glyph = GSignWarn; }
+            List<string> parts = new List<string>();
+            parts.Add(L.T("Действует ") + ok + " " + L.T("из") + " " + total);
+            if (fails > 0) parts.Add(L.T("не применено ") + fails);
+            if (blockedN > 0) parts.Add(L.T("Windows не отдаёт ") + blockedN);
+            if (naN > 0) parts.Add(L.T("нет на этой Windows ") + naN);
+            Dictionary<string, object> buf = Json.GetObj(d, "buffer");
+            if (buf != null && Json.GetStr(buf, "mb") != "-1" && Json.GetInt(buf, "files") > 0)
+                parts.Add(L.T("неотправленной телеметрии ") + Json.GetStr(buf, "mb") + L.T(" МБ"));
+            if (dns.Count > 0)
+                parts.Add(leaked == 0 ? L.T("адреса телеметрии не отвечают") : L.T("телеметрия проходит: адресов ") + leaked);
+            _auditStatus.Set(glyph, tone, title, string.Join("  ·  ", parts.ToArray()));
+            _auditStatus.SetButton(fails > 0 ? L.T("Открыть настройки") : null, delegate { Navigate("settings"); });
 
             _auditGroups.Controls.Clear();
             RenderProof();
@@ -357,16 +475,35 @@ namespace Win11Privacy
         private void OnMonitorToggle(object sender, EventArgs e)
         {
             if (_monitorEnabled)
-                RunStreaming("-DisableMonitor", L.T("Выключение монитора…"), delegate { _monitorEnabled = false; UpdateMonitorButton(); });
+                RunStreaming("-DisableMonitor", L.T("Выключение наблюдения за сетью…"), delegate { _monitorEnabled = false; UpdateMonitorButton(); });
             else
             {
-                if (MessageBox.Show(this, L.T("Монитор включит правила брандмауэра для служб телеметрии и начнёт\nвести журнал заблокированных исходящих соединений.\n\nПродолжить?"),
-                    L.T("Включить монитор"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-                RunStreaming("-EnableMonitor", L.T("Включение монитора…"), delegate { _monitorEnabled = true; UpdateMonitorButton(); });
+                if (MessageBox.Show(this, L.T("Наблюдение включит правила брандмауэра для служб телеметрии и начнёт\nвести журнал исходящих соединений — разрешённых и заблокированных.\n") +
+                    L.T("Журнал безопасности при этом вырастет до 128 МБ, чтобы не вытеснять другие записи.\n\nПродолжить?"),
+                    L.T("Включить наблюдение"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                RunStreaming("-EnableMonitor", L.T("Включение наблюдения за сетью…"), delegate { _monitorEnabled = true; UpdateMonitorButton(); RefreshMonitor(); });
             }
         }
         private void UpdateMonitorButton()
-        { if (_monitorToggle != null) { _monitorToggle.Text = _monitorEnabled ? L.T("Выключить монитор") : L.T("Включить монитор"); _monitorToggle.Primary = !_monitorEnabled; _monitorToggle.Invalidate(); } }
+        {
+            if (_monitorToggle != null) { _monitorToggle.Text = _monitorEnabled ? L.T("Выключить наблюдение") : L.T("Включить наблюдение"); _monitorToggle.Primary = !_monitorEnabled; _monitorToggle.Invalidate(); }
+            if (_netGuardToggle != null) { _netGuardToggle.Text = _netGuardOn ? L.T("Не следить за новыми") : L.T("Следить за новыми"); _netGuardToggle.Invalidate(); }
+        }
+
+        // Слежение за сетью: уведомление, когда в сеть впервые выходит новая программа
+        private ModernButton _netGuardToggle;
+        private bool _netGuardOn;
+        private void OnNetGuardToggle(object sender, EventArgs e)
+        {
+            if (_netGuardOn)
+            { RunStreaming("-RemoveNetGuard", L.T("Отключение слежения за сетью…"), delegate { _netGuardOn = false; UpdateMonitorButton(); }); return; }
+            if (MessageBox.Show(this,
+                L.T("Каждые 15 минут программа будет сверять журнал брандмауэра. Если в сеть впервые выйдет\n") +
+                L.T("НОВАЯ программа — придёт уведомление, а здесь, на вкладке «Сеть», её можно будет отрезать.\n\n") +
+                L.T("Первый час слежение учится: всё, что выходит в сеть, считается своим.\n\nПродолжить?"),
+                L.T("Следить за новыми программами"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            RunStreaming("-InstallNetGuard", L.T("Включение слежения за сетью…"), delegate { _netGuardOn = true; RefreshMonitor(); });
+        }
 
         private void RefreshMonitor()
         {
@@ -377,15 +514,29 @@ namespace Win11Privacy
         {
             if (d == null || d.ContainsKey("error")) { _monitorList.Controls.Clear(); SectionHeader sh = new SectionHeader(d != null ? Json.GetStr(d, "error") : L.T("Нет данных — PowerShell недоступен")); sh.Font = Font; _monitorList.Controls.Add(sh); _monitorList.Restack(); return; }
             _lastMonitor = d;
-            _monitorEnabled = Json.GetBool(d, "enabled"); UpdateMonitorButton();
+            _monitorEnabled = Json.GetBool(d, "enabled"); _netGuardOn = Json.GetBool(d, "netGuard"); UpdateMonitorButton();
             int total = Json.GetInt(d, "total"), tele = Json.GetInt(d, "telemetryHits");
             _monitorTiles.Controls.Clear();
             _monitorTiles.Controls.Add(Tile(L.T("Исходящих соединений"), total.ToString(), L.T("за 24 часа"), Theme.Accent));
             _monitorTiles.Controls.Add(Tile(L.T("К телеметрии"), tele.ToString(), L.T("распознано по имени домена"), tele == 0 ? Theme.Ok : Theme.Warn));
             _monitorTiles.Controls.Add(Tile(L.T("Отклонено"), Json.GetInt(d, "blocked").ToString(), L.T("попыток срезал брандмауэр"), Theme.Ok));
-            _monitorTiles.Controls.Add(Tile(L.T("Правил брандмауэра"), Json.GetInt(d, "firewallRules").ToString(), _monitorEnabled ? L.T("монитор включён") : L.T("монитор выключен"), _monitorEnabled ? Theme.Ok : Theme.TextFaint));
+            _monitorTiles.Controls.Add(Tile(L.T("Правил брандмауэра"), Json.GetInt(d, "firewallRules").ToString(), _monitorEnabled ? L.T("наблюдение включено") : L.T("наблюдение выключено"), _monitorEnabled ? Theme.Ok : Theme.TextFaint));
 
             _monitorList.Controls.Clear();
+            List<object> fresh = Json.GetArr(d, "newApps");
+            if (fresh.Count > 0)
+            {
+                SectionHeader sh0 = new SectionHeader(L.T("Впервые вышли в сеть — можно закрыть выход")); sh0.Font = Font; _monitorList.Controls.Add(sh0);
+                foreach (object o in fresh)
+                {
+                    Dictionary<string, object> na = Json.Obj(o);
+                    NetAppRow r = new NetAppRow(Json.GetStr(na, "name"), Ago(Json.GetStr(na, "time")),
+                                                Json.GetStr(na, "path"), Json.GetBool(na, "blocked"));
+                    r.Font = Font;
+                    r.ToggleBlock += OnToggleAppBlock;
+                    _monitorList.Controls.Add(r);
+                }
+            }
             List<object> procs = Json.GetArr(d, "byProcess");
             if (procs.Count > 0)
             {
@@ -414,7 +565,7 @@ namespace Win11Privacy
                 }
             }
             if (procs.Count == 0 && dests.Count == 0)
-            { SectionHeader sh = new SectionHeader(_monitorEnabled ? L.T("Пока ничего не зафиксировано — данные появятся по мере работы") : L.T("Включите монитор, чтобы начать сбор")); sh.Font = Font; _monitorList.Controls.Add(sh); }
+            { SectionHeader sh = new SectionHeader(_monitorEnabled ? L.T("Пока ничего не зафиксировано — данные появятся по мере работы") : L.T("Включите наблюдение за сетью, чтобы начать сбор")); sh.Font = Font; _monitorList.Controls.Add(sh); }
             try { _monitorList.AutoScrollPosition = Point.Empty; } catch { }
             _monitorList.Restack();
         }
@@ -425,14 +576,17 @@ namespace Win11Privacy
         private void OnGuardInstall(object sender, EventArgs e)
         {
             List<string> mods = SelectedModules();
-            if (mods.Count == 0) { MessageBox.Show(this, L.T("Сначала выберите на странице «Настройки», что отслеживать."), L.T("Страж"), MessageBoxButtons.OK, MessageBoxIcon.Information); Navigate("settings"); return; }
-            RunStreaming("-InstallGuard -Modules " + string.Join(",", mods.ToArray()) + (_guardDaily ? " -GuardDaily" : ""),
-                L.T("Установка стража…"), delegate { RunDetect(); });
+            if (mods.Count == 0) { MessageBox.Show(this, L.T("Сначала выберите на странице «Настройки», что отслеживать."), L.T("Автозащита"), MessageBoxButtons.OK, MessageBoxIcon.Information); Navigate("settings"); return; }
+            // снятые пункты страж не трогает: иначе вернул бы то, что оставлено нарочно
+            List<string> skip = SkippedItems();
+            RunStreaming("-InstallGuard -Modules " + string.Join(",", mods.ToArray()) +
+                (skip.Count > 0 ? " -SkipItems " + string.Join(",", skip.ToArray()) : "") + (_guardDaily ? " -GuardDaily" : ""),
+                L.T("Включение автозащиты…"), delegate { RunDetect(); });
         }
         private void OnGuardRemove(object sender, EventArgs e)
-        { RunStreaming("-RemoveGuard", L.T("Удаление стража…"), delegate { RunDetect(); }); }
+        { RunStreaming("-RemoveGuard", L.T("Отключение автозащиты…"), delegate { RunDetect(); }); }
         private void OnGuardNow(object sender, EventArgs e)
-        { RunStreaming("-GuardNow", L.T("Проверка стражем…"), delegate { RunDetect(); }); }
+        { RunStreaming("-GuardNow", L.T("Проверка автозащитой…"), delegate { RunDetect(); }); }
 
         private void OnSensorToggle(object sender, EventArgs e)
         {
@@ -487,11 +641,11 @@ namespace Win11Privacy
         {
             if (_guardBody == null) return;
             _guardBody.Controls.Clear();
-            _btnGuardInstall.Text = _guardInstalled ? L.T("Переустановить") : L.T("Включить стража");
+            _btnGuardInstall.Text = _guardInstalled ? L.T("Переустановить") : L.T("Включить автозащиту");
             _btnGuardRemove.Enabled = _guardInstalled; _btnGuardNow.Enabled = _guardInstalled;
 
             SectionHeader sh = new SectionHeader(L.T("Состояние")); sh.Font = Font; _guardBody.Controls.Add(sh);
-            _guardBody.Controls.Add(new KvRow(L.T("Страж"), _guardInstalled ? L.T("включён") : L.T("выключен"), false) { Font = this.Font });
+            _guardBody.Controls.Add(new KvRow(L.T("Автозащита"), _guardInstalled ? L.T("включена") : L.T("выключена"), false) { Font = this.Font });
             _guardBody.Controls.Add(new KvRow(L.T("Слежение за датчиками (камера, микрофон, гео)"), _sensorOn ? L.T("включено") : L.T("выключено"), false) { Font = this.Font });
             _guardBody.Controls.Add(new KvRow(L.T("Живые уведомления о перехвате отправки"), _watcherOn ? L.T("включены") : L.T("выключены"), false) { Font = this.Font });
             if (_detect != null)

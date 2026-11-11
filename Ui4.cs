@@ -292,21 +292,31 @@ namespace Win11Privacy
         private readonly string _name;
         private bool _checked = true, _hover;
 
-        public SubOptionRow(string id, string name)
+        // Цена пункта: safe — ничего заметного, limited — какая-то функция
+        // перестанет работать, caution — может задеть нужное. Note — что именно.
+        public readonly string Risk, Note, RiskText;
+
+        public SubOptionRow(string id, string name) : this(id, name, "safe", "", "") { }
+
+        public SubOptionRow(string id, string name, string risk, string note, string riskText)
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             Id = id; _name = name;
+            Risk = risk ?? "safe"; Note = note ?? ""; RiskText = riskText ?? "";
             BackColor = Theme.CardBg;
             Cursor = Cursors.Hand;
             AccessibleRole = AccessibleRole.CheckButton;
             AccessibleName = name;
+            AccessibleDescription = (RiskText + (Note.Length > 0 ? ". " + Note : "")).Trim('.', ' ');
         }
 
         public bool Checked { get { return _checked; } set { _checked = value; Invalidate(); } }
         public string Name2 { get { return _name; } }
 
-        protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); Height = (int)(Font.Height * 1.75F); }
+        private Color RiskColor { get { return Risk == "caution" ? Theme.Err : Theme.Warn; } }
+
+        protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); Height = (int)(Font.Height * (Note.Length > 0 ? 2.85F : 1.75F)); }
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; Invalidate(); }
         protected override void OnClick(EventArgs e) { base.OnClick(e); _checked = !_checked; Invalidate(); }
@@ -342,9 +352,39 @@ namespace Win11Privacy
                 }
 
             int tx = left + box + (int)(u * 0.55F);
-            TextRenderer.DrawText(g, _name, Font, new Rectangle(tx, 0, Width - tx - (int)(u * 0.5F), Height),
-                _checked ? Theme.TextDim : Theme.TextFaint,
+            int right = Width - (int)(u * 0.5F);
+
+            // метка цены справа — только когда что-то перестанет работать
+            if (Risk != "safe" && RiskText.Length > 0)
+            {
+                using (Font cf = new Font(Font.FontFamily, Font.Size * 0.8F, FontStyle.Bold))
+                {
+                    Size cs = TextRenderer.MeasureText(RiskText, cf);
+                    int cw = cs.Width + (int)(u * 0.7F), ch = (int)(u * 1.15F);
+                    RectangleF cr = new RectangleF(right - cw, (Note.Length > 0 ? u * 0.3F : (Height - ch) / 2F), cw, ch);
+                    using (GraphicsPath p = Theme.RoundRect(cr, ch / 2F))
+                    using (SolidBrush b = new SolidBrush(Theme.Mix(Theme.CardBg, RiskColor, 0.16F))) g.FillPath(b, p);
+                    TextRenderer.DrawText(g, RiskText, cf, Rectangle.Round(cr), RiskColor,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+                    right -= cw + (int)(u * 0.5F);
+                }
+            }
+
+            Color fg = _checked ? Theme.TextDim : Theme.TextFaint;
+            if (Note.Length == 0)
+            {
+                TextRenderer.DrawText(g, _name, Font, new Rectangle(tx, 0, right - tx, Height), fg,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+                return;
+            }
+            // с пояснением: название сверху, что перестанет работать — строкой ниже
+            int line = (int)(u * 1.3F);
+            TextRenderer.DrawText(g, _name, Font, new Rectangle(tx, (int)(u * 0.25F), right - tx, line), fg,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+            using (Font nf = new Font(Font.FontFamily, Font.Size * 0.88F))
+                TextRenderer.DrawText(g, Note, nf, new Rectangle(tx, (int)(u * 0.25F) + line, Width - tx - (int)(u * 0.5F), line),
+                    Risk == "safe" ? Theme.TextFaint : Theme.Mix(Theme.TextFaint, RiskColor, 0.55F),
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
         }
     }
 
@@ -403,6 +443,162 @@ namespace Win11Privacy
 
             Padding = new Padding((int)(u * 0.8F), (int)(u * 0.4F), (int)(u * 0.8F), (int)(u * 0.5F));
             AcceptButton = null; CancelButton = null;
+        }
+    }
+
+    // ====================================================================== //
+    //  Полоска хода работы в строке состояния. Системный ProgressBar рисовался
+    //  в стиле Windows 7 — зелёным по светло-серому, чужеродно в тёмной теме.
+    //  Эта — тонкая и скруглённая, в цветах темы. Пока объём неизвестен, по ней
+    //  бежит мягкий отрезок; когда движок сообщает «15 / 34», она плавно
+    //  заполняется. Свойства те же, что у ProgressBar, — менять вызовы не нужно.
+    // ====================================================================== //
+    internal class SlimProgress : Control
+    {
+        private ProgressBarStyle _style = ProgressBarStyle.Marquee;
+        private int _max = 100, _value;
+        private float _shown, _phase;
+        private readonly Timer _timer = new Timer();
+
+        public SlimProgress()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            _timer.Interval = 16;
+            _timer.Tick += delegate
+            {
+                if (_style == ProgressBarStyle.Marquee) { _phase += 0.011F; if (_phase > 1F) _phase -= 1F; }
+                else
+                {
+                    float target = _max > 0 ? (float)_value / _max : 0F;
+                    _shown += (target - _shown) * 0.18F;
+                    if (Math.Abs(target - _shown) < 0.002F) _shown = target;
+                }
+                Invalidate();
+            };
+        }
+
+        public ProgressBarStyle Style
+        {
+            get { return _style; }
+            set { if (_style == value) return; _style = value; _phase = 0F; if (value != ProgressBarStyle.Marquee) _shown = 0F; UpdateTimer(); Invalidate(); }
+        }
+        public int Maximum { get { return _max; } set { _max = Math.Max(1, value); Invalidate(); } }
+        public int Value { get { return _value; } set { _value = Math.Max(0, Math.Min(value, _max)); } }
+
+        private void UpdateTimer() { _timer.Enabled = Visible && Parent != null; }
+        protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); UpdateTimer(); }
+        protected override void OnParentChanged(EventArgs e) { base.OnParentChanged(e); UpdateTimer(); }
+        protected override void Dispose(bool disposing) { if (disposing) _timer.Dispose(); base.Dispose(disposing); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            Color bg = Parent != null ? Parent.BackColor : Theme.WindowBg;
+            using (SolidBrush b = new SolidBrush(bg)) g.FillRectangle(b, ClientRectangle);
+            if (Width < 4 || Height < 2) return;
+
+            RectangleF track = new RectangleF(0.5F, 0.5F, Width - 1F, Height - 1F);
+            float r = track.Height / 2F;
+            using (GraphicsPath tp = Theme.RoundRect(track, r))
+            {
+                using (SolidBrush b = new SolidBrush(Theme.Mix(bg, Theme.TextFaint, Theme.Dark ? 0.22F : 0.28F))) g.FillPath(b, tp);
+                GraphicsState st = g.Save();
+                g.SetClip(tp, CombineMode.Intersect);
+                if (_style == ProgressBarStyle.Marquee)
+                {
+                    // отрезок в треть ширины ускоряется к середине и замедляется у краёв
+                    float seg = track.Width * 0.34F;
+                    float t = (float)(0.5 - 0.5 * Math.Cos(_phase * Math.PI));
+                    float x = track.X - seg + (track.Width + seg) * t;
+                    RectangleF sr = new RectangleF(x, track.Y, seg, track.Height);
+                    using (LinearGradientBrush lb = new LinearGradientBrush(new RectangleF(sr.X - 1, sr.Y, sr.Width + 2, sr.Height), Theme.Accent, Theme.Accent2, LinearGradientMode.Horizontal))
+                    {
+                        ColorBlend cb = new ColorBlend();
+                        cb.Colors = new[] { Color.FromArgb(0, Theme.Accent), Theme.Accent, Theme.Accent2, Color.FromArgb(0, Theme.Accent2) };
+                        cb.Positions = new[] { 0F, 0.3F, 0.7F, 1F };
+                        lb.InterpolationColors = cb;
+                        g.FillRectangle(lb, sr);
+                    }
+                }
+                else if (_shown > 0.001F)
+                {
+                    RectangleF fr = new RectangleF(track.X, track.Y, Math.Max(track.Height, track.Width * _shown), track.Height);
+                    using (GraphicsPath fp = Theme.RoundRect(fr, r))
+                    using (LinearGradientBrush lb = new LinearGradientBrush(new RectangleF(track.X - 1, track.Y, track.Width + 2, track.Height), Theme.Accent, Theme.Accent2, LinearGradientMode.Horizontal))
+                        g.FillPath(lb, fp);
+                }
+                g.Restore(st);
+            }
+        }
+    }
+
+    // ====================================================================== //
+    //  Поле поиска. Голый TextBox с одинарной рамкой прижимал подсказку
+    //  вплотную к краю и выглядел чужим среди скруглённых карточек и кнопок.
+    //  Теперь: скруглённая рамка, значок лупы, отступы, подсветка рамки при
+    //  вводе. Сам TextBox остаётся внутри (Box) — фильтры, Ctrl+F и проверки
+    //  работают с ним как раньше.
+    // ====================================================================== //
+    internal class SearchBox : Control
+    {
+        public readonly TextBox Box;
+        private const string SearchGlyph = "";
+
+        public SearchBox(Font font, string placeholder)
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            Font = font;
+            Cursor = Cursors.IBeam;
+            Box = new TextBox();
+            Box.BorderStyle = BorderStyle.None;
+            Box.Font = font;
+            Box.BackColor = Theme.CardBg;
+            Box.ForeColor = Theme.Text;
+            Box.AccessibleName = placeholder;
+            Box.GotFocus += delegate { Invalidate(); };
+            Box.LostFocus += delegate { Invalidate(); };
+            Controls.Add(Box);
+            Dwm.Placeholder(Box, placeholder);
+            Height = (int)(font.Height * 2.05F);
+            LayoutBox();
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); Box.Focus(); }
+        protected override void OnResize(EventArgs e) { base.OnResize(e); LayoutBox(); }
+        protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); if (Box != null) { Box.Font = Font; LayoutBox(); } }
+
+        private void LayoutBox()
+        {
+            if (Box == null) return;
+            int u = Font.Height;
+            int left = (int)(u * 1.95F);
+            int right = (int)(u * 0.7F);
+            Box.SetBounds(left, Math.Max(0, (Height - Box.Height) / 2), Math.Max(10, Width - left - right), Box.Height);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (SolidBrush b = new SolidBrush(Parent != null ? Parent.BackColor : Theme.WindowBg))
+                g.FillRectangle(b, ClientRectangle);
+            int u = Font.Height;
+            bool focused = Box.Focused;
+            RectangleF r = new RectangleF(0.5F, 0.5F, Width - 1.5F, Height - 1.5F);
+            using (GraphicsPath p = Theme.RoundRect(r, u * 0.45F))
+            {
+                using (SolidBrush b = new SolidBrush(Theme.CardBg)) g.FillPath(b, p);
+                Color edge = focused ? Theme.Accent : Theme.Mix(Theme.CardBorder, Theme.TextFaint, Theme.Dark ? 0.25F : 0.35F);
+                using (Pen pen = new Pen(edge, focused ? 1.6F : 1F)) g.DrawPath(pen, p);
+            }
+            Font icon = Theme.IconFont(Font.Size * 0.95F);
+            if (icon != null)
+                TextRenderer.DrawText(g, SearchGlyph, icon, new Rectangle((int)(u * 0.55F), 0, (int)(u * 1.2F), Height),
+                    focused ? Theme.Accent : Theme.TextFaint,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
         }
     }
 }

@@ -1,24 +1,16 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Text;
-using System.Globalization;
-using System.IO;
-using System.Reflection;
-using System.Security.Principal;
-using System.Text;
 using System.Windows.Forms;
 
 namespace Win11Privacy
 {
-    // Страница «Обзор»: индекс, полоса внимания, карточки разделов, диаграммы.
+    // Страница «Обзор»: что с защитой, что требует внимания и как обстоят дела
+    // по разделам. Без счётчиков и диаграмм — только состояние и действия.
     public partial class MainForm : Form
     {
-        // ================================================================== //
-        //  Страница: Обзор — главный экран
-        // ================================================================== //
+        private const string GSignWarn = "", GSignInfo = "", GSignOk = "";
+
         private Control BuildHomePage()
         {
             int u = Font.Height;
@@ -28,243 +20,80 @@ namespace Win11Privacy
             scroll.BackColor = Theme.WindowBg;
             Dwm.DarkScrollbars(scroll);
             _homeScroll = scroll;
-            scroll.Resize += delegate { FitHomeHeight(); };
 
             TableLayoutPanel page = new TableLayoutPanel();
             _homePage = page;
-            page.ColumnCount = 1; page.RowCount = 5;
+            page.ColumnCount = 1; page.RowCount = 6;
             page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             page.BackColor = Theme.WindowBg;
             page.Dock = DockStyle.Top;
             page.AutoSize = true; page.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));                       // шапка
-            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));                       // полоса внимания
-            page.RowStyles.Add(new RowStyle(SizeType.Absolute, (int)(u * 9.4F)));      // статусная панель
-            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));                       // карточки разделов
-            page.RowStyles.Add(new RowStyle(SizeType.Absolute, (int)(u * 15.5F)));     // диаграммы
+            for (int i = 0; i < 6; i++) page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-            // --- шапка: заголовок + чип системы --------------------------------
+            // --- шапка: заголовок, система и время проверки, действия ----------
             TableLayoutPanel head = new TableLayoutPanel();
             head.Dock = DockStyle.Fill; head.AutoSize = true;
             head.ColumnCount = 2; head.RowCount = 1;
             head.BackColor = Theme.WindowBg;
             head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            head.Margin = new Padding(0, 0, 0, (int)(u * 0.7F));
+            head.Margin = new Padding(0);
 
             FlowLayoutPanel titles = new FlowLayoutPanel();
             titles.FlowDirection = FlowDirection.TopDown; titles.WrapContents = false;
             titles.AutoSize = true; titles.Margin = new Padding(0);
-            Label big = new Label();
-            big.Text = L.T("Ваша приватность");
-            big.Font = Theme.PickFont(new[] { "Segoe UI Variable Display", "Segoe UI", "Tahoma" }, Font.Size * 1.95F, FontStyle.Bold);
-            big.ForeColor = Theme.Text; big.AutoSize = true; big.Margin = new Padding(0, 0, 0, 2);
-            _homeHint = new Label();
-            _homeHint.Text = L.T("Идёт первая проверка — страница заполнится сама.");
-            _homeHint.ForeColor = Theme.TextDim; _homeHint.AutoSize = true; _homeHint.Margin = new Padding(2, 0, 0, 0);
-            titles.Controls.Add(big); titles.Controls.Add(_homeHint);
+            Label big = PageTitle(L.T("Обзор"));
+            big.Margin = new Padding(0, 0, 0, (int)(u * 0.1F));
+            _homeSub = new Label();
+            _homeSub.ForeColor = Theme.TextDim; _homeSub.AutoSize = true;
+            _homeSub.Margin = new Padding(1, 0, 0, 0);
+            _homeSub.Text = L.T("Определение системы…");
+            titles.Controls.Add(big); titles.Controls.Add(_homeSub);
             head.Controls.Add(titles, 0, 0);
 
-            _homeSysChip = new ChipLabel();
-            _homeSysChip.Font = Font;
-            _homeSysChip.Anchor = AnchorStyles.Right | AnchorStyles.Top;
-            _homeSysChip.Margin = new Padding(0, (int)(u * 0.4F), 0, 0);
-            _homeSysChip.SetText(L.T("Определение системы…"));
-            head.Controls.Add(_homeSysChip, 1, 0);
-            page.Controls.Add(head, 0, 0);
-
-            // --- полоса внимания -----------------------------------------------
-            //  Появляется, только когда есть что сказать: страж вернул сбитые
-            //  обновлением настройки или в реестре остался мусор от версий,
-            //  писавших параметры под числовыми именами. Раньше об этом можно
-            //  было узнать, лишь зайдя на нужную страницу.
-            _homeAlert = new Card();
-            _homeAlert.Dock = DockStyle.Fill; _homeAlert.Visible = false;
-            _homeAlert.AutoSize = true; _homeAlert.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            _homeAlert.Margin = new Padding(0, 0, 0, (int)(u * 0.7F));
-            _homeAlert.Padding = new Padding((int)(u * 0.9F), (int)(u * 0.6F), (int)(u * 0.9F), (int)(u * 0.6F));
-            TableLayoutPanel alert = new TableLayoutPanel();
-            alert.Dock = DockStyle.Fill; alert.BackColor = Theme.CardBg;
-            alert.ColumnCount = 2; alert.RowCount = 1; alert.AutoSize = true;
-            alert.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            alert.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            _homeAlertText = new Label();
-            _homeAlertText.AutoSize = true; _homeAlertText.ForeColor = Theme.Text; _homeAlertText.Font = Font;
-            _homeAlertText.Margin = new Padding(0, (int)(u * 0.3F), (int)(u * 0.8F), 0);
-            _homeAlertBtn = new ModernButton("", false);
-            _homeAlertBtn.Font = Font; _homeAlertBtn.Anchor = AnchorStyles.Right;
-            _homeAlertBtn.Margin = new Padding(0);
-            _homeAlertBtn.Click += delegate { if (_homeAlertGo != null) _homeAlertGo(); };
-            alert.Controls.Add(_homeAlertText, 0, 0);
-            alert.Controls.Add(_homeAlertBtn, 1, 0);
-            _homeAlert.Controls.Add(alert);
-            page.Controls.Add(_homeAlert, 0, 1);
-
-            // --- статусная панель: кольцо, вердикт, мини-показатели, действия ---
-            Card band = new Card();
-            band.Dock = DockStyle.Fill;
-            band.Margin = new Padding(0, 0, 0, (int)(u * 0.7F));
-            band.Padding = new Padding((int)(u * 1.0F), (int)(u * 0.8F), (int)(u * 1.0F), (int)(u * 0.8F));
-
-            TableLayoutPanel bi = new TableLayoutPanel();
-            bi.Dock = DockStyle.Fill; bi.BackColor = Theme.CardBg;
-            bi.ColumnCount = 3; bi.RowCount = 3;
-            bi.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            bi.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            bi.RowStyles.Add(new RowStyle(SizeType.AutoSize));                         // кнопки — на узком окне
-            bi.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, (int)(u * 7.4F)));
-            bi.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            bi.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-
-            _homeRing = new IndexRing();
-            _homeRing.Font = Font; _homeRing.Dock = DockStyle.Fill;
-            _homeRing.Margin = new Padding(0, 0, (int)(u * 0.6F), 0);
-            bi.Controls.Add(_homeRing, 0, 0);
-            bi.SetRowSpan(_homeRing, 2);
-
-            TableLayoutPanel verdict = new TableLayoutPanel();
-            verdict.Dock = DockStyle.Fill; verdict.BackColor = Theme.CardBg;
-            verdict.ColumnCount = 1; verdict.RowCount = 2;
-            verdict.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            verdict.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            verdict.Margin = new Padding((int)(u * 0.4F), (int)(u * 0.2F), 0, 0);
-            _verdictTitle = new Label();
-            _verdictTitle.AutoSize = false; _verdictTitle.Dock = DockStyle.Top;
-            _verdictTitle.Height = (int)(Font.Height * 1.85F); _verdictTitle.AutoEllipsis = true;
-            _verdictTitle.Font = Theme.PickFont(new[] { "Segoe UI Variable Display", "Segoe UI", "Tahoma" }, Font.Size * 1.25F, FontStyle.Bold);
-            _verdictTitle.ForeColor = Theme.Text;
-            _verdictTitle.Text = L.T("Идёт проверка системы…");
-            _verdictTitle.Margin = new Padding(0, 0, 0, (int)(u * 0.15F));
-            _verdictSub = new Label();
-            _verdictSub.AutoSize = false; _verdictSub.Dock = DockStyle.Top;
-            _verdictSub.Height = (int)(Font.Height * 1.6F); _verdictSub.AutoEllipsis = true;
-            _verdictSub.ForeColor = Theme.TextDim;
-            _verdictSub.Text = L.T("Читаю реальное состояние настроек — это займёт несколько секунд.");
-            _verdictSub.Margin = new Padding(2, 0, 0, (int)(u * 0.5F));
-            FlowLayoutPanel minis = new FlowLayoutPanel();
-            minis.AutoSize = true; minis.WrapContents = false; minis.Margin = new Padding(0);
-            minis.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
-            minis.Padding = new Padding(0, (int)(u * 0.15F), 0, 0);
-            _msEvents  = new MiniStat(L.T("событий в сутки"), GXray, Theme.Warn);
-            _msYear    = new MiniStat(L.T("уйдёт за год"), GClock, Theme.Err);
-            _msBlocked = new MiniStat(L.T("доменов молчат"), GFire, Theme.Accent);
-            foreach (MiniStat m in new[] { _msEvents, _msYear, _msBlocked })
-            { m.Font = Font; m.Margin = new Padding(0, 0, (int)(u * 0.9F), 0); minis.Controls.Add(m); }
-            verdict.Controls.Add(_verdictTitle, 0, 0);
-            verdict.Controls.Add(_verdictSub, 0, 1);
-            bi.Controls.Add(verdict, 1, 0);
-            bi.Controls.Add(minis, 1, 1);
-            bi.SetColumnSpan(minis, 2);
-
             FlowLayoutPanel actions = new FlowLayoutPanel();
-            actions.FlowDirection = FlowDirection.LeftToRight;
             actions.AutoSize = true; actions.WrapContents = false;
-            actions.Anchor = AnchorStyles.Right;
-            actions.Margin = new Padding((int)(u * 0.6F), 0, 0, 0);
-            _homeActions = actions;
-            ModernButton bApply = new ModernButton(L.T("Настроить и применить"), true);
-            bApply.Font = Theme.Bold(Font);
-            bApply.Click += delegate { Navigate("settings"); };
+            actions.Anchor = AnchorStyles.Right | AnchorStyles.Top;
+            actions.Margin = new Padding(0, (int)(u * 0.2F), 0, 0);
             ModernButton bAudit = new ModernButton(L.T("Проверить"), false);
             bAudit.Font = Font;
             bAudit.Click += delegate { Navigate("audit"); RunAudit(); };
-            ModernButton bDiag = new ModernButton(L.T("Диагностика"), false);
-            bDiag.Font = Font;
-            bDiag.Click += OnSelfTest;
-            foreach (ModernButton b in new[] { bApply, bAudit, bDiag })
-            { b.Margin = new Padding((int)(u * 0.4F), 0, 0, 0); actions.Controls.Add(b); }
-            band.Resize += delegate { LayoutHomeActions(band); };
-            bi.Controls.Add(actions, 2, 0);
-            band.Controls.Add(bi);
-            page.Controls.Add(band, 0, 2);
+            ModernButton bApply = new ModernButton(L.T("Применить настройки"), true);
+            bApply.Font = Theme.Bold(Font);
+            bApply.Click += delegate { Navigate("settings"); };
+            bAudit.Margin = new Padding(0, 0, (int)(u * 0.5F), 0);
+            bApply.Margin = new Padding(0);
+            actions.Controls.Add(bAudit); actions.Controls.Add(bApply);
+            head.Controls.Add(actions, 1, 0);
+            WrapHeadButtons(head, actions);
+            page.Controls.Add(head, 0, 0);
 
-            // --- карточки разделов с живыми статусами --------------------------
-            TileGrid quick = new TileGrid();
-            quick.Dock = DockStyle.Fill; quick.AutoSize = true; quick.Font = Font;
-            // плитка не уже своего статуса: в три колонки «29.08 — обновление Windows» обрывалось
-            quick.MinTileWidthU = 17.2F; quick.TileHeightU = 4.0F; quick.MaxCols = 3;
-            quick.Margin = new Padding(0, 0, 0, (int)(u * 0.7F));
-            quick.Resize += delegate { FitHomeHeight(); };
-            _qcXray    = new ActionCard(L.T("Рентген"), GXray, Theme.Warn);
-            _qcDossier = new ActionCard(L.T("Досье"), GFinger, Theme.Err);
-            _qcMonitor = new ActionCard(L.T("Монитор"), GNav3, Theme.Accent);
-            _qcGuard   = new ActionCard(L.T("Страж"), GShield, Theme.Ok);
-            _qcStartup = new ActionCard(L.T("Автозапуск"), GPower, Theme.Warn);
-            _qcTimeline= new ActionCard(L.T("Хронология"), GHistory, Theme.Accent);
-            _qcXray.Click    += delegate { Navigate("xray"); };
-            _qcDossier.Click += delegate { Navigate("dossier"); };
-            _qcMonitor.Click += delegate { Navigate("monitor"); };
-            _qcGuard.Click   += delegate { Navigate("guard"); };
-            _qcStartup.Click += delegate { Navigate("startup"); };
-            _qcTimeline.Click+= delegate { Navigate("timeline"); };
-            foreach (ActionCard c in new[] { _qcXray, _qcDossier, _qcMonitor, _qcGuard, _qcStartup, _qcTimeline })
-            { c.Font = Font; c.SetStatus(L.T("ожидание данных…"), Theme.TextFaint); quick.Controls.Add(c); }
-            page.Controls.Add(quick, 0, 3);
+            // --- строка состояния ------------------------------------------------
+            RowList status = MakeRowList();
+            status.Margin = new Padding(0, (int)(u * 1.2F), 0, 0);
+            _homeStatus = new InfoRow();
+            _homeStatus.Font = Font;
+            _homeStatus.GlyphTile = true; _homeStatus.Large = true;
+            _homeStatus.Set(GShield, Theme.TextDim, L.T("Идёт проверка системы…"),
+                L.T("Программа читает настройки — это займёт несколько секунд."));
+            _homeStatus.SetButton(L.T("Изменить настройки"), delegate { Navigate("settings"); });
+            status.Controls.Add(_homeStatus);
+            page.Controls.Add(status, 0, 1);
 
-            // --- диаграммы: что собирают + кто подглядывал ----------------------
-            TableLayoutPanel mid = new TableLayoutPanel();
-            mid.Dock = DockStyle.Fill; mid.BackColor = Theme.WindowBg;
-            mid.ColumnCount = 2; mid.RowCount = 2;
-            mid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-            mid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-            mid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            mid.RowStyles.Add(new RowStyle(SizeType.Absolute, 0F));
+            // --- требует внимания -------------------------------------------------
+            page.Controls.Add(HomeLabel(L.T("Требует внимания")), 0, 2);
+            _homeAttention = MakeRowList();
+            page.Controls.Add(_homeAttention, 0, 3);
 
-            _homeDonutCard = MakeChartCard(L.T("Что о вас собирают"));
-            _homeDonut = new DonutChart(); _homeDonut.Font = Font; _homeDonut.Dock = DockStyle.Fill;
-            _homeDonut.EmptyHint = L.T("Данные появятся после «Рентгена»:") + "\n" + L.T("включите запись и просканируйте.");
-            _homeDonutCard.Controls.Add(_homeDonut);
-            _homeDonut.BringToFront();
-            _homeDonutCard.Margin = new Padding(0, 0, (int)(u * 0.35F), 0);
-            mid.Controls.Add(_homeDonutCard, 0, 0);
-
-            _homeChartCard = MakeChartCard(L.T("Кто подглядывал — по дням"));
-            _homeSensors = new SensorChart(); _homeSensors.Font = Font; _homeSensors.Dock = DockStyle.Fill;
-            _homeSensors.BackColor = Theme.CardBg;
-            _homeSensors.Cursor = Cursors.Hand;
-            _homeSensors.Click += delegate { Navigate("dossier"); };
-            _homeChartCard.Controls.Add(_homeSensors);
-            _homeSensors.BringToFront();
-            _homeChartCard.Margin = new Padding((int)(u * 0.35F), 0, 0, 0);
-            mid.Controls.Add(_homeChartCard, 1, 0);
-
-            _homeMid = mid;
-            mid.Resize += delegate { LayoutHomeMid(); };
-            page.Controls.Add(mid, 0, 4);
+            // --- защита по разделам ---------------------------------------------
+            page.Controls.Add(HomeLabel(L.T("Защита по разделам")), 0, 4);
+            _homeSections = MakeRowList();
+            _homeSections.Margin = new Padding(0, 0, 0, (int)(u * 1.0F));
+            page.Controls.Add(_homeSections, 0, 5);
 
             scroll.Controls.Add(page);
+            RefreshHome();
             return scroll;
-        }
-
-        // Кнопки статусной панели: на широком окне — в ряд справа от вердикта,
-        // на среднем — столбиком, а на узком уходят отдельной строкой вниз.
-        // Столбик справа отнимал у вердикта ширину, и текст обрывался.
-        private void LayoutHomeActions(Control band)
-        {
-            TableLayoutPanel grid = _homeActions == null ? null : _homeActions.Parent as TableLayoutPanel;
-            if (grid == null || band == null) return;
-            int u = Font.Height;
-            int w = band.ClientSize.Width;
-            bool below = w < u * 50;
-            bool row = below || w >= u * 58;
-            FlowDirection want = row ? FlowDirection.LeftToRight : FlowDirection.TopDown;
-            if (_homeActions.FlowDirection == want && (grid.GetRow(_homeActions) == 2) == below) return;
-            grid.SuspendLayout();
-            _homeActions.FlowDirection = want;
-            foreach (Control c in _homeActions.Controls)
-                c.Margin = below ? new Padding(0, 0, (int)(u * 0.4F), 0)
-                         : row ? new Padding((int)(u * 0.4F), 0, 0, 0)
-                               : new Padding(0, 0, 0, (int)(u * 0.35F));
-            grid.SetCellPosition(_homeActions, new TableLayoutPanelCellPosition(below ? 0 : 2, below ? 2 : 0));
-            grid.SetColumnSpan(_homeActions, below ? 3 : 1);
-            // свою колонку кнопки освобождают: иначе она раздувается под ряд, который тянется через все три
-            grid.ColumnStyles[2].SizeType = below ? SizeType.Absolute : SizeType.AutoSize;
-            grid.ColumnStyles[2].Width = 0;
-            _homeActions.Anchor = below ? AnchorStyles.Left : AnchorStyles.Right;
-            _homeActions.Margin = below ? new Padding(0, (int)(u * 0.6F), 0, 0) : new Padding((int)(u * 0.6F), 0, 0, 0);
-            grid.ResumeLayout(true);
-            _homePage.RowStyles[2].Height = (int)(u * (below ? 12.2F : 9.4F));
-            FitHomeHeight();
         }
 
         // Карточка управления: описание сверху, ряд кнопок снизу. Ряд выровнен
@@ -306,80 +135,33 @@ namespace Win11Privacy
             };
         }
 
-        private Card MakeChartCard(string title)
+        private RowList MakeRowList()
         {
-            int u = Font.Height;
-            Card c = new Card();
-            c.Dock = DockStyle.Fill;
-            c.Padding = new Padding((int)(u * 0.8F), (int)(u * 0.55F), (int)(u * 0.8F), (int)(u * 0.5F));
+            RowList r = new RowList();
+            r.Dock = DockStyle.Fill;
+            r.Font = Font;
+            // Высоту список ставит себе сам. С AutoSize он только рос: когда
+            // появлялась полоса прокрутки, строки оставались шире окна.
+            r.AutoSize = false;
+            r.Margin = new Padding(0);
+            return r;
+        }
+
+        private Label HomeLabel(string text)
+        {
             Label l = new Label();
-            l.Text = title; l.Dock = DockStyle.Top; l.AutoSize = false;
-            l.Height = (int)(u * 1.7F); l.Font = Theme.Bold(Font); l.ForeColor = Theme.Text;
-            l.TextAlign = ContentAlignment.MiddleLeft; l.BackColor = Theme.CardBg;
-            c.Controls.Add(l);
-            return c;
+            l.Text = text; l.AutoSize = true;
+            l.Font = Theme.Sized(Font.Name, Font.SizeInPoints * 0.92F, FontStyle.Bold);
+            l.ForeColor = Theme.TextDim;
+            l.Margin = new Padding(1, (int)(Font.Height * 1.4F), 0, (int)(Font.Height * 0.5F));
+            return l;
         }
 
-        // Узкое окно: диаграммы встают друг под другом
-        private void LayoutHomeMid()
-        {
-            if (_homeMid == null || _homePage == null || _homeDonutCard == null) return;
-            int u = Font.Height;
-            bool narrow = _homeMid.ClientSize.Width < u * 42;
-            bool isNarrow = _homeMid.GetColumnSpan(_homeDonutCard) == 2;
-            if (narrow == isNarrow) return;
-            _homeMid.SuspendLayout();
-            if (narrow)
-            {
-                _homeMid.SetColumnSpan(_homeDonutCard, 2);
-                _homeMid.SetCellPosition(_homeChartCard, new TableLayoutPanelCellPosition(0, 1));
-                _homeMid.SetColumnSpan(_homeChartCard, 2);
-                _homeMid.RowStyles[0].SizeType = SizeType.Percent; _homeMid.RowStyles[0].Height = 50F;
-                _homeMid.RowStyles[1].SizeType = SizeType.Percent; _homeMid.RowStyles[1].Height = 50F;
-                _chartsMinU = 27F;
-                _homeDonutCard.Margin = new Padding(0, 0, 0, (int)(u * 0.35F));
-                _homeChartCard.Margin = new Padding(0, (int)(u * 0.35F), 0, 0);
-            }
-            else
-            {
-                _homeMid.SetColumnSpan(_homeChartCard, 1);
-                _homeMid.SetCellPosition(_homeChartCard, new TableLayoutPanelCellPosition(1, 0));
-                _homeMid.SetColumnSpan(_homeDonutCard, 1);
-                _homeMid.RowStyles[0].SizeType = SizeType.Percent; _homeMid.RowStyles[0].Height = 100F;
-                _homeMid.RowStyles[1].SizeType = SizeType.Absolute; _homeMid.RowStyles[1].Height = 0F;
-                _chartsMinU = 15.5F;
-                _homeDonutCard.Margin = new Padding(0, 0, (int)(u * 0.35F), 0);
-                _homeChartCard.Margin = new Padding((int)(u * 0.35F), 0, 0, 0);
-            }
-            _homeMid.ResumeLayout(true);
-            FitHomeHeight();
-        }
-
-        // Диаграммы тянутся на всю свободную высоту окна
-        private void FitHomeHeight()
-        {
-            if (_homeScroll == null || _homePage == null) return;
-            int u = Font.Height;
-            int min = (int)(u * _chartsMinU);
-            int others = 0;
-            try
-            {
-                int[] rows = _homePage.GetRowHeights();
-                for (int r = 0; r < rows.Length - 1; r++) others += rows[r];
-            }
-            catch { return; }
-            int avail = _homeScroll.ClientSize.Height - others - (int)(u * 0.3F);
-            int h = Math.Max(min, avail);
-            if (Math.Abs(_homePage.RowStyles[4].Height - h) > 2)
-                _homePage.RowStyles[4].Height = h;
-        }
-
-        // Заполняет главный экран по уже полученным данным
+        // После стартовых чтений: автозагрузка (пункт «лишние программы») и
+        // проверка настроек. Раньше проверка сама не запускалась, и «Обзор»
+        // показывал «Идёт проверка…» и «Нет данных», пока не откроешь
+        // «Проверку». Всё — очередью, а не несколькими процессами разом.
         private bool _homeExtraAsked;
-
-        // Автозапуск и хронология подтягиваются один раз при первом показе
-        // «Обзора»: держать их в стартовой очереди незачем, а карточка без
-        // цифры бесполезна.
         private void FillHomeExtras()
         {
             if (_homeExtraAsked || _mockMode) return;
@@ -390,98 +172,160 @@ namespace Win11Privacy
             _homeExtraAsked = true;
             RunJson("-ListStartup", L.T("Чтение автозагрузки…"), delegate(Dictionary<string, object> d)
             {
-                if (d == null) return;
-                _lastStartup = d;
-                int bad = Json.GetInt(d, "advise"), on = Json.GetInt(d, "on");
-                if (_qcStartup != null)
-                    _qcStartup.SetStatus(bad > 0 ? bad + L.T(" лишних из ") + on
-                                                 : on + L.T(" записей, лишних нет"),
-                                         bad > 0 ? Theme.Warn : Theme.Ok);
-                RunJson("-Timeline -TimelineDays 30", L.T("Сбор хронологии…"), delegate(Dictionary<string, object> t)
+                if (d != null)
                 {
-                    if (t == null) return;
-                    _lastTimeline = t;
-                    List<object> notes = Json.GetArr(t, "notes");
-                    if (_qcTimeline == null) return;
-                    if (notes.Count == 0) { _qcTimeline.SetStatus(L.T("пока без событий"), Theme.TextFaint); return; }
-                    Dictionary<string, object> last = Json.Obj(notes[notes.Count - 1]);
-                    string kind = Json.GetStr(last, "kind");
-                    string what = kind == "update" ? L.T("обновление Windows") :
-                                  kind == "drift" ? L.T("Windows сбила настройки") : L.T("телеметрия выросла");
-                    _qcTimeline.SetStatus(Json.GetStr(last, "date") + " — " + what,
-                                          kind == "update" ? Theme.Accent : Theme.Warn);
-                });
+                    _lastStartup = d;
+                    _homeStartupAdvise = Json.GetInt(d, "advise");
+                    RefreshHome();
+                }
+                if (_lastAudit == null) RunAudit();
             });
+        }
+
+        // Строки перестраиваются, только когда меняется содержание: обновления
+        // данных приходят часто, а пересоздание строк мигало бы.
+        private string _homeAttentionSig = null, _homeSectionsSig = null;
+
+        private sealed class HomeItem
+        {
+            public string Glyph, Title, Desc, Button, State;
+            public Color Color, StateColor;
+            public Action Go;
         }
 
         private void RefreshHome()
         {
-            if (_homeRing == null) return;
+            if (_homeStatus == null) return;
 
-            // вердикт и кольцо
+            // подзаголовок: система и время последней проверки
+            string when = _lastAudit != null ? Json.GetStr(_lastAudit, "time") : "";
+            string sys = _homeSys.Length > 0 ? _homeSys : L.T("Определение системы…");
+            _homeSub.Text = sys + (when.Length > 0 ? L.T(" · проверено ") + when : "");
+
+            // строка состояния
+            int ok = 0, total = 0;
+            if (_lastAudit == null)
+                _homeStatus.Set(GShield, Theme.TextDim, L.T("Идёт проверка системы…"),
+                    L.T("Программа читает настройки — это займёт несколько секунд."));
+            else
+            {
+                ok = Json.GetInt(_lastAudit, "ok"); total = Json.GetInt(_lastAudit, "total");
+                double share = total > 0 ? (double)ok / total : 0;
+                string guard = _guardInstalled
+                    ? L.T("Автозащита следит, чтобы обновления Windows не вернули отключённое.")
+                    : L.T("Автозащита выключена: после обновлений Windows настройки могут вернуться.");
+                if (share >= 0.85) _homeStatus.Set(GShield, Theme.Ok, L.T("Защита включена"), guard);
+                else if (share >= 0.5) _homeStatus.Set(GShield, Theme.Warn, L.T("Защита включена частично"),
+                    L.T("Не все выбранные настройки действуют. Что исправить — ниже."));
+                else _homeStatus.Set(GShield, Theme.Err, L.T("Защита почти не настроена"),
+                    L.T("Выберите профиль в «Настройках» и нажмите «Применить»."));
+            }
+
+            // требует внимания — от важного к справочному, не больше пяти
+            List<HomeItem> att = new List<HomeItem>();
+            if (_homeAlertTitle != null)
+                att.Add(Item(GSignWarn, Theme.Warn, _homeAlertTitle, _homeAlertDesc, _homeAlertBtn, _homeAlertGo));
+            if (_lastSpy != null && Json.GetInt(_lastSpy, "activeNow") > 0)
+                att.Add(Item(GSignWarn, Theme.Warn, L.T("Камера или микрофон используются прямо сейчас"),
+                    L.T("Посмотрите, какая программа к ним обратилась."), L.T("Подробнее"), delegate { Navigate("dossier"); }));
+            if (_lastAudit != null && total > ok)
+                att.Add(Item(GSignWarn, Theme.Warn, L.T("Часть настроек не действует"),
+                    L.T("Windows могла вернуть их после обновления. Список — на странице «Проверка»."), L.T("Посмотреть"),
+                    delegate { Navigate("audit"); }));
             if (_lastAudit != null)
             {
-                int ok = Json.GetInt(_lastAudit, "ok"), total = Json.GetInt(_lastAudit, "total");
-                int pct = total > 0 ? (int)Math.Round(100.0 * ok / total) : 0;
-                _homeRing.SetScore(ok, total);
-                _verdictTitle.ForeColor = pct >= 85 ? Theme.Ok : (pct >= 50 ? Theme.Warn : Theme.Err);
-                _verdictTitle.Text = pct >= 85 ? L.T("Система хорошо закрыта")
-                    : (pct >= 50 ? L.T("Защита настроена не полностью") : L.T("Система почти не защищена"));
-                int fails = total - ok;
-                int blockedN = Json.GetInt(_lastAudit, "blocked");
-                _verdictSub.Text = ok + L.T(" из ") + total + L.T(" применено") +
-                    (fails > 0 ? "  ·  " + fails + L.T(" требуют внимания") : L.T("  ·  всё на месте")) +
-                    (blockedN > 0 ? "  ·  " + blockedN + L.T(" Windows не отдаёт") : "");
-                int blocked = 0;
-                foreach (object o in Json.GetArr(_lastAudit, "dns")) if (Json.GetBool(Json.Obj(o), "blocked")) blocked++;
-                _msBlocked.SetValue(blocked.ToString());
-                _homeHint.Text = L.T("Данные получены с этого компьютера ") + Json.GetStr(_lastAudit, "time") + ".";
-            }
-
-            // мини-показатели и пончик — из рентгена
-            if (_lastXray != null)
-            {
-                _msEvents.SetValue(FormatBig(Json.GetInt(_lastXray, "perDay")));
-                _msYear.SetValue(FormatBig(Json.GetInt(_lastXray, "perYear")));
-                List<KeyValuePair<string, float>> d = new List<KeyValuePair<string, float>>();
-                int n = 0;
-                foreach (object o in Json.GetArr(_lastXray, "categories"))
+                string pass = null;
+                foreach (object o in Json.GetArr(_lastAudit, "dns"))
                 {
-                    if (n++ >= 6) break;
-                    Dictionary<string, object> c = Json.Obj(o);
-                    d.Add(new KeyValuePair<string, float>(L.T(Json.GetStr(c, "name")), Json.GetInt(c, "count")));
+                    Dictionary<string, object> dd = Json.Obj(o);
+                    if (!Json.GetBool(dd, "blocked")) { pass = Json.GetStr(dd, "name"); break; }
                 }
-                _homeDonut.SetData(d, FormatBig(Json.GetInt(_lastXray, "total")), L.T("событий"));
+                if (!string.IsNullOrEmpty(pass))
+                    att.Add(Item(GSignWarn, Theme.Warn, L.T("Телеметрия проходит мимо блокировки"),
+                        L.T("Отвечает адрес ") + pass + L.T(". Включите блокировку доменов в «Настройках»."), L.T("Настроить"),
+                        delegate { Navigate("settings"); }));
             }
-            else _homeDonut.SetData(null, "", "");
+            if (_detect != null && !_guardInstalled)
+                att.Add(Item(GSignInfo, Theme.TextDim, L.T("Автозащита выключена"),
+                    L.T("Без неё обновления Windows могут вернуть отключённое."), L.T("Включить"), delegate { Navigate("guard"); }));
+            if (_detect != null && !_monitorEnabled)
+                att.Add(Item(GSignInfo, Theme.TextDim, L.T("Наблюдение за сетью выключено"),
+                    L.T("Программа не видит, какие приложения выходят в интернет."), L.T("Включить"), delegate { Navigate("monitor"); }));
+            if (_homeStartupAdvise > 0)
+                att.Add(Item(GSignInfo, Theme.TextDim, L.T("Лишние программы в автозагрузке"),
+                    L.T("Их можно отключить: Windows работает и без них."), L.T("Показать"), delegate { Navigate("startup"); }));
+            if (att.Count > 5) att.RemoveRange(5, att.Count - 5);
+            if (att.Count == 0)
+                att.Add(Item(GSignOk, Theme.Ok, L.T("Ничего не требует внимания"),
+                    L.T("Если что-то изменится, программа сообщит об этом здесь."), null, null));
+            FillRows(_homeAttention, att, ref _homeAttentionSig, false);
 
-            // график датчиков
-            if (_homeSensors != null && _lastSpy != null)
-                _homeSensors.SetData(Json.GetArr(_lastSpy, "days"));
-
-            // живые статусы карточек разделов
-            if (_qcXray != null)
+            // защита по разделам: по итогам проверки модулей каждого раздела
+            Dictionary<string, int[]> byModule = new Dictionary<string, int[]>();
+            if (_lastAudit != null)
+                foreach (object o in Json.GetArr(_lastAudit, "groups"))
+                {
+                    Dictionary<string, object> gr = Json.Obj(o);
+                    byModule[Json.GetStr(gr, "module")] = new[] { Json.GetInt(gr, "ok"), Json.GetInt(gr, "total") };
+                }
+            List<HomeItem> secs = new List<HomeItem>();
+            List<string> order = new List<string>();
+            foreach (ModuleDef m in _mods) if (!order.Contains(m.Section)) order.Add(m.Section);
+            foreach (string sec in order)
             {
-                if (_lastXray != null)
-                    _qcXray.SetStatus(FormatBig(Json.GetInt(_lastXray, "perDay")) + L.T(" событий/сутки"), Theme.TextDim);
-                else
-                    _qcXray.SetStatus(_xrayRecording ? L.T("запись включена") : L.T("что собрано о вас"), Theme.TextDim);
-
-                int act = _lastSpy != null ? Json.GetInt(_lastSpy, "activeNow") : 0;
-                int week = _lastSpy != null ? Json.GetInt(_lastSpy, "week") : -1;
-                if (act > 0) _qcDossier.SetStatus(L.T("используются сейчас!"), Theme.Err);
-                else if (week >= 0) _qcDossier.SetStatus(week + L.T(" обращений за 7 дней"), Theme.TextDim);
-                else _qcDossier.SetStatus(L.T("камера, микрофон, след"), Theme.TextDim);
-
-                if (_monitorEnabled)
-                    _qcMonitor.SetStatus(_lastMonitor != null
-                        ? Json.GetInt(_lastMonitor, "total") + L.T(" соединений/сутки")
-                        : L.T("включён"), Theme.TextDim);
-                else _qcMonitor.SetStatus(L.T("выключен"), Theme.Warn);
-
-                _qcGuard.SetStatus(_guardInstalled ? L.T("на посту") : L.T("выключен"),
-                    _guardInstalled ? Theme.TextDim : Theme.Warn);
+                int sOk = 0, sTotal = 0;
+                List<string> names = new List<string>();
+                string glyph = null;
+                foreach (ModuleDef m in _mods)
+                {
+                    if (m.Section != sec || (m.App && !m.Installed)) continue;
+                    if (glyph == null) glyph = m.Glyph;
+                    if (names.Count < 3) names.Add(m.Title);
+                    int[] r;
+                    if (byModule.TryGetValue(m.Id, out r)) { sOk += r[0]; sTotal += r[1]; }
+                }
+                if (names.Count == 0 || (_lastAudit != null && sTotal == 0)) continue;
+                HomeItem it = Item(glyph ?? GShield, Theme.TextDim, sec, string.Join("  ·  ", names.ToArray()), null,
+                    delegate { Navigate("settings"); });
+                if (_lastAudit == null) { it.State = L.T("Нет данных"); it.StateColor = Theme.TextFaint; }
+                else if (sOk >= sTotal) { it.State = L.T("Включено"); it.StateColor = Theme.Ok; }
+                else if (sOk == 0) { it.State = L.T("Выключено"); it.StateColor = Theme.TextFaint; }
+                else { it.State = L.T("Частично"); it.StateColor = Theme.Warn; }
+                secs.Add(it);
             }
+            FillRows(_homeSections, secs, ref _homeSectionsSig, true);
+        }
+
+        private static HomeItem Item(string glyph, Color color, string title, string desc, string button, Action go)
+        {
+            HomeItem i = new HomeItem();
+            i.Glyph = glyph; i.Color = color; i.Title = title ?? ""; i.Desc = desc ?? ""; i.Button = button; i.Go = go;
+            i.State = ""; i.StateColor = Theme.TextFaint;
+            return i;
+        }
+
+        private void FillRows(RowList list, List<HomeItem> items, ref string sig, bool links)
+        {
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            foreach (HomeItem i in items) sb.Append(i.Title).Append('|').Append(i.Desc).Append('|').Append(i.State).Append('|').Append(i.Button).Append('\n');
+            string now = sb.ToString();
+            if (now == sig) return;
+            sig = now;
+            list.SuspendLayout();
+            while (list.Controls.Count > 0) list.Controls[0].Dispose();
+            foreach (HomeItem i in items)
+            {
+                InfoRow r = new InfoRow();
+                r.Font = Font;
+                r.Link = links;
+                r.Set(i.Glyph, i.Color, i.Title, i.Desc);
+                if (i.State.Length > 0) r.SetState(i.State, i.StateColor);
+                Action go = i.Go;
+                if (i.Button != null) r.SetButton(i.Button, delegate { if (go != null) go(); });
+                else if (links && go != null) r.Click += delegate { go(); };
+                list.Controls.Add(r);
+            }
+            list.ResumeLayout(true);
         }
     }
 }

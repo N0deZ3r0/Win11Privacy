@@ -1,0 +1,363 @@
+# Перевод строк версии 1.11.0: номер устройства в учётной записи Microsoft
+# (GDID) — модуль в «Жёстких мерах», пункт «Цифрового следа» и отчёт.
+# Формат: русский TAB английский. Краевые пробелы должны совпадать.
+
+# --- модуль ---
+Номер устройства (GDID)	Device ID (GDID)
+По нему Microsoft узнаёт компьютер даже через VPN. Отключает службы, которые его передают, и закрывает их серверы; вход в учётную запись остаётся. Перестанут работать «Связь с телефоном» и обмен с устройствами поблизости. Если Магазин перестанет скачивать — снимите пункт DoSvc.	Microsoft recognises the computer by it even through a VPN. Turns off the services that send it and blocks their servers; the Microsoft account sign-in keeps working. Phone Link and nearby sharing stop working. If the Store stops downloading, untick the DoSvc item.
+Номер устройства в учётной записи Microsoft (GDID)	Device ID in the Microsoft account (GDID)
+служба CDPSvc: регистрация компьютера в каталоге устройств Microsoft — выкл	CDPSvc service: registering the computer in Microsoft's device directory — off
+служба CDPUserSvc: то же для каждого пользователя — выкл	CDPUserSvc service: the same for each user — off
+служба DoSvc (Delivery Optimization): передача номера устройства — выкл	DoSvc service (Delivery Optimization): reporting the device ID — off
+серверы каталога устройств и Delivery Optimization — в hosts	device directory and Delivery Optimization servers — into hosts
+
+# --- «Цифровой след» и отчёт ---
+есть — в отчёт не выводится	present — not included in the report
+# --- вкладка «Номер устройства» ---
+Номер устройства	Device ID
+Microsoft выдаёт компьютеру номер (GDID) и узнаёт его по нему при любом IP, даже через VPN.\n	Microsoft gives the computer a number (GDID) and recognises it by that number whatever the IP, even through a VPN.\n
+Отключённая телеметрия его не останавливает: номер уходит через другие службы.	Turning telemetry off does not stop it: the number goes out through other services.
+Не передавать	Stop sending
+Сменить номер	Change the ID
+Запретить выдачу	Block issuing
+Вернуть как было	Restore
+Чтение номера устройства…	Reading the device ID…
+запуск автоматически	starts automatically
+запуск по требованию	starts on demand
+запуск при загрузке	starts at boot
+Нажмите «Обновить», чтобы прочитать состояние	Press "Refresh" to read the current state
+Номер	ID
+Windows его сейчас не хранит	Windows does not hold one now
+выдан серверами Microsoft	issued by Microsoft's servers
+закрыта	blocked
+частично	partly
+идёт	active
+Передача	Sending
+службы CDPSvc, DoSvc и их серверы	CDPSvc, DoSvc and their servers
+Выдача нового	New ID issuing
+открыта	open
+сервер login.live.com	the login.live.com server
+Копий на диске	Copies on disk
+в реестре и учётных данных	in the registry and credentials
+Сейчас	Now
+Выдаётся при входе в Windows и привязан к установке Windows, а не к железу. По нему Microsoft связывает ваши действия с этим компьютером при любом IP.	Issued when you sign in and tied to this Windows installation, not to the hardware. Microsoft uses it to link what you do to this computer whatever the IP.
+Передача номера	Sending the ID
+CDPSvc регистрирует компьютер в каталоге устройств Microsoft, DoSvc сообщает номер. DiagTrack тут ни при чём.	CDPSvc registers the computer in Microsoft's device directory, DoSvc reports the ID. DiagTrack has nothing to do with it.
+Выдача нового номера	Issuing a new ID
+Сервер выдачи закрыт: стёртый номер Windows заменить нечем.	The issuing server is blocked: Windows has nothing to replace an erased ID with.
+Сервер выдачи открыт: стёртый номер Windows сразу заменит новым.	The issuing server is open: Windows will replace an erased ID with a new one right away.
+Вход в Windows	Windows sign-in
+Через учётную запись Microsoft: запретить выдачу номера нельзя — без сервера выдачи она не работает.	With a Microsoft account: issuing cannot be blocked, because the account does not work without the issuing server.
+Локальная учётная запись: доступны все три действия.	Local account: all three actions are available.
+учётная запись Microsoft	Microsoft account
+локальная	local
+Что можно сделать	What you can do
+Отключает CDPSvc, CDPUserSvc и DoSvc и закрывает серверы каталога устройств. Вход в учётную запись остаётся; «Связь с телефоном» и обмен с устройствами поблизости перестанут работать.	Turns off CDPSvc, CDPUserSvc and DoSvc and blocks the device directory servers. Account sign-in keeps working; Phone Link and nearby sharing stop working.
+сделано	done
+Стирает «личность» устройства — Windows получит новый номер. Магазин, Xbox и OneDrive попросят войти заново. Старый номер у Microsoft останется, а войдя той же учётной записью, вы привяжете к ней и новый.	Erases the device's identity, so Windows gets a new ID. The Store, Xbox and OneDrive will ask you to sign in again. Microsoft keeps the old ID, and signing in with the same account links the new one to it too.
+Закрывает сервер выдачи и стирает номер: нового Windows не получит. Только для входа без учётной записи Microsoft — Магазин, Xbox и OneDrive перестанут работать.	Blocks the issuing server and erases the ID, so Windows gets no new one. Only for signing in without a Microsoft account: the Store, Xbox and OneDrive stop working.
+недоступно	unavailable
+Службы и серверы — как до программы. Стёртый номер не вернётся: Windows получит новый.	Services and servers go back to how they were before the program. An erased ID does not come back: Windows gets a new one.
+Службы	Services
+, работает	, running
+. Номер виден только вам — наружу программа ничего не отправляет.\n	. Only you can see the ID — the program sends nothing out.\n
+Старые записи Microsoft не стереть ничем: всё здесь меняет только то, что будет дальше.	Nothing can erase Microsoft's existing records: everything here only changes what happens from now on.
+Будут отключены службы CDPSvc, CDPUserSvc и DoSvc, а серверы каталога устройств Microsoft закрыты в hosts.\n\n	The CDPSvc, CDPUserSvc and DoSvc services will be turned off and Microsoft's device directory servers blocked in hosts.\n\n
+Вход в учётную запись Microsoft останется. Перестанут работать «Связь с телефоном» и обмен с устройствами поблизости. 	Microsoft account sign-in keeps working. Phone Link and nearby sharing stop working. 
+Если Магазин перестанет скачивать приложения, верните DoSvc на странице «Изменения».\n\nПродолжить?	If the Store stops downloading apps, restore DoSvc on the Changes page.\n\nContinue?
+Не передавать номер	Stop sending the device ID
+Номер будет стёрт вместе с «личностью» устройства. Сервер выдачи закрыт — нового номера Windows не получит.\n\nПродолжить?	The ID will be erased together with the device's identity. The issuing server is blocked, so Windows will get no new ID.\n\nContinue?
+Номер будет стёрт вместе с «личностью» устройства, и Windows получит новый при следующем обращении к учётной записи Microsoft.\n\n	The ID will be erased together with the device's identity, and Windows will get a new one the next time it contacts the Microsoft account.\n\n
+• Магазин, Xbox и OneDrive могут попросить войти заново.\n	• The Store, Xbox and OneDrive may ask you to sign in again.\n
+• Старый номер у Microsoft останется — стереть чужие записи нельзя.\n	• Microsoft keeps the old ID — records held elsewhere cannot be erased.\n
+• Войдя той же учётной записью, вы привяжете к ней и новый номер.\n\nПродолжить?	• Signing in with the same account links the new ID to it too.\n\nContinue?
+Сменить номер устройства	Change the device ID
+Смена номера устройства…	Changing the device ID…
+Вы входите в Windows через учётную запись Microsoft. Без сервера выдачи номера она перестанет работать, поэтому запрет недоступен.\n\n	You sign in to Windows with a Microsoft account. It stops working without the issuing server, so blocking is not available.\n\n
+Чтобы им воспользоваться, сначала перейдите на локальную учётную запись: Параметры → Учётные записи → Ваши данные.	To use it, first switch to a local account: Settings → Accounts → Your info.
+Запретить выдачу номера	Block issuing the device ID
+Сервер, который выдаёт номер (login.live.com), будет закрыт в hosts и брандмауэре, передача номера отключена, а сам номер стёрт отовсюду.\n\n	The server that issues the ID (login.live.com) will be blocked in hosts and the firewall, sending the ID turned off, and the ID itself erased everywhere.\n\n
+Нового номера Windows не получит. Вход в учётную запись Microsoft, Магазин, Xbox и OneDrive перестанут работать, пока запрет стоит. 	Windows will get no new ID. Microsoft account sign-in, the Store, Xbox and OneDrive stop working while the block is on. 
+Снять его — «Вернуть как было» здесь или общий откат.\n\nПродолжить?	To lift it, use "Restore" here or the general undo.\n\nContinue?
+Службы получат тот тип запуска, что был до программы, а блоки серверов номера будут убраны из hosts и брандмауэра.\n\n	The services get back the startup type they had before the program, and the ID server blocks are removed from hosts and the firewall.\n\n
+Стёртый раньше номер не вернётся: Windows получит новый.\n\nПродолжить?	An ID erased earlier does not come back: Windows gets a new one.\n\nContinue?
+Возврат…	Restoring…
+
+# --- модуль «Запрет выдачи номера» и подписи движка ---
+Запрет выдачи номера устройства	Block issuing the device ID
+сервер выдачи номера (login.live.com, account.live.com) — в hosts	the ID issuing server (login.live.com, account.live.com) — into hosts
+исходящие службы учётных записей Microsoft (wlidsvc) — блок	outgoing traffic of the Microsoft account service (wlidsvc) — blocked
+номер устройства стёрт отовсюду, где Windows его хранит	device ID erased from everywhere Windows keeps it
+номера нет	no ID
+номер на месте	ID present
+недоступно при входе через учётную запись Microsoft	unavailable when signing in with a Microsoft account
+недоступно на компьютере организации	unavailable on an organisation's computer
+компьютер в домене организации	the computer is in an organisation's domain
+компьютер подключён к Entra ID организации	the computer is joined to an organisation's Entra ID
+в Windows добавлена рабочая или учебная учётная запись	a work or school account is added to Windows
+компьютер под управлением организации (MDM)	the computer is managed by an organisation (MDM)
+
+# --- «Цифровой след» ---
+По этому номеру Microsoft узнаёт компьютер даже через VPN и выдаёт его по запросу властей. Не передавать, сменить или запретить выдачу — на вкладке «Номер устройства».	Microsoft recognises the computer by this number even through a VPN and hands it over when the authorities ask. To stop sending it, change it or block issuing, use the Device ID tab.
+# --- набор для других компьютеров ---
+Для других ПК	For other PCs
+Куда сложить набор для других компьютеров	Where to put the set for other computers
+Win11Privacy — набор для других компьютеров\r\n\r\n	Win11Privacy — set for other computers\r\n\r\n
+apply.cmd  — применить выбранные настройки (разделов: 	apply.cmd  — apply the chosen settings (sections: 
+revert.cmd — вернуть всё, что программа изменила, по журналу изменений.\r\n\r\n	revert.cmd — undo everything the program changed, from its change log.\r\n\r\n
+Запускайте от имени администратора. Подходит и для развёртывания: групповая политика, Intune, скрипт входа.\r\n	Run as administrator. Also suitable for deployment: Group Policy, Intune, a logon script.\r\n
+Журнал отката хранится на каждом компьютере в C:\\ProgramData\\Win11Privacy.\r\n	The undo log is kept on each computer in C:\\ProgramData\\Win11Privacy.\r\n
+Настройки пользователя ложатся во все профили и в профиль по умолчанию — так они сработают и при запуске от имени SYSTEM.\r\n	User settings go into every profile and the default profile, so they work even when run as SYSTEM.\r\n
+Настройки пользователя ложатся только тому, от чьего имени запущен файл. Для запуска от имени SYSTEM включите «Для всех пользователей» и выгрузите набор заново.\r\n	User settings go only to the account that runs the file. To run as SYSTEM, turn on "For all users" and export the set again.\r\n
+Набор для других компьютеров сохранён: 	Set for other computers saved: 
+Для всех пользователей	For all users
+Настройки пользователя ложатся и в другие профили этого компьютера, и в профиль по умолчанию — новые пользователи получат их сразу.	User settings also go into the other profiles on this computer and into the default profile, so new users get them straight away.
+
+# --- проверка утечек ---
+Программа разрешит имя каждого сервера сбора данных так же, как это сделает любая программа,\n	The program will resolve the name of every data-collection server the same way any program would,\n
+и попробует открыть к нему соединение. Данные не отправляются: соединение сразу закрывается.\n\n	and try to open a connection to it. No data is sent: the connection is closed at once.\n\n
+Займёт до 15 секунд. Продолжить?	It takes up to 15 seconds. Continue?
+Проверить утечки	Leak test
+Проверка утечек…	Testing for leaks…
+Не удалось провести проверку.	The test could not be run.
+Доступны — отправка дойдёт	Reachable — data would get through
+Закрыты брандмауэром или недоступны	Blocked by the firewall or unreachable
+Закрыты в hosts	Blocked in hosts
+Имя не отвечает — сервера нет	Name does not resolve — no server
+Ни один сервер сбора не отвечает: отправка телеметрии отсюда не дойдёт.	No data-collection server answers: telemetry from here will not get through.
+ серверов отвечают. Закрыть их — модули «Блокировка доменов» и «Блокировка адресов телеметрии».	 servers answer. To block them, use the "Domain blocking" and "Telemetry address blocking" modules.
+\nШифрованный DNS не запрещён: браузер с ним обойдёт блокировку в hosts.	\nEncrypted DNS is not blocked: a browser using it bypasses hosts blocking.
+Проверка утечек	Leak test
+Закрыть	Close
+
+# --- монитор и слежение за сетью ---
+Монитор включит правила брандмауэра для служб телеметрии и начнёт\nвести журнал исходящих соединений — разрешённых и заблокированных.\n	The monitor will enable firewall rules for telemetry services and start\nlogging outgoing connections, both allowed and blocked.\n
+Журнал безопасности при этом вырастет до 128 МБ, чтобы не вытеснять другие записи.\n\nПродолжить?	The Security log will grow to 128 MB so other entries are not pushed out.\n\nContinue?
+Не следить за новыми	Stop watching for new
+Следить за новыми	Watch for new
+Отключение слежения за сетью…	Turning off network watch…
+Каждые 15 минут программа будет сверять журнал брандмауэра. Если в сеть впервые выйдет\n	Every 15 minutes the program will check the firewall log. If a NEW program goes online\n
+НОВАЯ программа — придёт уведомление, а здесь, на «Мониторе», её можно будет отрезать.\n\n	for the first time, you get a notification, and here on the Monitor page you can cut it off.\n\n
+Первый час слежение учится: всё, что выходит в сеть, считается своим.\n\nПродолжить?	For the first hour it learns: everything that goes online counts as known.\n\nContinue?
+Следить за новыми программами	Watch for new programs
+Включение слежения за сетью…	Turning on network watch…
+Впервые вышли в сеть — можно закрыть выход	Went online for the first time — can be cut off
+Программы, выходившие в сеть, — по ним слежение замечает новые	Programs that have gone online — network watch uses them to spot new ones
+
+# --- цена настроек ---
+осторожно	careful
+с последствиями	side effects
+На Home и Pro Windows всё равно оставит «обязательные данные»: полностью выключает только Enterprise и Education.	On Home and Pro, Windows still keeps "required data": only Enterprise and Education turn it off fully.
+Win+V перестанет показывать историю скопированного.	Win+V will stop showing your clipboard history.
+Буфер обмена не будет общим с телефоном и другими компьютерами.	The clipboard will no longer be shared with your phone and other computers.
+Голосовой ввод и диктовка через облако Microsoft перестанут работать.	Voice typing and dictation through Microsoft's cloud will stop working.
+Поиск в Пуске будет искать только на компьютере, без результатов из интернета.	Start search will look only on this computer, with no web results.
+Карты, погода и автоматический часовой пояс не узнают, где вы.	Maps, weather and the automatic time zone will not know where you are.
+Потерянный ноутбук нельзя будет найти через «Поиск устройства».	A lost laptop cannot be found with Find my device.
+Приложения из Магазина не узнают ваше имя, аватар и возраст.	Store apps will not know your name, picture and age.
+Почта из Магазина не увидит ваши письма, пока вы не разрешите её вручную.	Store mail apps will not see your email until you allow them manually.
+Календарь из Магазина не увидит ваши события, пока вы не разрешите его вручную.	Store calendar apps will not see your events until you allow them manually.
+Приложения не смогут связываться с телефоном и устройствами Bluetooth без вашего разрешения.	Apps cannot talk to your phone or Bluetooth devices without your permission.
+Камера перестанет работать в приложениях Магазина. В браузерах и обычных программах — работает.	The camera stops working in Store apps. It keeps working in browsers and regular programs.
+Микрофон перестанет работать в приложениях Магазина. В браузерах и обычных программах — работает.	The microphone stops working in Store apps. It keeps working in browsers and regular programs.
+Приложения из Магазина не будут присылать уведомления и обновляться, пока закрыты.	Store apps will not send notifications or refresh while closed.
+Сетевые игры Xbox, которым нужен Teredo, могут не подключаться.	Xbox online games that need Teredo may fail to connect.
+OneDrive перестанет синхронизировать файлы. Сами файлы на диске остаются.	OneDrive stops syncing files. The files on disk stay.
+Нужна, если компьютером управляет организация (MDM). Дома не используется.	Needed when an organisation manages the computer (MDM). Not used at home.
+Проверяет лицензии приложений Магазина. Если купленные приложения перестанут запускаться — снимите этот пункт.	Checks Store app licences. If purchased apps stop launching, untick this item.
+Родительский контроль Microsoft Family перестанет работать.	Microsoft Family parental controls stop working.
+Защитник теряет облачную проверку: новые угрозы он будет узнавать позже.	Defender loses cloud protection and will recognise new threats later.
+Подозрительные файлы не уйдут на анализ в Microsoft.	Suspicious files will not be sent to Microsoft for analysis.
+Ваши DNS-запросы снова видит провайдер. Зато hosts работает для всех программ.	Your provider sees your DNS queries again. In return, hosts works for every program.
+Windows Update и Магазин не затрагиваются. Изредка перестают уходить отчёты об ошибках.	Windows Update and the Store are not affected. Occasionally error reports stop going out.
+На тех же адресах иногда живут другие службы Microsoft — если что-то отвалится, снимите пункт.	Other Microsoft services sometimes share these addresses; if something breaks, untick the item.
+«Связь с телефоном» и обмен с устройствами поблизости перестанут работать.	Phone Link and nearby sharing stop working.
+Если Магазин перестанет скачивать приложения — снимите этот пункт.	If the Store stops downloading apps, untick this item.
+Вход в учётную запись Microsoft, Магазин, Xbox и OneDrive перестанут работать.	Microsoft account sign-in, the Store, Xbox and OneDrive stop working.
+
+# --- состояния из движка ---
+блок установлен	block in place
+нет блока	no block
+блок устарел	block out of date
+адреса заблокированы	addresses blocked
+адреса устарели	addresses out of date
+нет правила	no rule
+Монитор фиксирует попытки программ отправить данные наружу и показывает, кто и куда стучится. Использует брандмауэр и журнал безопасности Windows.	The monitor records attempts to send data out and shows who knocks where. It uses the firewall and the Windows security log.
+
+# --- короткие описания модулей ---
+Выгрузка файлов в облако и реклама OneDrive. Файлы на диске остаются.	Uploading files to the cloud and OneDrive ads. Files on disk stay.
+Контакты, календарь, почта, возраст — под запретом политики, обновлением не вернуть.	Contacts, calendar, email, age — blocked by policy that updates cannot undo.
+Что Windows сама скачивает и отправляет: шрифты, карты, модели, Teredo.	What Windows downloads and sends on its own: fonts, maps, models, Teredo.
+Номер, по которому Microsoft узнаёт ПК даже через VPN. Подробно — на своей вкладке.	The number Microsoft recognises the PC by, even through a VPN. Details on its own tab.
+Брандмауэр закрывает сами адреса сбора — в обход hosts не пройти.	The firewall blocks the collection addresses themselves, so going around hosts fails.
+Камера, микрофон и фон для приложений Магазина. Браузеры не затрагивает.	Camera, microphone and background for Store apps. Browsers are not affected.
+Без DoH браузеры не обойдут блокировку доменов. Запросы снова видит провайдер.	Without DoH, browsers cannot bypass domain blocking. Your provider sees queries again.
+Облачная синхронизация и копия	Cloud sync and backup
+Список приложений, Wi-Fi, язык и согласия, которые Windows сама выгружает в облако.	App list, Wi-Fi, language and consents that Windows uploads to the cloud on its own.
+Перед крупным обновлением Windows проверка совместимости будет знать о ваших программах меньше.	Before a major Windows upgrade, the compatibility check will know less about your programs.
+Тема, язык и другие настройки не переедут на новый компьютер сами — их придётся задать заново.	Theme, language and other settings won't move to a new PC on their own — you'll have to set them again.
+На новом компьютере Windows не предложит заново поставить ваши приложения.	On a new PC, Windows won't offer to reinstall your apps.
+Копия в OneDrive перестанет обновляться сама. Если рассчитываете на неё при переезде — снимите пункт.	The OneDrive backup stops updating on its own. If you rely on it to move to a new PC, untick this.
+Пароли Wi-Fi не будут переезжать на другие ваши компьютеры.	Wi-Fi passwords won't move to your other PCs.
+Click to Do: скачивание моделей ИИ — выкл	Click to Do: AI model downloads — off
+не скачивать прогноз нагрузки энергосети	don't download the power grid forecast
+синхронизация параметров между устройствами — выкл	settings sync between devices — off
+синхронизацию параметров не включить обратно в Параметрах	settings sync can't be turned back on in Settings
+копия списка приложений в облако — выкл	app list backup to the cloud — off
+внеплановая копия списка приложений — выкл	unscheduled app list backup — off
+архивация Windows в облако — выкл	Windows Backup to the cloud — off
+синхронизация ваших согласий на сбор данных — выкл	sync of your data collection consents — off
+синхронизация сетей Wi-Fi между устройствами — выкл	Wi-Fi network sync between devices — off
+синхронизация языковых настроек — выкл	language settings sync — off
+скачивание обоев с других ваших устройств — выкл	wallpaper download from your other devices — off
+синхронизация настроек пера — выкл	pen settings sync — off
+служба InventorySvc (опись программ и оборудования)	InventorySvc service (inventory of programs and hardware)
+задача UsageAndQualityInsights (сбор сведений об использовании)	task UsageAndQualityInsights (collects usage facts)
+Кнопка «Установить на устройство» на сайте Магазина перестанет работать. В самом Магазине всё ставится как обычно.	The "Install on my device" button on the Store website stops working. Installing from the Store app works as usual.
+Windows перестанет сама чинить известные сбои по указанию Microsoft. Средства устранения неполадок можно запускать вручную.	Windows stops fixing known issues on its own on Microsoft's instructions. You can still run troubleshooters yourself.
+Средства устранения неполадок будут работать только с тем, что есть на компьютере.	Troubleshooters will only use what is already on the computer.
+установка приложений на этот ПК по команде с сайта — выкл	installing apps on this PC on command from the website — off
+не применять «исправления», присланные Microsoft	don't apply "mitigations" sent by Microsoft
+задача RecommendedTroubleshootingScanner (поиск «исправлений» Microsoft)	task RecommendedTroubleshootingScanner (looks for Microsoft "mitigations")
+средства устранения неполадок не обращаются к серверам Microsoft	troubleshooters don't query Microsoft servers
+Защитник: удалённые настройки и эксперименты (ECS) — выкл	Defender: remote settings and experiments (ECS) — off
+Новые функции и усиления защиты Защитник будет получать только с обновлениями, а не с сервера экспериментов. Базы угроз обновляются как обычно.	Defender will get new features and hardening only with updates, not from the experiments server. Threat definitions update as usual.
+Картинки «Windows: интересное» на рабочем столе перестанут меняться сами.	Windows Spotlight pictures on the desktop will stop changing by themselves.
+ИИ-помощники не смогут сами работать с вашими файлами и настройками Windows.	AI assistants won't be able to work with your files and Windows settings on their own.
+Приложение «Архивация Windows» перестанет сохранять копию в OneDrive. Файлы на диске не трогаются.	The Windows Backup app will stop saving a copy to OneDrive. Files on disk are not touched.
+Приложения из Магазина не смогут пользоваться ИИ-моделями Windows на компьютере.	Store apps won't be able to use the AI models Windows keeps on the computer.
+предложения сторонних приложений в «интересном» — выкл	third-party app suggestions in Spotlight — off
+«интересное» в центре уведомлений — выкл	Spotlight in the notification center — off
+«интересное» в Параметрах — выкл	Spotlight in Settings — off
+приветственная реклама после обновлений — выкл	welcome promotions after updates — off
+обои «Windows: интересное» на рабочем столе — выкл	Windows Spotlight desktop wallpaper — off
+экран «Закрепите Copilot» при входе — выкл	"Pin Copilot" screen at sign-in — off
+реклама приложений в окне «Поделиться» — выкл	app promotions in the Share window — off
+Recall: выгрузка снимков — запрещена	Recall: snapshot export — blocked
+ИИ-агенты: доступ к файлам и настройкам через MCP — запрещён	AI agents: access to files and settings via MCP — blocked
+ИИ-агент в Параметрах — выкл	AI agent in Settings — off
+встроенные ИИ-модели Windows — запрещены приложениям	built-in Windows AI models — blocked for apps
+приложение «Архивация Windows» — выкл	Windows Backup app — off
+панель виджетов — выкл	widgets board — off
+виджеты на экране блокировки — выкл	widgets on the lock screen — off
+• автозащиту, слежение за датчиками и живые уведомления.\n\n	• auto-protection, sensor watch and live notifications.\n\n
+В реестре остались параметры от старых версий	Leftover settings from old versions in the registry
+Обновление Windows сбило настройки	A Windows update reset some settings
+Автозащита вернула их обратно: 	Auto-protection restored them: 
+Выключение наблюдения за сетью…	Turning off network watch…
+Наблюдение включит правила брандмауэра для служб телеметрии и начнёт\nвести журнал исходящих соединений — разрешённых и заблокированных.\n	Network watch will turn on firewall rules for telemetry services and start\nlogging outgoing connections, both allowed and blocked.\n
+Включить наблюдение	Turn on watch
+Включение наблюдения за сетью…	Turning on network watch…
+Выключить наблюдение	Turn off watch
+НОВАЯ программа — придёт уведомление, а здесь, на вкладке «Сеть», её можно будет отрезать.\n\n	a NEW program, you get a notification, and here on the Network tab you can cut it off.\n\n
+наблюдение включено	watch on
+наблюдение выключено	watch off
+Включите наблюдение за сетью, чтобы начать сбор	Turn on network watch to start collecting
+Автозащита	Auto-protection
+Включение автозащиты…	Turning on auto-protection…
+Отключение автозащиты…	Turning off auto-protection…
+Проверка автозащитой…	Auto-protection check…
+Включить автозащиту	Turn on auto-protection
+Наблюдение	Observation
+Автозагрузка	Startup
+Сбор данных	Data collection
+Следы на компьютере	Traces on this PC
+Выберите, что отключить. Изменения вступают в силу после «Применить».	Choose what to turn off. Changes take effect after Apply.
+Ещё	More
+Профиль	Profile
+Свой	Custom
+Загрузить профиль…	Load profile…
+Сохранить профиль…	Save profile…
+Файл для других ПК…	File for other PCs…
+Открыть папку резервных копий	Open backup folder
+Откатить изменения…	Undo changes…
+Наблюдение за сетью фиксирует попытки программ отправить данные наружу и показывает, кто и куда стучится. Использует брандмауэр и журнал безопасности Windows.	Network watch records programs trying to send data out and shows who connects where. It uses the Windows firewall and security log.
+свои правки и возвраты автозащиты. Чем дольше она стоит, тем больше видно.	its own changes and auto-protection restores. The longer it runs, the more you see.
+Линии телеметрии пока нет: включите запись на вкладке «Сбор данных» и нажмите «Замерить».	No telemetry line yet: turn on recording on the Data collection tab and click Measure.
+Автозащита нашла сбитых настроек: 	Auto-protection found reset settings: 
+Красная черта — обновление Windows, зелёная точка — правка программы, жёлтая — возврат автозащиты.	Red line: Windows update; green dot: change by this program; yellow: auto-protection restore.
+Автозащита будет проверять каждый день. Нажмите «Включить автозащиту».	Auto-protection will check every day. Click Turn on auto-protection.
+Автозащита будет проверять раз в неделю. Нажмите «Включить автозащиту».	Auto-protection will check once a week. Click Turn on auto-protection.
+Автозащита проверяет систему по расписанию, возвращает сбитое и предупреждает.	Auto-protection checks the system on a schedule, restores what was reset and warns you.
+работе автозащиты и наблюдения за сетью.	the work of auto-protection and network watch.
+• Следы на компьютере: кто и когда реально включал камеру, микрофон и геолокацию — с длительностью и меткой «сейчас».\n	• Traces on this PC: who actually turned on the camera, microphone and location, and when, with duration and a "now" mark.\n
+• Сбор данных: настоящие события, собранные о компьютере, с сырым содержимым.\n	• Data collection: the real events collected about the computer, with raw content.\n
+• Сеть: показывает, кто и куда реально отправляет данные.\n	• Network: shows who actually sends data and where.\n
+• Автозащита: возвращает настройки, сбитые обновлениями Windows; машина времени со снимками состояния.\n	• Auto-protection: restores settings reset by Windows updates; a time machine with state snapshots.\n
+отключить без поломки системы, эта программа отключает, а автозащита не даёт вернуть обратно.	turn off without breaking the system, this program turns off, and auto-protection keeps it from coming back.
+журнал изменений, снимки и эталоны сбора данных.\n\n	the change log, snapshots and data collection baselines.\n\n
+Собрать следы	Collect traces
+Следы собраны 	Traces collected 
+Журнал датчиков прочитан. Нажмите «Собрать следы» — программа просканирует\n	The sensor log has been read. Click Collect traces and the program will also scan\n
+Применить настройки	Apply settings
+Программа читает настройки — это займёт несколько секунд.	The program is reading settings; this takes a few seconds.
+Изменить настройки	Change settings
+Требует внимания	Needs attention
+Защита по разделам	Protection by section
+ · проверено 	 · checked 
+Автозащита следит, чтобы обновления Windows не вернули отключённое.	Auto-protection makes sure Windows updates do not bring back what you turned off.
+Автозащита выключена: после обновлений Windows настройки могут вернуться.	Auto-protection is off: settings may come back after Windows updates.
+Защита включена	Protection is on
+Защита включена частично	Protection is partly on
+Часть настроек не действует.	Some settings are not in effect.
+Защита почти не настроена	Protection is barely set up
+Выберите профиль в «Настройках» и нажмите «Применить».	Choose a profile in Settings and click Apply.
+Камера или микрофон используются прямо сейчас	The camera or microphone is in use right now
+Посмотрите, какая программа к ним обратилась.	See which program accessed them.
+Часть настроек не действует	Some settings are not in effect
+Windows могла вернуть их после обновления. Список — на странице «Проверка».	Windows may have restored them after an update. The list is on the Check page.
+Посмотреть	View
+Телеметрия проходит мимо блокировки	Telemetry gets past the block
+Отвечает адрес 	This address responds: 
+. Включите блокировку доменов в «Настройках».	. Turn on domain blocking in Settings.
+Настроить	Set up
+Автозащита выключена	Auto-protection is off
+Без неё обновления Windows могут вернуть отключённое.	Without it, Windows updates may bring back what you turned off.
+Включить	Turn on
+Наблюдение за сетью выключено	Network watch is off
+Программа не видит, какие приложения выходят в интернет.	The program cannot see which apps go online.
+Лишние программы в автозагрузке	Unneeded programs at startup
+Их можно отключить: Windows работает и без них.	You can turn them off: Windows works without them.
+Показать	Show
+Ничего не требует внимания	Nothing needs your attention
+Если что-то изменится, программа сообщит об этом здесь.	If something changes, the program will tell you here.
+Нет данных	No data
+Включено	On
+Выключено	Off
+Частично	Partly
+Проверка сбора данных…	Checking data collection…
+На этой системе нет модуля Microsoft.DiagnosticDataViewer — просмотр собранных данных недоступен.	This system has no Microsoft.DiagnosticDataViewer module, so collected data cannot be viewed.
+<h2>Кто включал камеру, микрофон и геолокацию</h2>	<h2>Who turned on the camera, microphone and location</h2>
+Включите «Следить за датчиками» на странице «Автозащита» —\n	Turn on "Watch sensors" on the Auto-protection page —\n
+а в «Наблюдении» — что Windows уже знает об этом компьютере.	and Observation shows what Windows already knows about this computer.
+Реклама и рекомендации	Ads and recommendations
+Расширенная защита	Advanced protection
+включена	on
+выключена	off
+Все настройки действуют	All settings are in effect
+Почти все настройки действуют	Almost all settings are in effect
+Большинство настроек не действует	Most settings are not in effect
+Действует 	In effect: 
+не применено 	not applied: 
+Windows не отдаёт 	blocked by Windows: 
+нет на этой Windows 	not on this Windows: 
+неотправленной телеметрии 	unsent telemetry: 
+адреса телеметрии не отвечают	telemetry addresses do not respond
+телеметрия проходит: адресов 	telemetry gets through, addresses: 
+Открыть настройки	Open settings
+Проверка ещё не запускалась	The check has not run yet
+Нажмите «Проверить сейчас» — программа прочитает реальное состояние системы и покажет, что сработало, а что нет.	Click Check now: the program reads the actual state of the system and shows what worked and what did not.
+Не все выбранные настройки действуют. Что исправить — ниже.	Not all selected settings are in effect. What to fix is listed below.
+Язык: как в Windows	Language: as in Windows
+Язык: русский	Language: Russian
+Язык: английский	Language: English
+Журнал пока пуст	The log is empty
+службы Windows	Windows services
+планировщик задач	Task Scheduler
+переменные среды	environment variables
+автоматически	automatic
+автоматически (отложенный запуск)	automatic (delayed start)
+вручную	manual
+при загрузке системы	boot
+системная	system
+Здесь по шагам видно, что программа делает: применение и откат настроек, работа автозащиты и наблюдения за сетью. Если что-то пошло не так, сохраните журнал и приложите его к сообщению об ошибке.	This shows step by step what the program does: applying and undoing settings, auto-protection and network monitoring. If something goes wrong, save the log and attach it to your bug report.

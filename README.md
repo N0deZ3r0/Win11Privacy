@@ -40,9 +40,10 @@ about you. Watches so that updates do not quietly turn the tracking back on.**
 | **Startup under control** | What starts with Windows, with an answer to "why is this here": an updater, a telemetry agent, a vendor's helper. Disabled reversibly, the same way Task Manager does it, and included in the general rollback. |
 | **Setting-by-setting control** | A module expands into a list of individual settings: you can apply some of them rather than all. |
 | **Address blocking** | The firewall cuts off the data-collection IPs themselves — through `hosts` alone telemetry simply goes around. |
+| **The device ID that sees through a VPN** | When you sign in, Microsoft gives the computer a number (GDID) and recognises it by that number whatever your IP. It has its own tab with three actions. **Stop sending** turns off the services that report it (CDPSvc, CDPUserSvc, DoSvc; DoSvc through the registry, because Windows refuses even an administrator) and blocks the device directory servers in `hosts`, IPv6 included; the Microsoft account keeps working. **Change the ID** erases the device identity, credentials included, and Windows gets a new number. **Block issuing** also closes the server that issues numbers, so no new one arrives; it is for local accounts only, and the program refuses it when you sign in with a Microsoft account. Turning off telemetry does not help here: DiagTrack is not part of that chain. |
 | **Preview of changes** | The "What will change" button shows the list before applying: the setting, how it is now, how it will be. |
 | **Restore from a backup** | Registry backups are not merely dropped on disk — the program finds them itself and restores the one you pick with a single click. |
-| **Rollback in one button** | The program keeps a change log and returns every parameter to the value it had before. No manual `.reg` import needed. |
+| **Rollback in one button** | The program keeps a change log and returns every parameter to the value it had before — registry values, and also services (startup type, delayed start, whether it was running), scheduled tasks and environment variables. A task you had switched off yourself stays off after the rollback, and third-party policies (for example, your company's Chrome policies) are left alone. No manual `.reg` import needed. |
 | **You can see what was changed** | The "Changes" page shows every edit: what it was, what it became, and where it lives. Any row can be reverted on its own, without rolling back the rest. |
 | **Counts honestly** | The index is not dragged down by things outside the program's control: settings that do not exist on this Windows version, and parameters Windows will not hand over even to an administrator, are shown separately and left out of the denominator. |
 | **Portable mode** | Put a `portable.txt` file next to `Win11Privacy.exe` and the program keeps everything in a folder beside itself rather than in the system. For a USB stick, or someone else's computer. |
@@ -52,15 +53,17 @@ about you. Watches so that updates do not quietly turn the tracking back on.**
 | **All app permissions** | 34 categories — not only camera and microphone, but screenshots, notifications, documents, the whole disk, passkeys and Windows AI models. Including apps that hold a permission but have not used it yet. |
 | **Permissions by policy, not by switch** | Contacts, calendar, calls, email and account information are closed by policy: neither an app nor a Windows update can switch them back on. Age is part of it — the new Windows Age APIs give an app nothing without this permission. |
 | **Background network calls** | Device metadata, on-demand fonts, offline maps, disk-health and speech models, Teredo — what Windows downloads and sends by itself. Taken from Microsoft's own list, safe items only. |
+| **Cloud sync and backup** | Found on a clean Windows 11 25H2: the system uploads your app list, Wi-Fi networks, language, theme, pen settings and even your answers to the privacy questions to the cloud on its own. A separate section turns this off with a policy and scheduled tasks. Also new: the InventorySvc service (an inventory of your programs for Microsoft) and the "Usage and Quality Insights" collector. Tasks that Windows keeps from administrators are turned off as SYSTEM. |
+| **Hidden channels found by taking the system apart** | A clean Windows 11 was recorded for over two hours while every scheduled task was started one by one, and its system files were searched. Findings: Defender pulls about 130 settings from an experiments server every hour, Microsoft 365 notifications among them, which a separate policy now stops; 1DS telemetry (`mobile.events.data.microsoft.com` and regional hosts) leaves Defender, the shell and Copilot bypassing the DiagTrack service, and these hosts are now blocked; the Store can install apps on command from the website, and "Recommended troubleshooting" applies "mitigations" sent by Microsoft, and both can now be turned off. |
 | **Windows logs in the digital trace** | Thousands of entries about which programs ran and what they accessed — shown in the Dossier and wiped along with the rest of the trace. |
 | **One question on first run** | Instead of thirteen sections at once — "basic privacy", "strict", or "first show me what has been collected about me". The wizard applies nothing: it ticks a set and shows what will be done. |
 | **Long work is visible and can be stopped** | A "Stop" button in the status bar. Reading stops at once, applying stops after a warning — everything the engine already changed is in the journal and can be reverted on the Changes page. Closing the window mid-run asks as well, instead of leaving the engine running unseen. |
-| **The undo journal is written as it goes** | It used to be saved once, at the very end: an interrupted run left the changes in the system with nothing to revert them with. Now it hits the disk after every module and at least once every ten edits. |
-| **The engine lives where nothing writes without administrator rights** | The script runs with full rights, so in the user's temp folder any process could have swapped it. The folder in ProgramData is created with explicit permissions, and before every launch the file is checked against the SHA-256 of what is embedded in the exe. |
+| **The undo journal is written as it goes** | It used to be saved once, at the very end: an interrupted run left the changes in the system with nothing to revert them with. Now it hits the disk after every module and at least once every ten edits. If it cannot be written (or another copy holds it for more than a minute), the program says so and stops changing anything; before applying it checks this up front, while nothing has been touched. A damaged journal is set aside, not overwritten. |
+| **The engine and its data live where nothing writes without administrator rights** | The script runs with full rights, and the undo journal is written back into the registry with full rights, so both must be out of reach of ordinary programs. `C:\ProgramData\Win11Privacy` gets explicit permissions (only SYSTEM and administrators can write); anything a non-administrator placed there beforehand is moved aside, and a folder created by someone else is set aside as a whole. Before every launch the engine file is checked against the SHA-256 of what is embedded in the exe, and the copy the guard runs is checked the same way. |
 | **A clear error instead of the .NET dialog** | When the program trips over something, it explains what happened and writes `crash.log` you can attach to a bug report. |
 | **The guard comes right after an update** | A Windows update is what knocks the settings out, and a schedule could wait until Sunday. The guard now has a third alarm — the update installation itself: it checks the system five minutes later. |
 | **One copy of the program** | A second launch brings up the window that is already open. Two windows with administrator rights would apply settings at the same time and overwrite each other's undo journal. |
-| **You can see how far the check has got** | Verifying 244 settings takes up to half a minute and used to stay silent until the very end. Now the engine reports its progress and the window shows "15 / 34" and the name of the current section. |
+| **You can see how far the check has got** | Verifying 282 settings takes up to half a minute and used to stay silent until the very end. Now the engine reports its progress and the window shows "15 / 34" and the name of the current section. |
 | **The run log can be saved to a file** | A button on the Log page: these logs are what "it applied the wrong thing" cases are settled by, and a screenshot is no longer needed. |
 | **Keyboard and screen reader** | Tab walks the sections, Enter and Space open the selected one, and the hand-drawn controls now tell the system their names — the reader used to read emptiness. |
 
@@ -81,7 +84,10 @@ window size and language in `%LOCALAPPDATA%`. Put a **`portable.txt`** file next
 into a `Win11Privacy-Data` folder beside the program itself: the change log, sensor
 history, snapshots, registry backups and window settings. On someone else's
 computer nothing is left behind except the system changes themselves — which can
-still be rolled back.
+still be rolled back. The one exception is the guard: the copy of the engine its
+scheduled tasks run with administrator rights is always kept in
+`C:\ProgramData\Win11Privacy`, because next to the exe any of your programs could
+swap it.
 
 ---
 
@@ -98,8 +104,10 @@ Notepad and Paint policies work on both versions and are applied as usual.
 ## Language
 
 The interface is fully available in Russian and English, including the names of
-all 244 settings and the HTML report. The language is taken from your Windows
-settings and can be switched with a button on the "About" page.
+all 282 settings and the HTML report. By default the program follows the Windows
+display language on every start: Russian if Windows is in Russian, English
+otherwise. The button on the "About" page cycles "as in Windows" → Russian →
+English, to pin one language.
 
 ---
 
@@ -193,8 +201,8 @@ By hand, if you prefer:
 | **Lang.cs** | The English translation of the interface. Generated from `lang-en*.txt` by `python tools/gen_lang.py` — edit the dictionaries, not `Lang.cs` itself. `python tools/check_lang.py` lists strings that have no translation yet. |
 | **Json.cs** | JSON parsing without external libraries — the engine replies with `###JSON### {...}` lines. |
 | **app.manifest** | The administrator-rights requirement and display-scaling support. |
-| **app.res** | A prebuilt Win32 resource: manifest + icon (7 sizes) + version. No need to rebuild it. |
-| **app.ico / app.png** | The application icon. |
+| **app.res** | A prebuilt Win32 resource: manifest + icon (10 sizes, 16–256) + version. No need to rebuild it. |
+| **app.ico / app.png** | The application icon. To change it, run `python tools/set_icon.py logo-16.png ... logo-256.png`: it builds app.ico and puts the same images into app.res. |
 | **tests/engine-tests.ps1** | Behaviour checks for the engine; the GitHub build runs the same ones. Read-only. |
 | **tests/roundtrip.ps1** | Apply, verify and revert for real, then compare every value with the original one. It changes the system, so it needs the `-Confirmed` switch; the build runs it on a disposable machine. |
 | **tools/make_winget.py** | Builds the winget catalogue manifest from the version and the release checksum. |
@@ -317,7 +325,9 @@ Environment variables: `WIN11_TEST_PAGE` (which page to open),
 interface), `WIN11_TEST_SHOT=path.png` (capture the window and exit),
 `WIN11_TEST_WELCOME=1` (show the first-run window), `WIN11_TEST_UPDATE=1`
 (press "Check for update"), `WIN11_TEST_DUMP=1` (print the control tree with
-"ВЫЛЕЗ" and "ОБРЕЗАНО" markers). There are also the build flags `BIGFONT`,
+"ВЫЛЕЗ" and "ОБРЕЗАНО" markers), `WIN11_TEST_SIDE=folder` (collapse and expand
+the sidebar, print the time of each frame as `SIDEFRAME` and save the frames to
+the folder; `-` means timing only). There are also the build flags `BIGFONT`,
 which simulates a display at 150% scaling, and `LIGHTTEST` for the light theme.
 
 The checks for the interface's pure functions build as a separate exe:

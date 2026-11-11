@@ -42,10 +42,30 @@ namespace Win11Privacy
             Arguments();
             Verdict();
             Answers();
+            Language();
 
             Console.WriteLine();
             Console.WriteLine("Пройдено: " + _passed + ", провалено: " + _failed);
             return _failed > 0 ? 1 : 0;
+        }
+
+        // --- язык интерфейса ------------------------------------------------- //
+        private static void Language()
+        {
+            Console.WriteLine("Язык интерфейса");
+            L.Choice = 1;
+            Check("закреплён русский", !L.English && L.Choice == 1);
+            L.Choice = 2;
+            Check("закреплён английский", L.English && L.Choice == 2);
+            L.Choice = 0;
+            Check("как в Windows — язык системы", L.English == L.SystemEnglish());
+            L.Choice = 7;
+            Check("неизвестный выбор — как в Windows", L.Choice == 0);
+            Check("старый флаг совпадает с Windows (рус.) — как в Windows", MainForm.LangChoiceFromOld(false, false) == 0);
+            Check("старый флаг совпадает с Windows (англ.) — как в Windows", MainForm.LangChoiceFromOld(true, true) == 0);
+            Check("английский на русской Windows — закреплён", MainForm.LangChoiceFromOld(true, false) == 2);
+            Check("русский на английской Windows — закреплён", MainForm.LangChoiceFromOld(false, true) == 1);
+            L.Choice = 1;
         }
 
         // --- сравнение версий ------------------------------------------------ //
@@ -76,6 +96,9 @@ namespace Win11Privacy
             Check("удаление приложений меняет", MainForm.EngineWrites("-RemoveApps -AppItems a,b -AllUsers"));
             Check("стирание следа меняет", MainForm.EngineWrites("-FootprintWipe -WipeItems ads"));
             Check("чтение следа не меняет", !MainForm.EngineWrites("-Footprint"));
+            Check("смена номера устройства меняет", MainForm.EngineWrites("-GdidReissue"));
+            Check("возврат номера устройства меняет", MainForm.EngineWrites("-GdidRestore"));
+            Check("чтение номера устройства не меняет", !MainForm.EngineWrites("-GdidStatus"));
             Check("досье не меняет", !MainForm.EngineWrites("-Spy"));
             Check("список настроек не меняет", !MainForm.EngineWrites("-ListDefs"));
             Check("хронология не меняет", !MainForm.EngineWrites("-Timeline -TimelineDays 30"));

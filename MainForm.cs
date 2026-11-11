@@ -38,11 +38,10 @@ namespace Win11Privacy
         private Panel _content;
         private RichTextBox _log;
         private Label _status;
-        private ProgressBar _progress;
+        private SlimProgress _progress;
         private ModernButton _btnStop;      // «Прервать» в строке состояния
-        private Card _homeAlert;            // полоса внимания на «Обзоре»
-        private Label _homeAlertText;
-        private ModernButton _homeAlertBtn;
+        // первый пункт «Требует внимания» на «Обзоре» (мусор в реестре, сбитые настройки)
+        private string _homeAlertTitle, _homeAlertDesc, _homeAlertBtn;
         private Action _homeAlertGo;
         private int _junkCount;             // параметры под числовыми именами от версий 1.1–1.5
         private string _busyText = "";      // чем занята программа сейчас
@@ -60,15 +59,14 @@ namespace Win11Privacy
         private TextBox _search;
         private NavHost _navHost;
         private TitleBar _titleBar;
-        private IndexRing _homeRing; private DonutChart _homeDonut; private SensorChart _homeSensors;
-        private Label _homeHint;
-        private TableLayoutPanel _homeMid, _homePage;
-        private Card _homeDonutCard, _homeChartCard;
-        private Label _verdictTitle, _verdictSub;
-        private MiniStat _msEvents, _msYear, _msBlocked;
-        private ActionCard _qcXray, _qcDossier, _qcMonitor, _qcGuard, _qcStartup, _qcTimeline;
-        private ChipLabel _homeSysChip;
+        // «Обзор»: строка состояния, «Требует внимания», защита по разделам
+        private InfoRow _homeStatus;
+        private RowList _homeAttention, _homeSections;
+        private Label _homeSub;
+        private TableLayoutPanel _homePage;
         private Panel _homeScroll;
+        private string _homeSys = "";
+        private int _homeStartupAdvise = -1;
         private StackPanel _appsList;
         private Label _appsState;
         private ModernButton _btnAppsRemove;
@@ -83,15 +81,12 @@ namespace Win11Privacy
         private Label _startupState;
         private ModernButton _btnStartupOff, _btnStartupOn;
         private bool _defsLoaded;
-        private FlowLayoutPanel _homeActions;
-        private float _chartsMinU = 15.5F;
         private string _current = "";
         private StackPanel _xrayList;
         private TileGrid _xrayTiles;
 
         // боковая панель: сворачивание
         private SidePanel _side;
-        private Label _brandLabel;
         private NavItem _hamburger;
         private ToolTip _navTip;
         private bool _userCollapsed, _autoCollapsed;
@@ -114,10 +109,9 @@ namespace Win11Privacy
         // элементы страниц, обновляемые по данным
         private StackPanel _settingsList;
         private OptionRow _optBackup, _optRestore, _optDry;
-        private IndexRing _ring;
-        private Label _auditWhen, _auditHint;
+        private InfoRow _auditStatus;
+        private Label _auditWhen;
         private StackPanel _auditGroups;
-        private TileGrid _auditTiles;
         private TileGrid _monitorTiles;
         private StackPanel _monitorList;
         private Label _monitorState;
@@ -159,8 +153,8 @@ namespace Win11Privacy
 
         private void BuildModules()
         {
-            string S1=L.T("Сбор данных Windows"), S2=L.T("Реклама и подсказки"), S3=L.T("ИИ Windows"),
-                         S4=L.T("Жёсткие меры"), S5=L.T("Программы"), S6=L.T("Обслуживание");
+            string S1=L.T("Сбор данных Windows"), S2=L.T("Реклама и рекомендации"), S3=L.T("ИИ Windows"),
+                         S4=L.T("Расширенная защита"), S5=L.T("Программы"), S6=L.T("Обслуживание");
             Action<string,string,string,string,string,bool,bool,bool> A =
                 (sec,id,t,d,g,on,hard,app) => _mods.Add(new ModuleDef(sec,id,t,d,g,on,hard,app));
 
@@ -170,10 +164,11 @@ namespace Win11Privacy
             A(S1,"input",L.T("Персонализация ввода и речь"),L.T("Сбор набранного текста, рукописного ввода, облачная речь."),GKeyboard,true,false,false);
             A(S1,"edge","Microsoft Edge",L.T("Статистика и персонализация Edge; блокировка трекеров."),GGlobe,true,false,false);
             A(S1,"delivery",L.T("Раздача обновлений в интернет"),L.T("Отдача файлов обновлений чужим ПК."),GSync,true,false,false);
-            A(S1,"onedrive",L.T("OneDrive: синхронизация и реклама"),L.T("Отключает выгрузку файлов в облако и рекламу OneDrive в Проводнике. Файлы на диске остаются."),GSync,false,false,false);
+            A(S1,"onedrive",L.T("OneDrive: синхронизация и реклама"),L.T("Выгрузка файлов в облако и реклама OneDrive. Файлы на диске остаются."),GSync,false,false,false);
             A(S1,"location",L.T("Геолокация и «Поиск устройства»"),L.T("Служба местоположения целиком и отправка координат в Microsoft."),GPin,false,false,false);
-            A(S1,"apppriv",L.T("Разрешения приложений"),L.T("Запрет политикой: контакты, календарь, звонки, почта, сведения учётной записи и возраст. Включить обратно их не сможет ни приложение, ни обновление."),GShield,true,false,false);
-            A(S1,"network",L.T("Фоновые обращения в сеть"),L.T("Метаданные устройств, шрифты, карты, модели дисков и речи, Teredo — то, что Windows скачивает и отправляет сама."),GGlobe,true,false,false);
+            A(S1,"apppriv",L.T("Разрешения приложений"),L.T("Контакты, календарь, почта, возраст — под запретом политики, обновлением не вернуть."),GShield,true,false,false);
+            A(S1,"network",L.T("Фоновые обращения в сеть"),L.T("Что Windows сама скачивает и отправляет: шрифты, карты, модели, Teredo."),GGlobe,true,false,false);
+            A(S1,"cloudsync",L.T("Облачная синхронизация и копия"),L.T("Список приложений, Wi-Fi, язык и согласия, которые Windows сама выгружает в облако."),"",false,false,false);
 
             A(S2,"ads",L.T("Рекламный ID и реклама"),L.T("Реклама в Пуске, на экране блокировки и в Параметрах."),GAds,true,false,false);
             A(S2,"widgets",L.T("Виджеты и лента новостей"),L.T("Лента MSN на панели задач, которая изучает ваши интересы."),GGlobe,false,false,false);
@@ -184,12 +179,13 @@ namespace Win11Privacy
 
             A(S4,"services",L.T("Службы и задачи телеметрии"),L.T("Останавливает DiagTrack и задачи планировщика."),GShield,false,true,false);
             A(S4,"hosts",L.T("Блокировка доменов (hosts)"),L.T("Адреса телеметрии Microsoft — в файл hosts."),GDoc,false,true,false);
+            A(S4,"gdid",L.T("Номер устройства (GDID)"),L.T("Номер, по которому Microsoft узнаёт ПК даже через VPN. Подробно — на своей вкладке."),GBadge,false,true,false);
             A(S4,"firewall",L.T("Блокировка через брандмауэр"),L.T("Исходящие соединения служб телеметрии. Надёжнее hosts."),GFire,false,true,false);
             A(S4,"buffer",L.T("Стереть неотправленную телеметрию"),L.T("Удаляет накопленный буфер C:\\ProgramData\\Microsoft\\Diagnosis."),GBroom,false,true,false);
             A(S4,"defender",L.T("Защитник: облако и образцы"),L.T("Отправка подозрительных файлов и облачная проверка MAPS. Чуть снижает защиту."),GShield,false,true,false);
-            A(S4,"fwips",L.T("Блокировка адресов телеметрии"),L.T("Брандмауэр режет сами IP сбора данных — hosts телеметрия обходит. Если что-то отвалится, снимите и откатите."),GFire,false,true,false);
-            A(S4,"apphw",L.T("Камера, микрофон и фон приложений"),L.T("Запрет приложениям из магазина: камера и микрофон перестанут в них работать, фоновые задачи тоже. Браузеры и обычные программы не затрагивает."),GShield,false,true,false);
-            A(S4,"doh",L.T("Запретить шифрованный DNS"),L.T("Через DoH браузеры и Windows обходят блокировку по доменам. Отключение вернёт видимость запросов провайдеру."),GGlobe,false,true,false);
+            A(S4,"fwips",L.T("Блокировка адресов телеметрии"),L.T("Брандмауэр закрывает сами адреса сбора — в обход hosts не пройти."),GFire,false,true,false);
+            A(S4,"apphw",L.T("Камера, микрофон и фон приложений"),L.T("Камера, микрофон и фон для приложений Магазина. Браузеры не затрагивает."),GShield,false,true,false);
+            A(S4,"doh",L.T("Запретить шифрованный DNS"),L.T("Без DoH браузеры не обойдут блокировку доменов. Запросы снова видит провайдер."),GGlobe,false,true,false);
 
             A(S5,"app_nvidia","NVIDIA",L.T("Телеметрия драйвера и GeForce Experience."),GApp,true,false,true);
             A(S5,"app_vscode","Visual Studio Code",L.T("Телеметрия и эксперименты редактора."),GApp,true,false,true);
@@ -238,7 +234,7 @@ namespace Win11Privacy
             _titleBar.Dock = DockStyle.Fill;
             _titleBar.Height = (int)(u * 2.15F);
             _titleBar.Font = Font;
-            _titleBar.Logo = _appImage;
+            _titleBar.Logo = LogoFromIco((int)(u * 1.45F)) ?? _appImage;   // размер — как рисует TitleBar
             _titleBar.Caption = L.T("Приватность Windows 11");
             _titleBar.Margin = new Padding(0);
             root.Controls.Add(_titleBar, 0, 0);
@@ -262,6 +258,7 @@ namespace Win11Privacy
             _pages["settings"] = BuildSettingsPage();
             _pages["xray"]     = BuildXrayPage();
             _pages["dossier"]  = BuildDossierPage();
+            _pages["gdid"]     = BuildGdidPage();
             _pages["audit"]    = BuildAuditPage();
             _pages["monitor"]  = BuildMonitorPage();
             _pages["apps"]     = BuildAppsPage();
@@ -275,7 +272,140 @@ namespace Win11Privacy
             {
                 p.Dock = DockStyle.Fill; p.Visible = false; _content.Controls.Add(p);
             }
+
+            // Шапка объединённого раздела: название и вкладки. Докуется первой
+            // (в конце списка элементов), поэтому встаёт над страницей.
+            foreach (string[] grp in NavGroupPages)
+                foreach (string k in grp)
+                {
+                    _groupOf[k] = grp[0];
+                    if (grp.Length > 1 && _pages.ContainsKey(k)) HidePageTitle(_pages[k]);
+                }
+            _groupHead = new Panel();
+            _groupHead.Dock = DockStyle.Top;
+            _groupHead.BackColor = Theme.WindowBg;
+            _groupHead.Visible = false;
+            _groupTitle = PageTitle("");
+            _groupTitle.Location = new Point(0, 0);
+            _groupHead.Controls.Add(_groupTitle);
+            _tabs = new TabStrip();
+            _tabs.Font = Font;
+            _tabs.TabClicked += delegate(string k) { Navigate(k); };
+            _groupHead.Controls.Add(_tabs);
+            _groupHead.Resize += delegate { LayoutGroupHead(); };
+            _content.Controls.Add(_groupHead);
+            _groupHead.SendToBack();
             Navigate("home");
+        }
+
+        // ================================================================== //
+        //  Разделы боковой панели. Несколько страниц под одним пунктом
+        //  переключаются вкладками; ключи страниц прежние, поэтому переходы
+        //  и тестовые прогоны по страницам работают как раньше.
+        // ================================================================== //
+        private static readonly string[][] NavGroupPages = {
+            new[] { "home" }, new[] { "settings" }, new[] { "apps", "startup" },
+            new[] { "xray", "dossier", "monitor", "timeline" }, new[] { "gdid" },
+            new[] { "audit", "changes" }, new[] { "guard" }, new[] { "about", "log" } };
+        private readonly Dictionary<string, string> _groupOf = new Dictionary<string, string>();
+        private readonly Dictionary<string, string> _groupLast = new Dictionary<string, string>();
+        private readonly Dictionary<string, string> _pageBadges = new Dictionary<string, string>();
+        private Panel _groupHead;
+        private Label _groupTitle;
+        private TabStrip _tabs;
+
+        private string GroupOf(string page) { string g; return _groupOf.TryGetValue(page, out g) ? g : page; }
+
+        private string[] GroupPages(string grp)
+        {
+            foreach (string[] g in NavGroupPages) if (g[0] == grp) return g;
+            return new[] { grp };
+        }
+
+        private string GroupTitle(string grp)
+        {
+            switch (grp)
+            {
+                case "apps": return L.T("Приложения");
+                case "xray": return L.T("Наблюдение");
+                case "audit": return L.T("Проверка");
+                case "about": return L.T("О программе");
+            }
+            return "";
+        }
+
+        private string TabText(string page)
+        {
+            switch (page)
+            {
+                case "apps": return L.T("Приложения");
+                case "startup": return L.T("Автозагрузка");
+                case "xray": return L.T("Сбор данных");
+                case "dossier": return L.T("Следы на компьютере");
+                case "monitor": return L.T("Сеть");
+                case "timeline": return L.T("Хронология");
+                case "audit": return L.T("Проверка");
+                case "changes": return L.T("Изменения");
+                case "about": return L.T("О программе");
+                case "log": return L.T("Журнал");
+            }
+            return page;
+        }
+
+        // Пункт панели открывает ту вкладку раздела, на которой были в прошлый раз
+        private void NavigateGroup(string grp)
+        {
+            string last;
+            Navigate(_groupLast.TryGetValue(grp, out last) ? last : grp);
+        }
+
+        private void UpdateGroupHead(string grp, string page)
+        {
+            if (_groupHead == null) return;
+            string[] pages = GroupPages(grp);
+            bool multi = pages.Length > 1;
+            if (multi)
+            {
+                _groupTitle.Text = GroupTitle(grp);
+                List<string> texts = new List<string>();
+                foreach (string p in pages) texts.Add(TabText(p));
+                _tabs.SetTabs(pages, texts, page);
+                foreach (string p in pages) { string b; _tabs.SetDot(p, _pageBadges.TryGetValue(p, out b) && b.Length > 0); }
+            }
+            if (_groupHead.Visible != multi) _groupHead.Visible = multi;
+            LayoutGroupHead();
+        }
+
+        private void LayoutGroupHead()
+        {
+            if (_groupHead == null || _groupTitle == null || _tabs == null) return;
+            int u = Font.Height;
+            _groupTitle.Location = new Point(0, 0);
+            _tabs.SetBounds(0, _groupTitle.Bottom + (int)(u * 0.5F), Math.Max(10, _groupHead.ClientSize.Width), _tabs.Height);
+            int h = _tabs.Bottom + (int)(u * 0.8F);
+            if (_groupHead.Height != h) _groupHead.Height = h;
+        }
+
+        // Отметка «загляните» у страницы: точка на её вкладке и на пункте раздела
+        private void SetPageBadge(string page, string text)
+        {
+            _pageBadges[page] = text ?? "";
+            string grp = GroupOf(page);
+            bool any = false;
+            foreach (KeyValuePair<string, string> kv in _pageBadges)
+                if (kv.Value.Length > 0 && GroupOf(kv.Key) == grp) any = true;
+            foreach (NavItem n in _nav) if ((string)n.Tag == grp) { n.Badge = any ? "1" : ""; n.Invalidate(); }
+            if (_tabs != null) _tabs.SetDot(page, (text ?? "").Length > 0);
+        }
+
+        // Своё название страницы под шапкой раздела повторяло бы вкладку
+        private static void HidePageTitle(Control root)
+        {
+            foreach (Control c in root.Controls)
+            {
+                if (c is Label && "pagetitle".Equals(c.Tag)) { c.Visible = false; return; }
+                HidePageTitle(c);
+            }
         }
 
         private Control BuildSidebar()
@@ -290,66 +420,31 @@ namespace Win11Privacy
 
             _navTip = new ToolTip();
 
-            // навигация (добавляется первой: докуется в самом низу верхней группы)
+            // навигация занимает всю высоту под кнопкой сворачивания:
+            // «О программе» прижат к низу
             NavHost nav = new NavHost();
-            nav.Dock = DockStyle.Top;
+            nav.Dock = DockStyle.Fill;
             nav.AutoSize = false;
             nav.BackColor = Color.Transparent;
-            nav.Padding = new Padding(0, (int)(u * 0.6F), 0, 0);
+            nav.Padding = new Padding(0, (int)(u * 0.5F), 0, 0);
+            nav.Font = Font;
+            nav.Resize += delegate { LayoutNav(); };
             _navHost = nav;
 
-            // Тринадцать пунктов подряд — список без структуры. Разделены по
-            // смыслу: что программа делает, что показывает и чем это можно
-            // проверить и вернуть.
-            AddNav(nav, "home", L.T("Обзор"), GHome);
-            AddNavGroup(nav, L.T("Действия"));
+            // Восемь разделов вместо четырнадцати: родственные страницы
+            // собраны под одним пунктом и переключаются вкладками.
+            AddNav(nav, "home",     L.T("Обзор"), GHome);
             AddNav(nav, "settings", L.T("Настройки"), GNav1);
             AddNav(nav, "apps",     L.T("Приложения"), GApp);
-            AddNav(nav, "startup",  L.T("Автозапуск"), GPower);
-            AddNavGroup(nav, L.T("Разведка"));
-            AddNav(nav, "xray",     L.T("Рентген"),   GXray);
-            AddNav(nav, "dossier",  L.T("Досье"),     GFinger);
-            AddNav(nav, "monitor",  L.T("Монитор"),   GNav3);
-            AddNav(nav, "timeline", L.T("Хронология"), GHistory);
-            AddNavGroup(nav, L.T("Контроль"));
-            AddNav(nav, "audit",    L.T("Проверка"),  GNav2);
-            AddNav(nav, "guard",    L.T("Страж"),     GShield);
-            AddNav(nav, "changes",  L.T("Изменения"), GUndo);
-            AddNavGroup(nav, L.T("Служебное"));
-            AddNav(nav, "log",      L.T("Журнал"),    GNav5);
-            AddNav(nav, "about",    L.T("О программе"),GNav6);
-            nav.Height = (int)(u * 2.7F * _nav.Count + u * 1.5F * _navGroups.Count + u * 1.0F);
+            AddNav(nav, "xray",     L.T("Наблюдение"), GEye);
+            AddNav(nav, "gdid",     L.T("Номер устройства"), GBadge);
+            AddNav(nav, "audit",    L.T("Проверка"), GNav2);
+            AddNav(nav, "guard",    L.T("Автозащита"), GShield);
+            AddNav(nav, "about",    L.T("О программе"), GNav6);
             side.Controls.Add(nav);
 
-            // шапка бренда
-            TableLayoutPanel brand = new TableLayoutPanel();
-            brand.Dock = DockStyle.Top;
-            brand.Height = (int)(u * 3.2F);
-            brand.ColumnCount = 2; brand.RowCount = 1;
-            brand.BackColor = Color.Transparent;
-            brand.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            brand.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            brand.Margin = new Padding(0);
-
-            PictureBox logo = new PictureBox();
-            int lb = (int)(u * 2.3F);
-            logo.Size = new Size(lb, lb);
-            logo.SizeMode = PictureBoxSizeMode.Zoom;
-            logo.Image = _appImage;
-            logo.BackColor = Color.Transparent;
-            logo.Margin = new Padding((int)(u * 0.4F), (int)(u * 0.4F), (int)(u * 0.5F), 0);
-            brand.Controls.Add(logo, 0, 0);
-
-            _brandLabel = new Label();
-            _brandLabel.Text = L.T("Приватность\nWindows 11");
-            _brandLabel.Font = Theme.Bold(Font);
-            _brandLabel.ForeColor = Theme.Text;
-            _brandLabel.AutoSize = false;
-            _brandLabel.Dock = DockStyle.Fill;
-            _brandLabel.BackColor = Color.Transparent;
-            _brandLabel.TextAlign = ContentAlignment.MiddleLeft;
-            brand.Controls.Add(_brandLabel, 1, 0);
-            side.Controls.Add(brand);
+            // Знака с названием в панели нет: логотип и имя программы уже стоят
+            // в заголовке окна, а второй экземпляр рядом с разделами только мешал.
 
             // гамбургер — свернуть/развернуть панель (докуется в самый верх)
             _hamburger = new NavItem("", GMenu);
@@ -360,18 +455,13 @@ namespace Win11Privacy
             _navTip.SetToolTip(_hamburger, L.T("Свернуть или развернуть панель"));
             side.Controls.Add(_hamburger);
 
-            // индикатор системы внизу
+            // Сведения о системе переехали в подзаголовок «Обзора». Подпись
+            // остаётся объектом (её заполняет определение системы), но в панель
+            // не добавляется.
             Label sysInfo = new Label();
             sysInfo.Name = "sysInfo";
-            sysInfo.Dock = DockStyle.Bottom;
-            sysInfo.AutoSize = false;
-            sysInfo.Height = (int)(u * 3.2F);
-            sysInfo.ForeColor = Theme.TextFaint;
-            sysInfo.Font = new Font(Font.FontFamily, Font.Size * 0.85F);
+            sysInfo.Visible = false;
             sysInfo.Text = L.T("Определение системы…");
-            sysInfo.TextAlign = ContentAlignment.BottomLeft;
-            sysInfo.BackColor = Color.Transparent;
-            side.Controls.Add(sysInfo);
             _sysInfoLabel = sysInfo;
 
             return side;
@@ -391,7 +481,6 @@ namespace Win11Privacy
             int navW = c ? (int)(u * 3.4F) : (int)(u * 14.3F);
             _side.SuspendLayout();
             _side.Width = c ? (int)(u * 4.6F) : (int)(u * 15.5F);
-            if (_brandLabel != null) _brandLabel.Visible = !c;
             if (_sysInfoLabel != null) _sysInfoLabel.Visible = !c;
             foreach (NavItem n in _nav)
             {
@@ -414,27 +503,20 @@ namespace Win11Privacy
         {
             if (_navHost == null || _side == null || _nav.Count == 0) return;
             int u = Font.Height;
-            int head = (int)(u * 3.2F) + (int)(u * 2.3F);          // шапка бренда + гамбургер
-            int free = _side.ClientSize.Height - _side.Padding.Vertical - head - _navHost.Padding.Top;
-            int groupH = (int)(u * 1.5F);
-            int full = (int)(u * 2.7F) * _nav.Count + groupH * _navGroups.Count;
-            int sysH = (int)(u * 3.2F);
-            bool showSys = !EffectiveCollapsed() && (free - sysH) >= full;
-            if (_sysInfoLabel != null) _sysInfoLabel.Visible = showSys;
-            if (showSys) free -= sysH;
-            // на невысоком экране заголовки групп ужимаются первыми, а пункты —
-            // следом: список должен помещаться целиком, без прокрутки
-            int forItems = Math.Max(u * 2, free - groupH * _navGroups.Count);
-            int pitch = Math.Min((int)(u * 2.7F), Math.Max((int)(u * 1.8F), forItems / Math.Max(1, _nav.Count)));
-            int ih = Math.Max((int)(u * 1.5F), pitch - (int)(u * 0.2F));
-            if (pitch <= (int)(u * 2.0F)) groupH = (int)(u * 1.0F);      // совсем тесно — только черта
+            // Пункты идут сверху с ровным шагом; на невысоком экране шаг
+            // сжимается, чтобы список помещался без прокрутки. «О программе»
+            // прижат к низу панели.
+            int avail = _navHost.ClientSize.Height - _navHost.Padding.Top - (int)(u * 0.4F);
+            int pitch = Math.Min((int)(u * 2.5F), Math.Max((int)(u * 1.8F), avail / Math.Max(1, _nav.Count)));
+            int ih = Math.Max((int)(u * 1.5F), pitch - (int)(u * 0.25F));
             int y = _navHost.Padding.Top;
-            foreach (Control c in _navRows)
+            foreach (NavItem n in _nav)
             {
-                if (c is NavGroup) { c.Height = groupH; c.Top = y; y += groupH; }
-                else { c.Height = ih; c.Top = y; y += pitch; }
+                n.Height = ih;
+                if ((string)n.Tag == "about") n.Top = Math.Max(y, _navHost.ClientSize.Height - ih - (int)(u * 0.3F));
+                else { n.Top = y; y += pitch; }
             }
-            _navHost.Height = y + (int)(u * 0.4F);
+            if (_sysInfoLabel != null) _sysInfoLabel.Visible = false;
             foreach (NavItem n in _nav) if (n.Selected) _navHost.MoveTo(n, false);
             _navHost.Invalidate();
         }
@@ -442,43 +524,174 @@ namespace Win11Privacy
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
+            // Свёрнутое в панель задач окно имеет нулевую ширину: раньше это
+            // считалось «узким окном», панель разделов сворачивалась, а при
+            // возврате окна разворачивалась обратно — с перекладкой всех страниц.
+            if (WindowState == FormWindowState.Minimized) return;
             bool auto = ClientSize.Width < Font.Height * 58;
             if (auto != _autoCollapsed) { _autoCollapsed = auto; AnimateSidebar(); }
             LayoutNav();
         }
 
-        // Плавное сворачивание/разворачивание панели
+        // ================================================================== //
+        //  Плавное сворачивание/разворачивание панели.
+        //  Раньше на каждом кадре менялась ширина правой части, и открытая
+        //  страница перекладывалась целиком (карточки, переносы строк, списки)
+        //  — кадры выходили неровными, всё дёргалось. Теперь раскладка правой
+        //  части на время движения заморожена: страница просто едет вместе с
+        //  краем панели и раскладывается один раз, в конце. Движение идёт по
+        //  времени (200 мс, плавное торможение), а не долями шага таймера.
+        // ================================================================== //
+        private const int SideAnimMs = 200;
         private Timer _sideAnim;
+        private int _sideFrom, _sideTo, _sideT0;
+        private bool _contentFrozen;
+
+        private int SideTargetWidth()
+        {
+            int u = Font.Height;
+            return EffectiveCollapsed() ? (int)(u * 4.6F) : (int)(u * 15.5F);
+        }
+
         private void AnimateSidebar()
         {
             if (_side == null) return;
-            int u = Font.Height;
-            int target = EffectiveCollapsed() ? (int)(u * 4.6F) : (int)(u * 15.5F);
-            if (!IsHandleCreated || !Visible || _side.Width == target) { ApplySidebar(); return; }
-            // текст прячем сразу, чтобы он не сминался во время движения
-            if (_brandLabel != null) _brandLabel.Visible = false;
-            if (_sysInfoLabel != null) _sysInfoLabel.Visible = false;
+            int target = SideTargetWidth();
+            if (!IsHandleCreated || !Visible || WindowState == FormWindowState.Minimized || _side.Width == target)
+            {
+                if (_sideAnim != null) _sideAnim.Stop();
+                ApplySidebar(); UnfreezeContent();
+                return;
+            }
+            _sideFrom = _side.Width; _sideTo = target; _sideT0 = Environment.TickCount;
+            bool freeze = true;
+#if UITEST
+            freeze = !TestNoFreeze;      // для сравнения со старым поведением
+#endif
+            if (freeze && !_contentFrozen && _content != null) { _content.SuspendLayout(); _contentFrozen = true; }
             if (_sideAnim == null)
             {
                 _sideAnim = new Timer();
-                _sideAnim.Interval = 13;
-                _sideAnim.Tick += delegate
-                {
-                    int uu = Font.Height;
-                    int t = EffectiveCollapsed() ? (int)(uu * 4.6F) : (int)(uu * 15.5F);
-                    int d = t - _side.Width;
-                    if (Math.Abs(d) <= 3) { _sideAnim.Stop(); ApplySidebar(); return; }
-                    int step = (int)(d * 0.42F);
-                    if (step == 0) step = d > 0 ? 1 : -1;
-                    _side.Width += step;
-                    int navW = Math.Max((int)(uu * 3.4F), _side.Width - (int)(uu * 1.2F));
-                    foreach (NavItem n in _nav) n.Width = navW;
-                    foreach (NavGroup g in _navGroups) g.Width = navW;
-                    if (_navHost != null) _navHost.Invalidate();
-                };
+                _sideAnim.Interval = 10;
+                _sideAnim.Tick += delegate { SideAnimStep(); };
             }
             _sideAnim.Start();
+            SideAnimStep();
         }
+
+        private void SideAnimStep()
+        {
+            float t = (Environment.TickCount - _sideT0) / (float)SideAnimMs;
+            if (t >= 1F || _side == null)
+            {
+                _sideAnim.Stop();
+                ApplySidebar();          // сначала конечная ширина,
+                UnfreezeContent();       // потом одна раскладка страницы
+                return;
+            }
+            float k = 1F - (1F - t) * (1F - t) * (1F - t);   // плавное торможение к концу
+            int w = _sideFrom + (int)Math.Round((_sideTo - _sideFrom) * k);
+            if (w == _side.Width) return;
+            int u = Font.Height;
+            int navW = Math.Max((int)(u * 3.4F), w - (int)(u * 1.2F));
+            foreach (NavItem n in _nav) n.Width = navW;
+            foreach (NavGroup g in _navGroups) g.Width = navW;
+            _side.Width = w;
+            // кадр рисуем сразу, а не когда до него дойдёт очередь сообщений
+            RedrawWindow(Handle, IntPtr.Zero, IntPtr.Zero, 0x0100 | 0x0080);   // RDW_UPDATENOW | RDW_ALLCHILDREN
+#if UITEST
+            if (SideFrameHook != null) SideFrameHook(w);
+#endif
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool RedrawWindow(IntPtr hWnd, IntPtr rect, IntPtr rgn, int flags);
+
+        private void UnfreezeContent()
+        {
+            if (!_contentFrozen || _content == null) return;
+            _contentFrozen = false;
+            _content.ResumeLayout(true);
+        }
+
+        // Переход на другую страницу посреди движения: новая страница не должна
+        // показаться в замороженной раскладке — доводим панель до конца сразу.
+        private void FinishSidebarAnim()
+        {
+            if (_sideAnim == null || !_sideAnim.Enabled) return;
+            _sideAnim.Stop();
+            ApplySidebar();
+            UnfreezeContent();
+        }
+
+#if UITEST
+        internal Action<int> SideFrameHook;
+        internal static bool TestNoFreeze = Environment.GetEnvironmentVariable("WIN11_TEST_SIDE_NOFREEZE") == "1";
+
+        // WIN11_TEST_SIDE=папка: свернуть и развернуть панель разделов, печатая
+        // время каждого кадра (SIDEFRAME) и, если папка не «-», сохраняя кадры.
+        internal void StartSideTest(string dir)
+        {
+            bool save = dir != "-";
+            if (save) Directory.CreateDirectory(dir);
+            int n = 0, last = 0, worst = 0, frames = 0;
+            SideFrameHook = delegate(int w)
+            {
+                int now = Environment.TickCount, dt = last == 0 ? 0 : now - last;
+                last = now; frames++;
+                if (dt > worst) worst = dt;
+                Console.WriteLine("SIDEFRAME " + (++n) + " w=" + w + " dt=" + dt);
+                if (save)
+                    using (Bitmap bmp = new Bitmap(Width, Height))
+                    {
+                        DrawToBitmap(bmp, new Rectangle(0, 0, Width, Height));
+                        bmp.Save(Path.Combine(dir, "frame-" + n.ToString("00") + ".png"));
+                    }
+            };
+            Timer step = new Timer(); step.Interval = 1500;
+            int phase = 0;
+            step.Tick += delegate
+            {
+                phase++;
+                if (phase == 1 || phase == 2)
+                {
+                    last = 0;
+                    Console.WriteLine("SIDETOGGLE " + (phase == 1 ? "collapse" : "expand"));
+                    _userCollapsed = phase == 1; AnimateSidebar();
+                    return;
+                }
+                step.Stop();
+                Console.WriteLine("SIDESTATS frames=" + frames + " worst_dt=" + worst + " side=" + _side.Width +
+                    " content=" + _content.Width + " page=" + PageOf(_current).Width);
+                // после свернуть/развернуть ни у одного списка не должно остаться
+                // горизонтальной прокрутки и строк шире самого списка
+                ReportHScroll(PageOf(_current));
+                if (save)
+                    using (Bitmap bmp = new Bitmap(Width, Height))
+                    {
+                        DrawToBitmap(bmp, new Rectangle(0, 0, Width, Height));
+                        bmp.Save(Path.Combine(dir, "final.png"));
+                    }
+            };
+            step.Start();
+        }
+
+        private static void ReportHScroll(Control root)
+        {
+            foreach (Control c in root.Controls)
+            {
+                ScrollableControl sc = c as ScrollableControl;
+                if (sc != null && c.Visible && sc.AutoScroll && sc.HorizontalScroll.Visible)
+                {
+                    int widest = 0;
+                    foreach (Control ch in c.Controls) if (ch.Visible) widest = Math.Max(widest, ch.Right);
+                    Console.WriteLine("SIDEHSCROLL " + c.GetType().Name + " client=" + sc.ClientSize.Width +
+                        " widest=" + widest + " hpos=" + sc.HorizontalScroll.Value + " display=" + sc.DisplayRectangle);
+                }
+                ReportHScroll(c);
+            }
+        }
+#endif
 
         private void AddNav(NavHost host, string key, string text, string glyph)
         {
@@ -487,8 +700,9 @@ namespace Win11Privacy
             n.Font = Font;
             n.Tag = key;
             n.Width = (int)(u * 14.3F);
+            n.FullWidth = n.Width;
             n.Left = 0;
-            n.Click += delegate { Navigate(key); };
+            n.Click += delegate { NavigateGroup(key); };
             host.Controls.Add(n);
             _nav.Add(n);
             _navRows.Add(n);
@@ -520,6 +734,8 @@ namespace Win11Privacy
             Rectangle t = new Rectangle(_content.Padding.Left, _content.Padding.Top,
                 _content.ClientSize.Width - _content.Padding.Horizontal,
                 _content.ClientSize.Height - _content.Padding.Vertical);
+            // под шапкой раздела страница начинается ниже
+            if (_groupHead != null && _groupHead.Visible) { t.Y += _groupHead.Height; t.Height -= _groupHead.Height; }
             if (t.Width < 60 || t.Height < 60) return;
             FinishPageAnim();
             if (_pageTimer == null)
@@ -549,22 +765,27 @@ namespace Win11Privacy
 
         private void Navigate(string key)
         {
+            FinishSidebarAnim();
             bool first = (_current == "");
             bool changed = (_current != key);
             _current = key;
+            string grp = GroupOf(key);
+            _groupLast[grp] = key;
             foreach (NavItem n in _nav)
             {
-                n.Selected = ((string)n.Tag == key); n.Invalidate();
+                n.Selected = ((string)n.Tag == grp); n.Invalidate();
                 if (n.Selected && _navHost != null) _navHost.MoveTo(n, !first);
             }
+            UpdateGroupHead(grp, key);
             FinishPageAnim();
             foreach (KeyValuePair<string, Control> p in _pages) p.Value.Visible = (p.Key == key);
             if (changed && !first) AnimatePageIn(PageOf(key));
-            if (key == "home") { if (_homeScroll != null) _homeScroll.AutoScrollPosition = Point.Empty; RefreshHome(); FitHomeHeight(); }
+            if (key == "home") { if (_homeScroll != null) _homeScroll.AutoScrollPosition = Point.Empty; RefreshHome(); }
             if (key == "settings" && _settingsList != null) _settingsList.Restack();
             if (key == "xray" && _xrayList != null) { _xrayList.Restack(); if (_lastXray == null) RunXrayStatus(); }
             if (key == "dossier" && _dossierList != null) { _dossierList.Restack(); if (_lastFoot == null) RefreshDossier(); }
-            if (key == "audit" && _auditGroups != null && _auditGroups.Controls.Count == 0) RunAudit();
+            if (key == "gdid" && _gdidList != null) { _gdidList.Restack(); if (_lastGdid == null && !_mockMode) RefreshGdid(); }
+            if (key == "audit" && _auditGroups != null && _auditGroups.Controls.Count == 0) RunAudit();   // идёт уже — не повторит
             if (key == "monitor" && _monitorList != null && _monitorList.Controls.Count == 0) RefreshMonitor();
             if (key == "apps" && _appsList != null && _appsList.Controls.Count == 0) RefreshApps();
             if (key == "startup" && _startupList != null && _startupList.Controls.Count == 0) RefreshStartup();
@@ -584,52 +805,86 @@ namespace Win11Privacy
             page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));   // иначе страница растёт под самую широкую строку
             page.BackColor = Theme.WindowBg;
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            // заголовок + поиск + быстрые кнопки
+            // --- заголовок с пояснением и главные действия ----------------------
             TableLayoutPanel head = new TableLayoutPanel();
-            head.ColumnCount = 3; head.RowCount = 1;
+            head.ColumnCount = 2; head.RowCount = 1;
             head.Dock = DockStyle.Fill; head.AutoSize = true;
             head.BackColor = Theme.WindowBg;
-            head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-            Label h = PageTitle(L.T("Что отключить"));
-            head.Controls.Add(h, 0, 0);
+            FlowLayoutPanel titles = new FlowLayoutPanel();
+            titles.FlowDirection = FlowDirection.TopDown; titles.WrapContents = false;
+            titles.AutoSize = true; titles.Margin = new Padding(0);
+            Label h = PageTitle(L.T("Настройки"));
+            h.Margin = new Padding(0, 0, 0, (int)(u * 0.1F));
+            Label sub = new Label();
+            sub.Text = L.T("Выберите, что отключить. Изменения вступают в силу после «Применить».");
+            sub.ForeColor = Theme.TextDim; sub.AutoSize = true; sub.Margin = new Padding(1, 0, 0, 0);
+            titles.Controls.Add(h); titles.Controls.Add(sub);
+            head.Controls.Add(titles, 0, 0);
 
-            _search = new TextBox();
-            _search.Font = Font;
-            _search.BackColor = Theme.CardBg;
-            _search.ForeColor = Theme.Text;
-            _search.BorderStyle = BorderStyle.FixedSingle;
-            _search.Width = (int)(u * 13F);
-            _search.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
-            _search.Margin = new Padding((int)(u * 0.8F), 0, (int)(u * 0.5F), (int)(u * 0.45F));
-            _search.TextChanged += delegate { ApplySettingsFilter(); };
-            Dwm.Placeholder(_search, L.T("Поиск по настройкам…"));
-            head.Controls.Add(_search, 1, 0);
-
-            FlowLayoutPanel quick = new FlowLayoutPanel();
-            quick.AutoSize = true; quick.WrapContents = false; quick.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
-            ModernButton pv = Ghost(L.T("Что изменится")); pv.Click += delegate { ShowPreview(); };
-            ModernButton p1 = Ghost(L.T("Базовый")); p1.Click += delegate { ApplyPreset("base"); };
-            ModernButton p2 = Ghost(L.T("Строгий")); p2.Click += delegate { ApplyPreset("strict"); };
-            ModernButton p3 = Ghost(L.T("Максимум")); p3.Click += delegate { ApplyPreset("max"); };
-            ModernButton a2 = Ghost(L.T("Снять всё")); a2.Click += delegate { SetAll(false); };
-            ModernButton a3 = Ghost(L.T("По умолчанию")); a3.Click += delegate { ResetDefaults(); };
-            quick.Controls.Add(pv);
-            quick.Controls.Add(p1); quick.Controls.Add(p2); quick.Controls.Add(p3);
-            quick.Controls.Add(a2); quick.Controls.Add(a3);
-            head.Controls.Add(quick, 2, 0);
-            WrapHeadButtons(head, quick);
+            FlowLayoutPanel acts = new FlowLayoutPanel();
+            acts.AutoSize = true; acts.WrapContents = false;
+            acts.Anchor = AnchorStyles.Right | AnchorStyles.Top;
+            acts.Margin = new Padding(0, (int)(u * 0.2F), 0, 0);
+            ModernButton pv = new ModernButton(L.T("Что изменится"), false); pv.Font = Font;
+            pv.Click += delegate { ShowPreview(); };
+            ModernButton more = new ModernButton(L.T("Ещё") + "  ▾", false); more.Font = Font;
+            ContextMenuStrip menu = BuildSettingsMenu();
+            more.Click += delegate { menu.Show(more, new Point(0, more.Height + 2)); };
+            _btnApply = new ModernButton(L.T("Применить"), true); _btnApply.Font = Theme.Bold(Font);
+            _btnApply.Click += OnApply;
+            pv.Margin = new Padding(0, 0, (int)(u * 0.5F), 0);
+            more.Margin = new Padding(0, 0, (int)(u * 0.5F), 0);
+            _btnApply.Margin = new Padding(0);
+            acts.Controls.Add(pv); acts.Controls.Add(more); acts.Controls.Add(_btnApply);
+            head.Controls.Add(acts, 1, 0);
+            WrapHeadButtons(head, acts);
             page.Controls.Add(head, 0, 0);
 
-            // карточка со списком
+            // --- поиск и профиль -------------------------------------------------
+            TableLayoutPanel tools = new TableLayoutPanel();
+            tools.ColumnCount = 3; tools.RowCount = 1;
+            tools.Dock = DockStyle.Fill; tools.AutoSize = true;
+            tools.BackColor = Theme.WindowBg;
+            tools.Margin = new Padding(0, (int)(u * 0.9F), 0, 0);
+            tools.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            tools.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            tools.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            SearchBox sb = new SearchBox(Font, L.T("Поиск по настройкам…"));
+            sb.Width = (int)(u * 16F);
+            sb.Anchor = AnchorStyles.Left;
+            sb.Margin = new Padding(0, 0, (int)(u * 0.8F), 0);
+            _search = sb.Box;
+            _search.TextChanged += delegate { ApplySettingsFilter(); };
+            tools.Controls.Add(sb, 0, 0);
+
+            FlowLayoutPanel prof = new FlowLayoutPanel();
+            prof.AutoSize = true; prof.WrapContents = false; prof.Anchor = AnchorStyles.Right;
+            prof.Margin = new Padding(0);
+            Label pl = new Label();
+            pl.Text = L.T("Профиль"); pl.AutoSize = true; pl.ForeColor = Theme.TextDim;
+            pl.Anchor = AnchorStyles.Left; pl.Margin = new Padding(0, (int)(u * 0.45F), (int)(u * 0.6F), 0);
+            _preset = new Segmented();
+            _preset.Font = Font;
+            _preset.Add("base", L.T("Базовый"));
+            _preset.Add("strict", L.T("Строгий"));
+            _preset.Add("max", L.T("Максимум"));
+            _preset.Add("custom", L.T("Свой"));
+            _preset.Margin = new Padding(0);
+            _preset.Picked += delegate(string k) { if (k != "custom") ApplyPreset(k); };
+            prof.Controls.Add(pl); prof.Controls.Add(_preset);
+            tools.Controls.Add(prof, 2, 0);
+            page.Controls.Add(tools, 0, 1);
+
+            // --- карточка со списком ---------------------------------------------
             Card card = new Card();
             card.Dock = DockStyle.Fill;
-            card.Margin = new Padding(0, (int)(u * 0.5F), 0, (int)(u * 0.5F));
+            card.Margin = new Padding(0, (int)(u * 0.8F), 0, (int)(u * 0.3F));
             card.Padding = new Padding((int)(u * 0.5F));
             _settingsList = new StackPanel();
             _settingsList.Dock = DockStyle.Fill;
@@ -643,6 +898,8 @@ namespace Win11Privacy
                 if (m.Section != lastSec) { SectionHeader sh = new SectionHeader(m.Section); sh.Font = Font; _settingsList.Controls.Add(sh); lastSec = m.Section; }
                 OptionRow r = new OptionRow(m.Title, m.Description, m.Glyph, m.DefaultOn, m.Hard);
                 r.Font = Font; m.Row = r;
+                // ручная правка — уже не готовый профиль, а свой
+                r.Toggle.CheckedChanged += delegate { if (!_presetBusy && _preset != null) _preset.Selected = "custom"; };
                 _settingsList.Controls.Add(r);
             }
             SectionHeader safe = new SectionHeader(L.T("Безопасность")); safe.Font = Font; _settingsList.Controls.Add(safe);
@@ -650,28 +907,39 @@ namespace Win11Privacy
             _optRestore = MakeSafeRow(L.T("Точка восстановления"), L.T("Позволяет откатить всё через «Восстановление системы»."), GUndo, true);
             _optDry     = MakeSafeRow(L.T("Тестовый прогон"), L.T("Показать список действий в журнале, ничего не меняя."), GEye, false);
             _optDry.Toggle.CheckedChanged += delegate { UpdateApplyText(); };
-            _settingsList.Controls.Add(_optBackup); _settingsList.Controls.Add(_optRestore); _settingsList.Controls.Add(_optDry);
+            _optProfiles = MakeSafeRow(L.T("Для всех пользователей"), L.T("Настройки пользователя ложатся и в другие профили этого компьютера, и в профиль по умолчанию — новые пользователи получат их сразу."), GContact, false);
+            _settingsList.Controls.Add(_optBackup); _settingsList.Controls.Add(_optRestore); _settingsList.Controls.Add(_optDry); _settingsList.Controls.Add(_optProfiles);
             card.Controls.Add(_settingsList);
-            page.Controls.Add(card, 0, 1);
-
-            // кнопки действий
-            FlowLayoutPanel act = new FlowLayoutPanel();
-            act.Anchor = AnchorStyles.Right; act.AutoSize = true;
-            act.FlowDirection = FlowDirection.RightToLeft;
-            WrapToWidth(act, page);
-            _btnApply = new ModernButton(L.T("Применить"), true); _btnApply.Font = Theme.Bold(Font);
-            _btnApply.Click += OnApply;
-            _btnRevert = new ModernButton(L.T("Откат"), false); _btnRevert.Click += OnRevert;
-            _btnFolder = new ModernButton(L.T("Папка копий"), false);
-            _btnFolder.Click += delegate { try { Process.Start("explorer.exe", Environment.GetFolderPath(Environment.SpecialFolder.Desktop)); } catch { } };
-            _btnProfileSave = new ModernButton(L.T("Сохранить профиль"), false); _btnProfileSave.Click += OnSaveProfile;
-            _btnProfileLoad = new ModernButton(L.T("Загрузить профиль"), false); _btnProfileLoad.Click += OnLoadProfile;
-            foreach (ModernButton b in new[] { _btnApply, _btnRevert, _btnFolder, _btnProfileSave, _btnProfileLoad })
-            { b.Font = b.Primary ? Theme.Bold(Font) : Font; b.Margin = new Padding((int)(u * 0.5F), (int)(u * 0.3F), 0, 0); act.Controls.Add(b); }
-            page.Controls.Add(act, 0, 2);
+            page.Controls.Add(card, 0, 2);
             return page;
         }
-        private ModernButton _btnApply, _btnRevert, _btnFolder, _btnProfileSave, _btnProfileLoad;
+
+        // Редкие действия — в меню «Ещё», чтобы не держать под списком ряд из
+        // шести кнопок
+        private ContextMenuStrip BuildSettingsMenu()
+        {
+            ContextMenuStrip m = new ContextMenuStrip();
+            m.Renderer = new ConsoleMenuRenderer();
+            m.Font = Font;
+            m.ShowImageMargin = false;
+            m.Items.Add(L.T("Снять всё"), null, delegate { SetAll(false); });
+            m.Items.Add(L.T("По умолчанию"), null, delegate { ResetDefaults(); });
+            m.Items.Add(new ToolStripSeparator());
+            m.Items.Add(L.T("Загрузить профиль…"), null, OnLoadProfile);
+            m.Items.Add(L.T("Сохранить профиль…"), null, OnSaveProfile);
+            m.Items.Add(L.T("Файл для других ПК…"), null, OnExportDeploy);
+            m.Items.Add(new ToolStripSeparator());
+            m.Items.Add(L.T("Открыть папку резервных копий"), null,
+                delegate { try { Process.Start("explorer.exe", Environment.GetFolderPath(Environment.SpecialFolder.Desktop)); } catch { } });
+            _miRevert = (ToolStripMenuItem)m.Items.Add(L.T("Откатить изменения…"), null, OnRevert);
+            foreach (ToolStripItem it in m.Items) { it.ForeColor = Theme.Text; it.Padding = new Padding(4, 3, 4, 3); }
+            return m;
+        }
+        private ModernButton _btnApply;
+        private ToolStripMenuItem _miRevert;
+        private Segmented _preset;
+        private bool _presetBusy;
+        private OptionRow _optProfiles;
 
         private OptionRow MakeSafeRow(string t, string d, string g, bool on)
         { OptionRow r = new OptionRow(t, d, g, on, false); r.Font = Font; return r; }
@@ -694,7 +962,7 @@ namespace Win11Privacy
             head.ColumnCount = 2; head.Dock = DockStyle.Fill; head.AutoSize = true;
             head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            head.Controls.Add(PageTitle(L.T("Проверка на деле")), 0, 0);
+            head.Controls.Add(PageTitle(L.T("Проверка")), 0, 0);
             FlowLayoutPanel auditBtns = new FlowLayoutPanel();
             auditBtns.AutoSize = true; auditBtns.WrapContents = false;
             auditBtns.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
@@ -706,39 +974,25 @@ namespace Win11Privacy
             ModernButton rerun = new ModernButton(L.T("Проверить сейчас"), true); rerun.Font = Theme.Bold(Font);
             rerun.Margin = new Padding(0, 0, 0, (int)(u * 0.45F));
             rerun.Click += delegate { RunAudit(); };
-            auditBtns.Controls.Add(_btnCleanJunk); auditBtns.Controls.Add(rerun);
+            ModernButton leak = new ModernButton(L.T("Проверить утечки"), false); leak.Font = Font;
+            leak.Margin = new Padding(0, 0, (int)(u * 0.5F), (int)(u * 0.45F));
+            leak.Click += OnLeakTest;
+            auditBtns.Controls.Add(_btnCleanJunk); auditBtns.Controls.Add(leak); auditBtns.Controls.Add(rerun);
             head.Controls.Add(auditBtns, 1, 0);
             WrapHeadButtons(head, auditBtns);
             page.Controls.Add(head, 0, 0);
 
-            // верх: кольцо + плитки
-            TableLayoutPanel top = new TableLayoutPanel();
-            top.ColumnCount = 2; top.RowCount = 1; top.Dock = DockStyle.Fill; top.AutoSize = true;
-            top.Margin = new Padding(0, (int)(u * 0.5F), 0, (int)(u * 0.5F));
-            top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-
-            Card ringCard = new Card();
-            ringCard.Size = new Size((int)(u * 6.9F), (int)(u * 6.9F));
-            ringCard.Margin = new Padding(0, 0, (int)(u * 0.7F), 0);
-            _ring = new IndexRing(); _ring.Font = Font; _ring.Dock = DockStyle.Fill; _ring.Margin = new Padding((int)(u*0.35F));
-            ringCard.Controls.Add(_ring);
-            top.Controls.Add(ringCard, 0, 0);
-
-            Panel rightTop = new Panel(); rightTop.Dock = DockStyle.Fill; rightTop.Height = (int)(u * 6.9F);
-            _auditHint = new Label();
-            _auditHint.Dock = DockStyle.Bottom; _auditHint.AutoSize = false; _auditHint.Height = (int)(u * 3F);
-            _auditHint.ForeColor = Theme.TextDim;
-            _auditHint.Text = L.T("Нажмите «Проверить сейчас» — программа прочитает реальное состояние системы\nи покажет, что сработало, а что нет.");
-            rightTop.Controls.Add(_auditHint);
-            _auditTiles = new TileGrid();
-            _auditTiles.Dock = DockStyle.Fill; _auditTiles.Font = Font; _auditTiles.MaxCols = 4;
-            _auditTiles.MinTileWidthU = 11.5F; _auditTiles.TileHeightU = 6.6F;
-            _auditTiles.SingleRow = true;   // полоса одна: плитки сужаются, но не пропадают
-            rightTop.Controls.Add(_auditTiles);
-            _auditTiles.BringToFront();
-            top.Controls.Add(rightTop, 1, 0);
-            page.Controls.Add(top, 0, 1);
+            // верх: строка-итог вместо кольца и плиток с крупными числами
+            RowList summary = new RowList();
+            summary.Dock = DockStyle.Fill; summary.Font = Font; summary.AutoSize = false;
+            summary.Margin = new Padding(0, (int)(u * 0.5F), 0, (int)(u * 0.8F));
+            _auditStatus = new InfoRow();
+            _auditStatus.Font = Font;
+            _auditStatus.GlyphTile = true; _auditStatus.Large = true;
+            _auditStatus.Set(GNav2, Theme.TextDim, L.T("Проверка ещё не запускалась"),
+                L.T("Нажмите «Проверить сейчас» — программа прочитает реальное состояние системы и покажет, что сработало, а что нет."));
+            summary.Controls.Add(_auditStatus);
+            page.Controls.Add(summary, 0, 1);
 
             // низ: разбивка по модулям
             Card listCard = new Card();
@@ -774,7 +1028,7 @@ namespace Win11Privacy
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            page.Controls.Add(PageTitle(L.T("Монитор утечек")), 0, 0);
+            page.Controls.Add(PageTitle(L.T("Сеть")), 0, 0);
 
             Card ctl = new Card();
             ctl.Dock = DockStyle.Fill; ctl.Margin = new Padding(0, (int)(u*0.5F), 0, (int)(u*0.5F));
@@ -786,14 +1040,17 @@ namespace Win11Privacy
             _monitorState = new Label();
             _monitorState.AutoSize = false; _monitorState.Dock = DockStyle.Fill;
             _monitorState.TextAlign = ContentAlignment.MiddleLeft; _monitorState.ForeColor = Theme.TextDim;
-            _monitorState.Text = L.T("Монитор фиксирует попытки программ отправить данные наружу и показывает,\nкто и куда стучится. Использует брандмауэр и журнал безопасности Windows.");
+            _monitorState.Text = L.T("Наблюдение за сетью фиксирует попытки программ отправить данные наружу и показывает, кто и куда стучится. Использует брандмауэр и журнал безопасности Windows.");
             ctlIn.Controls.Add(_monitorState, 0, 0);
             FlowLayoutPanel mb = new FlowLayoutPanel(); mb.AutoSize = true; mb.WrapContents = false; mb.Anchor = AnchorStyles.Right;
-            _monitorToggle = new ModernButton(L.T("Включить монитор"), true); _monitorToggle.Font = Theme.Bold(Font);
+            _monitorToggle = new ModernButton(L.T("Включить наблюдение"), true); _monitorToggle.Font = Theme.Bold(Font);
             _monitorToggle.Click += OnMonitorToggle;
             ModernButton refresh = new ModernButton(L.T("Обновить"), false); refresh.Click += delegate { RefreshMonitor(); };
             refresh.Margin = new Padding((int)(u*0.5F),0,0,0);
-            mb.Controls.Add(_monitorToggle); mb.Controls.Add(refresh);
+            _netGuardToggle = new ModernButton(L.T("Следить за новыми"), false);
+            _netGuardToggle.Click += OnNetGuardToggle;
+            _netGuardToggle.Margin = new Padding((int)(u*0.5F),0,0,0);
+            mb.Controls.Add(_monitorToggle); mb.Controls.Add(_netGuardToggle); mb.Controls.Add(refresh);
             ctlIn.Controls.Add(mb, 1, 0);
             ctl.Controls.Add(ctlIn);
             page.Controls.Add(ctl, 0, 1);
@@ -1024,15 +1281,12 @@ namespace Win11Privacy
             search = null;
             if (searchKey != null)
             {
-                TextBox tb = new TextBox();
-                tb.Font = Font;
-                tb.BackColor = Theme.CardBg; tb.ForeColor = Theme.Text;
-                tb.BorderStyle = BorderStyle.FixedSingle;
-                tb.Width = (int)(u * 13F);
-                tb.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
-                tb.Margin = new Padding((int)(u * 0.8F), 0, (int)(u * 0.5F), (int)(u * 0.45F));
-                Dwm.Placeholder(tb, L.T("Поиск по списку…"));
-                head.Controls.Add(tb, 1, 0);
+                SearchBox sb = new SearchBox(Font, L.T("Поиск по списку…"));
+                sb.Width = (int)(u * 14F);
+                sb.Anchor = AnchorStyles.Left;
+                sb.Margin = new Padding((int)(u * 1.0F), 0, (int)(u * 0.5F), 0);
+                head.Controls.Add(sb, 1, 0);
+                TextBox tb = sb.Box;
                 search = tb;
                 _pageSearch[searchKey] = tb;
             }
@@ -1348,7 +1602,7 @@ namespace Win11Privacy
             page.RowStyles.Add(new RowStyle(SizeType.Absolute, (int)(u * 7.6F)));
             page.RowStyles.Add(new RowStyle(SizeType.Absolute, (int)(u * 14F)));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            page.Controls.Add(PageTitle(L.T("Хронология приватности")), 0, 0);
+            page.Controls.Add(PageTitle(L.T("Хронология")), 0, 0);
 
             Card ctl = new Card();
             ctl.Dock = DockStyle.Fill;
@@ -1363,7 +1617,7 @@ namespace Win11Privacy
             _timelineState.AutoSize = false; _timelineState.Dock = DockStyle.Fill;
             _timelineState.TextAlign = ContentAlignment.MiddleLeft; _timelineState.ForeColor = Theme.TextDim;
             _timelineState.Text = L.T("Программа копит историю: события телеметрии по дням, обновления Windows,\n") +
-                                  L.T("свои правки и возвраты стража. Чем дольше она стоит, тем больше видно.");
+                                  L.T("свои правки и возвраты автозащиты. Чем дольше она стоит, тем больше видно.");
             ci.Controls.Add(_timelineState, 0, 0);
             FlowLayoutPanel tb = new FlowLayoutPanel();
             AttachButtonRow(tb, ctl);
@@ -1384,7 +1638,7 @@ namespace Win11Privacy
             chartCard.Padding = new Padding((int)(u * 0.8F), (int)(u * 0.6F), (int)(u * 0.8F), (int)(u * 0.4F));
             _timeline = new TimelineChart();
             _timeline.Dock = DockStyle.Fill; _timeline.Font = Font;
-            _timeline.Empty = L.T("Линии телеметрии пока нет: включите запись на «Рентгене» и нажмите «Замерить».");
+            _timeline.Empty = L.T("Линии телеметрии пока нет: включите запись на вкладке «Сбор данных» и нажмите «Замерить».");
             chartCard.Controls.Add(_timeline);
             page.Controls.Add(chartCard, 0, 2);
 
@@ -1431,7 +1685,7 @@ namespace Win11Privacy
                     bool bad = (kind == "grow" || kind == "drift");
                     string text;
                     if (kind == "update") text = L.T("Обновление Windows: ") + Json.GetStr(n, "list");
-                    else if (kind == "drift") text = L.T("Страж нашёл сбитых настроек: ") + Json.GetInt(n, "a") + L.T(", вернул: ") + Json.GetInt(n, "b");
+                    else if (kind == "drift") text = L.T("Автозащита нашла сбитых настроек: ") + Json.GetInt(n, "a") + L.T(", вернул: ") + Json.GetInt(n, "b");
                     else text = L.T("Телеметрия выросла: было ") + Json.GetInt(n, "a") + L.T(" событий в сутки, стало ") + Json.GetInt(n, "b");
                     _timelineNotes.Controls.Add(new KvRow(Json.GetStr(n, "date") + "   ·   " + text, "", bad) { Font = this.Font });
                 }
@@ -1442,7 +1696,7 @@ namespace Win11Privacy
             _timelineState.Text = L.T("Показано дней: ") + shown +
                 (Json.GetBool(d, "hasXray") ? L.T(". Столбики — события телеметрии в сутки.")
                                             : L.T(". Столбики — обращения к датчикам: замера телеметрии ещё не было.")) + "\n" +
-                L.T("Красная черта — обновление Windows, зелёная точка — правка программы, жёлтая — возврат стража.");
+                L.T("Красная черта — обновление Windows, зелёная точка — правка программы, жёлтая — возврат автозащиты.");
         }
 
         // ================================================================== //
@@ -1450,7 +1704,7 @@ namespace Win11Privacy
         // ================================================================== //
         private Control BuildGuardPage()
         {
-            _btnGuardInstall = new ModernButton(L.T("Включить стража"), true); _btnGuardInstall.Click += OnGuardInstall;
+            _btnGuardInstall = new ModernButton(L.T("Включить автозащиту"), true); _btnGuardInstall.Click += OnGuardInstall;
             _btnGuardNow = new ModernButton(L.T("Проверить"), false); _btnGuardNow.Click += OnGuardNow;
             _btnGuardRemove = new ModernButton(L.T("Отключить"), false); _btnGuardRemove.Click += OnGuardRemove;
             _btnWatcher = new ModernButton(L.T("Уведомления"), false); _btnWatcher.Click += OnWatcherToggle;
@@ -1461,13 +1715,13 @@ namespace Win11Privacy
             {
                 _guardDaily = !_guardDaily;
                 _btnGuardFreq.Text = GuardFreqText();
-                _status.Text = _guardDaily ? L.T("Страж будет проверять каждый день. Нажмите «Включить стража».")
-                                           : L.T("Страж будет проверять раз в неделю. Нажмите «Включить стража».");
+                _status.Text = _guardDaily ? L.T("Автозащита будет проверять каждый день. Нажмите «Включить автозащиту».")
+                                           : L.T("Автозащита будет проверять раз в неделю. Нажмите «Включить автозащиту».");
             };
             Label state; StackPanel list; TextBox search;
-            TableLayoutPanel page = ListPage(L.T("Страж приватности"),
+            TableLayoutPanel page = ListPage(L.T("Автозащита"),
                 L.T("Крупные обновления Windows тихо возвращают часть настроек назад.\n") +
-                L.T("Страж проверяет систему по расписанию, возвращает сбитое и предупреждает."),
+                L.T("Автозащита проверяет систему по расписанию, возвращает сбитое и предупреждает."),
                 null, out state, out list, out search,
                 _btnGuardInstall, _btnGuardNow, _btnGuardRemove, _btnGuardFreq, _btnWatcher, _btnSensorGuard, _btnSnapshot);
             _guardState = state; _guardBody = list;
@@ -1497,7 +1751,7 @@ namespace Win11Privacy
             head.BackColor = Theme.WindowBg; head.Dock = DockStyle.Fill;
             head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            head.Controls.Add(PageTitle(L.T("Журнал выполнения")), 0, 0);
+            head.Controls.Add(PageTitle(L.T("Журнал")), 0, 0);
 
             FlowLayoutPanel logBtns = new FlowLayoutPanel();
             logBtns.AutoSize = true; logBtns.WrapContents = false;
@@ -1508,25 +1762,49 @@ namespace Win11Privacy
             logSave.Click += delegate { SaveLogToFile(); };
             ModernButton logClear = new ModernButton(L.T("Очистить"), false);
             logClear.Font = Font; logClear.Margin = new Padding(0);
-            logClear.Click += delegate { if (_log != null) _log.Clear(); };
+            logClear.Click += delegate { if (_log != null) { _log.Clear(); UpdateLogEmpty(); } };
             logBtns.Controls.Add(logSave); logBtns.Controls.Add(logClear);
             head.Controls.Add(logBtns, 1, 0);
             WrapHeadButtons(head, logBtns);
             page.Controls.Add(head, 0, 0);
 
+            // Фон карточки — как у самого журнала: раньше тёмное поле сидело
+            // в более светлой рамке, и выходила двойная обводка.
             Card card = new Card(); card.Dock = DockStyle.Fill; card.Padding = new Padding((int)(u*0.6F));
             card.Margin = new Padding(0,(int)(u*0.5F),0,(int)(u*0.3F));
+            card.BackColor = Theme.LogBg;
             _log = new RichTextBox();
             _log.Dock = DockStyle.Fill; _log.ReadOnly = true; _log.BorderStyle = BorderStyle.None;
             _log.BackColor = Theme.LogBg; _log.ForeColor = Theme.TextDim;
-            _log.Font = Theme.PickFont(Theme.MonoFonts, Font.Size * 0.95F, FontStyle.Regular);
+            _log.Font = Theme.PickFont(Theme.MonoFonts, Font.Size * 0.92F, FontStyle.Regular);
             _log.WordWrap = true; _log.ScrollBars = RichTextBoxScrollBars.Vertical; _log.DetectUrls = false;
+            _log.TextChanged += delegate { UpdateLogEmpty(); };
             Dwm.DarkScrollbars(_log);
             card.Controls.Add(_log);
+
+            // Пока в журнале ничего нет — пояснение, а не «вывод»: подсказка
+            // больше не попадает в сохранённый файл и не мешает понять, что
+            // журнал пуст.
+            _logEmpty = new EmptyState();
+            _logEmpty.Dock = DockStyle.Fill;
+            _logEmpty.Font = Font;
+            _logEmpty.BackColor = Theme.LogBg;
+            _logEmpty.Glyph = "";
+            _logEmpty.Title = L.T("Журнал пока пуст");
+            _logEmpty.Note = L.T("Здесь по шагам видно, что программа делает: применение и откат настроек, работа автозащиты и наблюдения за сетью. Если что-то пошло не так, сохраните журнал и приложите его к сообщению об ошибке.");
+            card.Controls.Add(_logEmpty);
+            _logEmpty.BringToFront();
             page.Controls.Add(card, 0, 1);
-            LogLine(L.T("Здесь появляется подробный вывод при применении настроек, откате,"), Theme.TextDim);
-            LogLine(L.T("работе стража и монитора."), Theme.TextDim);
             return page;
+        }
+
+        private EmptyState _logEmpty;
+
+        private void UpdateLogEmpty()
+        {
+            if (_logEmpty == null || _log == null) return;
+            bool empty = _log.TextLength == 0;
+            if (_logEmpty.Visible != empty) _logEmpty.Visible = empty;
         }
 
         // Журнал выгружается в файл целиком: именно по нему разбираются
@@ -1583,17 +1861,20 @@ namespace Win11Privacy
             aboutBtns.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
             aboutBtns.Margin = new Padding((int)(u * 1.2F), 0, 0, (int)(u * 0.15F));
             _aboutBtns = aboutBtns;
-            ModernButton bLang = new ModernButton(L.English ? "Русский" : "English", false);
+            // как в Windows → русский → английский → как в Windows
+            ModernButton bLang = new ModernButton(LangButtonText(), false);
             bLang.Font = Font;
             bLang.Click += delegate
             {
-                L.English = !L.English;
+                _langChoice = (_langChoice + 1) % 3;
                 SaveUiState();
-                MessageBox.Show(this,
-                    L.English ? "The language will change after restarting the program."
-                              : "Язык интерфейса сменится после перезапуска программы.",
-                    L.T("Приватность Windows 11"), MessageBoxButtons.OK, MessageBoxIcon.Information);
-                bLang.Text = L.English ? "Русский" : "English";
+                bLang.Text = LangButtonText();
+                bool next = _langChoice == 0 ? L.SystemEnglish() : _langChoice == 2;
+                if (next != L.English)
+                    MessageBox.Show(this,
+                        next ? "The language will change after restarting the program."
+                             : "Язык интерфейса сменится после перезапуска программы.",
+                        L.T("Приватность Windows 11"), MessageBoxButtons.OK, MessageBoxIcon.Information);
             };
             aboutBtns.Controls.Add(bLang);
 
@@ -1633,13 +1914,13 @@ namespace Win11Privacy
             f.Controls.Add(_aboutData);
 
             f.Controls.Add(AboutCard(L.T("Что умеет эта программа, чего нет у других"),
-                L.T("• Досье: кто и когда реально включал камеру, микрофон и геолокацию — с длительностью и меткой «сейчас».\n") +
+                L.T("• Следы на компьютере: кто и когда реально включал камеру, микрофон и геолокацию — с длительностью и меткой «сейчас».\n") +
                 L.T("• Слежение за датчиками: уведомление в момент, когда НОВАЯ программа впервые получила доступ; график по дням.\n") +
                 L.T("• Цифровой след: рекламный ID, история сетей и флешек, всё, что Windows помнит о вас — с выборочным стиранием.\n") +
-                L.T("• Рентген телеметрии: настоящие события, собранные о компьютере, с сырым содержимым.\n") +
+                L.T("• Сбор данных: настоящие события, собранные о компьютере, с сырым содержимым.\n") +
                 L.T("• Проверка на деле: читает реальное состояние системы и показывает индекс, а не «галочки».\n") +
-                L.T("• Монитор утечек: показывает, кто и куда реально отправляет данные.\n") +
-                L.T("• Страж: возвращает настройки, сбитые обновлениями Windows; машина времени со снимками состояния.\n") +
+                L.T("• Сеть: показывает, кто и куда реально отправляет данные.\n") +
+                L.T("• Автозащита: возвращает настройки, сбитые обновлениями Windows; машина времени со снимками состояния.\n") +
                 L.T("• Телеметрия сторонних программ и слежка производителя ноутбука.\n") +
                 L.T("• Блокировка через брандмауэр, а не только hosts; удаление накопленного буфера телеметрии.\n") +
                 L.T("• Профили и тихий запуск из командной строки для настройки нескольких ПК.\n") +
@@ -1654,7 +1935,7 @@ namespace Win11Privacy
                 L.T("Полностью прекратить обмен данными с Microsoft на Windows нельзя: остаются проверка обновлений,\n") +
                 L.T("активация лицензии и проверка сертификатов. На редакциях Home и Pro минимальный уровень телеметрии\n") +
                 L.T("система трактует как «Обязательные данные» — это ограничение редакции, а не программы. Всё, что можно\n") +
-                L.T("отключить без поломки системы, эта программа отключает, а Страж не даёт вернуть обратно.")));
+                L.T("отключить без поломки системы, эта программа отключает, а автозащита не даёт вернуть обратно.")));
 
             f.Controls.Add(AboutCard(L.T("Запуск без предупреждения SmartScreen"),
                 L.T("Синее окно показывается любому неподписанному приложению из интернета. Убрать его можно так:\n") +
@@ -1693,6 +1974,19 @@ namespace Win11Privacy
         }
         private FlowLayoutPanel _aboutFlow, _aboutBtns;
 
+        // Старый флаг «en» → выбор языка: совпадает с Windows — «как в Windows»
+        internal static int LangChoiceFromOld(bool en, bool systemEnglish)
+        {
+            return en == systemEnglish ? 0 : (en ? 2 : 1);
+        }
+
+        private string LangButtonText()
+        {
+            if (_langChoice == 1) return L.T("Язык: русский");
+            if (_langChoice == 2) return L.T("Язык: английский");
+            return L.T("Язык: как в Windows");
+        }
+
         private string ThemeButtonText()
         {
             if (_themeChoice == 1) return L.T("Тема: тёмная");
@@ -1729,7 +2023,7 @@ namespace Win11Privacy
         {
             if (MessageBox.Show(this,
                 L.T("Программа удалит всё, что накопила о вас у себя: историю датчиков,\n") +
-                L.T("журнал изменений, снимки и эталоны рентгена.\n\n") +
+                L.T("журнал изменений, снимки и эталоны сбора данных.\n\n") +
                 L.T("Вернуть настройки «как было» после этого будет нечем — журнал отката\n") +
                 L.T("пропадёт вместе с остальным.\n\nПродолжить?"),
                 L.T("Удаление данных программы"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
@@ -1927,6 +2221,7 @@ namespace Win11Privacy
             l.Text = text;
             l.Font = Theme.PickFont(new[] { "Segoe UI Variable Display", "Segoe UI", "Tahoma" }, Font.Size * 1.6F, FontStyle.Bold);
             l.ForeColor = Theme.Text; l.AutoSize = true; l.Margin = new Padding(0,0,0,(int)(Font.Height*0.3F));
+            l.Tag = "pagetitle";
             return l;
         }
 
@@ -1940,9 +2235,9 @@ namespace Win11Privacy
             bar.BackColor = Theme.Dark ? Theme.Mix(Theme.WindowBg, Color.Black, 0.15F) : Theme.CardBg;
             Panel line = new Panel(); line.Dock = DockStyle.Top; line.Height = 1; line.BackColor = Theme.CardBorder; bar.Controls.Add(line);
 
-            _progress = new ProgressBar();
-            _progress.Style = ProgressBarStyle.Marquee; _progress.MarqueeAnimationSpeed = 25;
-            _progress.Size = new Size((int)(u * 9F), (int)(u * 0.5F));
+            _progress = new SlimProgress();
+            _progress.Style = ProgressBarStyle.Marquee;
+            _progress.Size = new Size((int)(u * 9F), Math.Max(4, (int)(u * 0.36F)));
             _progress.Location = new Point((int)(u * 1.2F), (int)(u * 1.0F));
             _progress.Visible = false; bar.Controls.Add(_progress);
 
@@ -1976,6 +2271,36 @@ namespace Win11Privacy
             Assembly asm = Assembly.GetExecutingAssembly();
             try { using (Stream s = asm.GetManifestResourceStream("app.png")) { if (s != null) using (Image tmp = Image.FromStream(s)) _appImage = new Bitmap(tmp); } } catch { }
             try { using (Stream s = asm.GetManifestResourceStream("app.ico")) { if (s != null) { _appIcon = new Icon(s); Icon = _appIcon; } } } catch { }
+        }
+
+        // Картинка из app.ico ближайшего размера. В заголовке значок около 24
+        // точек, и уменьшенный в десять раз app.png там расплывался; в значке
+        // для мелких размеров лежат отдельно нарисованные картинки — они чёткие.
+        private Image LogoFromIco(int size)
+        {
+            try
+            {
+                byte[] ico;
+                using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream("app.ico"))
+                {
+                    if (s == null) return null;
+                    using (MemoryStream ms = new MemoryStream()) { s.CopyTo(ms); ico = ms.ToArray(); }
+                }
+                int n = BitConverter.ToUInt16(ico, 4), best = -1, bestDiff = int.MaxValue;
+                for (int i = 0; i < n; i++)
+                {
+                    int w = ico[6 + 16 * i]; if (w == 0) w = 256;
+                    // предпочитаем чуть крупнее нужного: уменьшение чище увеличения
+                    int diff = w >= size ? w - size : (size - w) * 4;
+                    if (diff < bestDiff) { bestDiff = diff; best = i; }
+                }
+                if (best < 0) return null;
+                int len = BitConverter.ToInt32(ico, 6 + 16 * best + 8), off = BitConverter.ToInt32(ico, 6 + 16 * best + 12);
+                if (ico[off] != 0x89) return null;          // только PNG-картинки, других в app.ico нет
+                using (MemoryStream ps = new MemoryStream(ico, off, len))
+                using (Image tmp = Image.FromStream(ps)) return new Bitmap(tmp);
+            }
+            catch { return null; }
         }
 
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Dwm.Style(Handle, Theme.Dark); }
@@ -2105,13 +2430,24 @@ namespace Win11Privacy
                 string p = UiStatePath();
                 if (!File.Exists(p)) return;
                 Dictionary<string, object> d = Json.ParseObject(File.ReadAllText(p));
-                if (d != null && d.ContainsKey("en")) L.English = Json.GetBool(d, "en");
+                if (d != null && d.ContainsKey("lang")) L.Choice = Json.GetInt(d, "lang");
+                else if (d != null && d.ContainsKey("en"))
+                {
+                    // Прежние версии записывали язык всегда, даже если его никто
+                    // не выбирал, и он навсегда застывал на первом запуске.
+                    // Выбором считаем только тот, что расходится с языком Windows.
+                    L.Choice = LangChoiceFromOld(Json.GetBool(d, "en"), L.SystemEnglish());
+                }
+                _langChoice = L.Choice;
                 if (d != null && d.ContainsKey("theme")) _themeChoice = Json.GetInt(d, "theme");
             }
             catch { }
         }
         // 0 — как в Windows, 1 — тёмная, 2 — светлая
         private int _themeChoice;
+        // 0 — как в Windows, 1 — русский, 2 — английский. Меняется кнопкой и
+        // действует со следующего запуска: на ходу подписи смешались бы.
+        private int _langChoice;
         private bool _welcomeSeen;          // окно первого запуска уже показывали
 
         private void LoadUiState()
@@ -2129,7 +2465,6 @@ namespace Win11Privacy
                 Rectangle wa = Screen.PrimaryScreen.WorkingArea;
                 if (w >= 600 && h >= 420) ClientSize = new Size(Math.Min(w, wa.Width), Math.Min(h, wa.Height));
                 _userCollapsed = Json.GetBool(d, "side");
-                if (d.ContainsKey("en")) L.English = Json.GetBool(d, "en");
                 _welcomeSeen = Json.GetBool(d, "welcome");
                 if (Json.GetBool(d, "max")) WindowState = FormWindowState.Maximized;
             }
@@ -2149,7 +2484,7 @@ namespace Win11Privacy
                 string txt = "{ \"w\": " + s.Width + ", \"h\": " + s.Height +
                              ", \"max\": " + (WindowState == FormWindowState.Maximized ? "true" : "false") +
                              ", \"side\": " + (_userCollapsed ? "true" : "false") +
-                             ", \"en\": " + (L.English ? "true" : "false") +
+                             ", \"lang\": " + _langChoice +
                              ", \"welcome\": " + (_welcomeSeen ? "true" : "false") +
                              ", \"theme\": " + _themeChoice + " }";
                 File.WriteAllText(p, txt);
@@ -2194,8 +2529,9 @@ namespace Win11Privacy
         {
             string[] baseMods = { "telemetry", "errors", "activity", "input", "edge", "delivery",
                                   "ads", "search", "copilot", "ai", "cleanup", "apppriv", "network" };
-            string[] strictAdd = { "widgets", "location", "onedrive", "defender", "services", "hosts" };
+            string[] strictAdd = { "widgets", "location", "onedrive", "cloudsync", "defender", "services", "hosts" };
             int n = 0;
+            _presetBusy = true;
             foreach (ModuleDef m in _mods)
             {
                 if (m.Row == null) continue;
@@ -2208,6 +2544,8 @@ namespace Win11Privacy
                 m.Row.Checked = on;
                 if (on) n++;
             }
+            _presetBusy = false;
+            if (_preset != null) _preset.Selected = kind;
             string title = kind == "max" ? L.T("Максимум") : (kind == "strict" ? L.T("Строгий") : L.T("Базовый"));
             _status.Text = L.T("Набор «") + title + L.T("»: отмечено разделов — ") + n + ".";
             if (_settingsList != null) _settingsList.Invalidate(true);
@@ -2370,7 +2708,8 @@ namespace Win11Privacy
         private static readonly string[] WriteFlags = {
             "-Revert", "-RestoreAll", "-RestoreItems", "-RestoreBackup", "-RemoveApps",
             "-StartupSet", "-SensorSet", "-FootprintWipe", "-XrayWipe", "-PurgeBuffer",
-            "-PurgeData", "-CleanJunk", "-BlockApp", "-UnblockApp", "-InstallGuard",
+            "-PurgeData", "-CleanJunk", "-BlockApp", "-UnblockApp", "-InstallGuard", "-GdidReissue", "-GdidRestore",
+            "-InstallNetGuard", "-RemoveNetGuard",
             "-RemoveGuard", "-GuardNow", "-InstallWatcher", "-RemoveWatcher",
             "-InstallSensorGuard", "-RemoveSensorGuard", "-EnableMonitor",
             "-DisableMonitor", "-XrayEnable", "-XrayDisable", "-XrayBaseline"
@@ -2620,7 +2959,7 @@ namespace Win11Privacy
             if (_progress.Parent != null) _progress.Parent.PerformLayout();
             _status.Location = new Point(busy ? (int)(Font.Height * 11F) : (int)(Font.Height * 1.2F), _status.Location.Y);
             if (_btnApply != null) _btnApply.Enabled = !busy;
-            if (_btnRevert != null) _btnRevert.Enabled = !busy;
+            if (_miRevert != null) _miRevert.Enabled = !busy;
             if (_btnGuardInstall != null) _btnGuardInstall.Enabled = !busy;
             if (_monitorToggle != null) _monitorToggle.Enabled = !busy;
         }
@@ -2629,6 +2968,9 @@ namespace Win11Privacy
         //  Detect при старте
         // ================================================================== //
         private bool _spyAutoRan;
+
+        // что перестанет работать — по номеру настройки, для «Что изменится»
+        private readonly Dictionary<string, string> _defNotes = new Dictionary<string, string>();
 
         // Список отдельных настроек внутри каждого модуля — приходит из движка
         private void LoadDefs()
@@ -2653,7 +2995,11 @@ namespace Win11Privacy
                     foreach (object io2 in items)
                     {
                         Dictionary<string, object> it = Json.Obj(io2);
-                        SubOptionRow r = new SubOptionRow(Json.GetStr(it, "id"), L.T(Json.GetStr(it, "name")));
+                        string risk = Json.GetStr(it, "risk");
+                        string note = Json.GetStr(it, "note");
+                        string riskText = risk == "caution" ? L.T("осторожно") : (risk == "limited" ? L.T("с последствиями") : "");
+                        if (note.Length > 0) _defNotes[Json.GetStr(it, "id")] = L.T(note);
+                        SubOptionRow r = new SubOptionRow(Json.GetStr(it, "id"), L.T(Json.GetStr(it, "name")), risk, L.T(note), riskText);
                         r.Font = Font;
                         m.Subs.Add(r);
                         _settingsList.Controls.Add(r);
@@ -2729,7 +3075,7 @@ namespace Win11Privacy
             // sysinfo
             string os = Json.GetStr(d, "os"); string ed = Json.GetStr(d, "edition");
             if (_sysInfoLabel != null) _sysInfoLabel.Text = os.Replace("Microsoft ", "") + "\n" + ed + L.T("  •  сборка ") + Json.GetStr(d, "build");
-            if (_homeSysChip != null) _homeSysChip.SetText(os.Replace("Microsoft ", "") + L.T("  •  сборка ") + Json.GetStr(d, "build"));
+            _homeSys = os.Replace("Microsoft ", "") + L.T(" · сборка ") + Json.GetStr(d, "build");
 
             // доступность программных модулей
             Dictionary<string, bool> appFound = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
@@ -2770,12 +3116,9 @@ namespace Win11Privacy
             RenderGuard();
             UpdateHomeAlert();
             if (_aboutVersion != null) SetAboutBody(_aboutVersion, VersionText());
-            // бейджи навигации
-            foreach (NavItem n in _nav)
-            {
-                if ((string)n.Tag == "guard") { n.Badge = _guardInstalled ? L.T("вкл") : ""; n.Invalidate(); }
-                if ((string)n.Tag == "monitor") { n.Badge = _monitorEnabled ? L.T("вкл") : ""; n.Invalidate(); }
-            }
+            // Отметки «вкл» у разделов убраны: включённое состояние видно на
+            // самих страницах, а точка в панели означает только «загляните».
+            RefreshHome();
         }
 
         // ================================================================== //
@@ -2848,17 +3191,32 @@ namespace Win11Privacy
                         f.ClientSize = new Size(tw, th2);
                 }
                 if (mock) f.InjectMocks();
-                if (Environment.GetEnvironmentVariable("WIN11_TEST_EXPAND") == "1")
+                // «1» — раскрыть первый модуль; имя модуля — раскрыть его и прокрутить к нему
+                string expand = Environment.GetEnvironmentVariable("WIN11_TEST_EXPAND");
+                if (!string.IsNullOrEmpty(expand))
                 {
-                    Timer ex = new Timer(); ex.Interval = 7000;
+                    // пункты приходят из движка после определения системы — ждём их
+                    Timer ex = new Timer(); ex.Interval = 1000;
+                    int tries = 0;
                     ex.Tick += delegate {
-                        ex.Stop();
-                        foreach (ModuleDef md in f._mods) if (md.Subs.Count > 0) { f.ToggleModule(md); break; }
+                        if (++tries > 40) { ex.Stop(); return; }
+                        foreach (ModuleDef md in f._mods)
+                        {
+                            if (md.Subs.Count == 0 || (expand != "1" && md.Id != expand)) continue;
+                            ex.Stop();
+                            f.ToggleModule(md);
+                            if (expand != "1") try { f._settingsList.ScrollControlIntoView(md.Subs[md.Subs.Count - 1]); f._settingsList.Restack(); } catch { }
+                            break;
+                        }
                     };
                     ex.Start();
                 }
                 f.Navigate(page);
                 if (Environment.GetEnvironmentVariable("WIN11_TEST_UPDATE") == "1") f.PressUpdateForTest();
+                string sideTest = Environment.GetEnvironmentVariable("WIN11_TEST_SIDE");
+                if (!string.IsNullOrEmpty(sideTest)) f.StartSideTest(sideTest);
+                string toggles = Environment.GetEnvironmentVariable("WIN11_TEST_TOGGLES");
+                if (!string.IsNullOrEmpty(toggles)) ToggleSwitch.RenderSheet(toggles, f.Font);
                 string q = Environment.GetEnvironmentVariable("WIN11_TEST_QUERY");
                 if (!string.IsNullOrEmpty(q))
                 {
@@ -2875,6 +3233,10 @@ namespace Win11Privacy
             Application.Run(f); return;
 #pragma warning disable 0162
 #endif
+            // Сообщения до главного окна (например, «нужны права администратора»)
+            // тоже на языке Windows, а не всегда по-русски
+            L.DetectFromSystem();
+
             // тихий режим командной строки
             string profile = null; bool silent = false, audit = false;
             for (int i = 0; i < argv.Length; i++)
@@ -2964,6 +3326,7 @@ namespace Win11Privacy
                 if (skip.Count > 0) extra += " -SkipItems " + string.Join(",", skip.ToArray());
                 if (d.ContainsKey("backup") && !Json.GetBool(d, "backup")) extra += " -NoBackup";
                 if (d.ContainsKey("restorePoint") && !Json.GetBool(d, "restorePoint")) extra += " -NoRestorePoint";
+                if (d.ContainsKey("allProfiles") && Json.GetBool(d, "allProfiles")) extra += " -AllProfiles";
                 return RunEngineConsole(extra);
             }
             catch { return 1; }
@@ -2974,7 +3337,7 @@ namespace Win11Privacy
             // возвращает число несоответствий как код выхода
             string script = ExtractEngineStatic();
             ProcessStartInfo psi = new ProcessStartInfo("powershell.exe",
-                "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" -Audit");
+                "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" -Audit");
             psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = Encoding.UTF8; psi.CreateNoWindow = true;
             Process p = Process.Start(psi);
             string json = null;
@@ -2992,7 +3355,7 @@ namespace Win11Privacy
             string script = ExtractEngineStatic();
             string desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
             ProcessStartInfo psi = new ProcessStartInfo("powershell.exe",
-                "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" " + extra + " -BackupRoot \"" + desktop + "\"");
+                "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" " + extra + " -BackupRoot \"" + desktop + "\"");
             psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = Encoding.UTF8; psi.CreateNoWindow = true;
             Process p = Process.Start(psi);
             while (!p.StandardOutput.EndOfStream) { string l = p.StandardOutput.ReadLine(); if (l != null && !l.TrimStart().StartsWith("###JSON###") && l.Trim() != "###DONE###") Console.WriteLine(l); }

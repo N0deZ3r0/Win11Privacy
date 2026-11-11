@@ -61,6 +61,10 @@ param(
     [switch]$InstallSensorGuard,
     [switch]$RemoveSensorGuard,
     [switch]$SensorGuard,
+    # --- слежение за сетью: уведомление о новой программе ---
+    [switch]$InstallNetGuard,
+    [switch]$RemoveNetGuard,
+    [switch]$NetGuard,
     [switch]$SelfTest,
     # --- отдельные настройки внутри модулей ---
     [switch]$ListDefs,
@@ -106,7 +110,15 @@ param(
     [int]$TimelineDays = 30,
     [switch]$ListBackups,
     [switch]$RestoreBackup,
-    [string]$BackupPath = ''
+    [string]$BackupPath = '',
+    # --- номер устройства в учётной записи Microsoft (GDID) ---
+    [switch]$GdidStatus,
+    # --- настройки пользователя — ещё и в другие профили и в профиль по умолчанию ---
+    [switch]$AllProfiles,
+    # --- проверка утечек: доходит ли соединение до серверов сбора ---
+    [switch]$LeakTest,
+    [switch]$GdidReissue,
+    [switch]$GdidRestore
 )
 
 $ErrorActionPreference = 'Continue'
@@ -175,13 +187,25 @@ $script:DataDir        = $(if ($DataRoot) { $DataRoot } else { Join-Path $env:Pr
 # Задачам планировщика путь к данным надо передать явно: они запускаются
 # сами по себе и о переносимом режиме иначе не узнают.
 $script:DataArg        = $(if ($DataRoot) { ' -DataRoot "' + $DataRoot + '"' } else { '' })
+# Корень в ProgramData. Здесь копия движка, которую задачи планировщика
+# запускают с правами администратора, — и в переносимом режиме тоже: рядом с
+# exe писать может любая программа пользователя, и подменённый скрипт молча
+# выполнился бы с повышенными правами при следующем входе в систему.
+$script:SafeRoot       = Join-Path $env:ProgramData 'Win11Privacy'
+$script:TaskEngine     = Join-Path $script:SafeRoot 'engine.ps1'
+$script:RootState      = $null        # защищён ли корень: $null — ещё не проверяли
+# Владельцы, которым можно верить: система, администраторы, TrustedInstaller
+$script:TrustedSids    = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+$script:JournalFailed  = $false       # журнал отката не записался — дальше ничего не меняем
+$script:JournalLockTries = 6          # по 10 секунд: другой запуск может писать журнал долго
+$script:JournalLockWaitMs = 10000
 $script:GuardTask      = 'Win11Privacy Guard'
 $script:SensorTask     = 'Win11Privacy Sensor'
 $script:AuditGuid      = '{0CCE9226-69AE-11D9-BED3-505054503030}'   # Filtering Platform Connection
 $script:DiagDir        = Join-Path $env:ProgramData 'Microsoft\Diagnosis'
 # Все виды определений, которые пишут в реестр. Список один, потому что
 # забыть про новый вид в резервной копии или уборке — тихая потеря данных.
-$script:RegTypes = @('reg', 'regif', 'regpol')
+$script:RegTypes = @('reg', 'regif', 'regpol', 'regsvc')
 # Номер сборки Windows: по нему настройки, которых на этой версии нет вовсе
 # (Copilot, Recall, виджеты — их не было до Windows 11), не считаются
 # «не применёнными». Иначе на Windows 10 индекс был бы низким без вины
@@ -200,7 +224,7 @@ $script:UnblockedIds = @{}
 # Журнал изменений реестра: что было до нашего вмешательства.
 # Без него откат требовал ручного импорта .reg-файлов.
 $script:Journal = New-Object System.Collections.Generic.List[object]
-$script:TelemetryDnsRegex = 'telemetry|vortex|events\.data\.microsoft|pipe\.aria|watson|settings-win\.data|ceipdata|telecommand|sqm\.|nexusrules|nexus\.officeapps|data\.microsoft\.com|activity\.windows\.com|licensing\.mp\.microsoft|browser\.events'
+$script:TelemetryDnsRegex = 'telemetry|vortex|events\.data\.microsoft|pipe\.aria|watson|settings-win\.data|ceipdata|telecommand|sqm\.|nexusrules|nexus\.officeapps|data\.microsoft\.com|activity\.windows\.com|licensing\.mp\.microsoft|browser\.events|dds\.microsoft\.com|cdpcs\.access\.microsoft|\.do\.dsp\.mp\.microsoft'
 
 # =========================================================================== #
 #  Служебные функции
@@ -363,7 +387,119 @@ function Split-TaskPath {
     return @($path, $name)
 }
 
-function Ensure-DataDir { if (-not (Test-Path -LiteralPath $script:DataDir)) { New-Item -ItemType Directory -Path $script:DataDir -Force | Out-Null } }
+# --- Защита папки данных ------------------------------------------------------ #
+#  Из ProgramData\Win11Privacy журнал отката читается с правами администратора
+#  (по нему пишется реестр), а копию движка оттуда запускают задачи стража.
+#  Права ProgramData по умолчанию позволяют обычному пользователю создавать
+#  файлы и папки во всех её подпапках, и подложенный заранее changes.json.tmp
+#  или engine.ps1 остался бы его собственностью: он мог бы дописать в журнал
+#  что угодно, а откат записал бы это в реестр от имени администратора.
+#  Поэтому права корня задаются явно — писать могут только система и
+#  администраторы, — а всё, что завёл кто-то другой, уходит в карантин.
+function Get-OwnerSid {
+    param([string]$Path)
+    try { return (Get-Acl -LiteralPath $Path -ErrorAction Stop).GetOwner([Security.Principal.SecurityIdentifier]).Value } catch { return '' }
+}
+
+function Test-DirSecure {
+    param([string]$Dir)
+    try {
+        if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return $false }
+        if ((Get-Item -LiteralPath $Dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+        $acl = Get-Acl -LiteralPath $Dir -ErrorAction Stop
+        if ($script:TrustedSids -notcontains $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value) { return $false }
+        if (-not $acl.AreAccessRulesProtected) { return $false }
+        # запись, удаление, смена прав или владельца — в том числе общими правами
+        $writeMask = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
+        foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+            if ("$($r.AccessControlType)" -ne 'Allow') { continue }
+            if ($script:TrustedSids -contains $r.IdentityReference.Value) { continue }
+            if (([int64]$r.FileSystemRights -band $writeMask) -ne 0) { return $false }
+        }
+        return $true
+    } catch { return $false }
+}
+
+function Protect-DataRoot {
+    param([string]$Dir)
+    if (-not (Test-Admin)) { return (Test-DirSecure $Dir) }
+    try {
+        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        if (Test-Path -LiteralPath $Dir) {
+            $it = Get-Item -LiteralPath $Dir -Force
+            if (($it.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($script:TrustedSids -notcontains (Get-OwnerSid $Dir))) {
+                # папку завёл не администратор — ничему внутри верить нельзя
+                [IO.Directory]::Move($Dir, "$Dir.untrusted-$stamp")
+                Write-Log ("   [!] папку данных завёл не администратор -- она отложена как {0}" -f (Split-Path "$Dir.untrusted-$stamp" -Leaf))
+            }
+        }
+        if (-not (Test-Path -LiteralPath $Dir)) { New-Item -ItemType Directory -Path $Dir -Force | Out-Null }
+        if (Test-DirSecure $Dir) { return $true }
+        # Папка прежних версий: права наследовались от ProgramData. Всё, что в
+        # ней создал не администратор, и любые ссылки уносим в карантин рядом.
+        $aside = "$Dir.untrusted-$stamp"
+        foreach ($c in @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue)) {
+            $bad = ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($script:TrustedSids -notcontains (Get-OwnerSid $c.FullName))
+            if (-not $bad) { continue }
+            if (-not (Test-Path -LiteralPath $aside)) { New-Item -ItemType Directory -Path $aside -Force | Out-Null }
+            $to = Join-Path $aside $c.Name
+            if ($c.PSIsContainer) { [IO.Directory]::Move($c.FullName, $to) } else { [IO.File]::Move($c.FullName, $to) }
+            Write-Log ("   [!] в папке данных лежал чужой файл, он отложен: {0}" -f $c.Name)
+        }
+        $sec = New-Object System.Security.AccessControl.DirectorySecurity
+        $sec.SetAccessRuleProtection($true, $false)
+        $inh = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+        foreach ($p in @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @('S-1-5-32-545', 'ReadAndExecute'))) {
+            $sid = New-Object Security.Principal.SecurityIdentifier($p[0])
+            $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, $p[1], $inh, 'None', 'Allow')))
+        }
+        $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        [IO.Directory]::SetAccessControl($Dir, $sec)
+        return (Test-DirSecure $Dir)
+    } catch {
+        Write-Log ("   [!] не удалось защитить папку данных {0}: {1}" -f $Dir, $_.Exception.Message)
+        return $false
+    }
+}
+
+function Assert-SafeRoot {
+    if ($null -eq $script:RootState) { $script:RootState = [bool](Protect-DataRoot $script:SafeRoot) }
+    return $script:RootState
+}
+
+# Журнал читается и пишется только из защищённой папки. В переносимом режиме
+# данные лежат рядом с exe и защищены ровно так же, как сам exe.
+function Test-DataTrusted {
+    if ($script:DataDir -ne $script:SafeRoot) { return $true }
+    return (Assert-SafeRoot)
+}
+
+function Ensure-DataDir {
+    if ($script:DataDir -eq $script:SafeRoot) {
+        if (-not (Assert-SafeRoot)) { throw 'папка данных программы не защищена от подмены' }
+        return
+    }
+    if (-not (Test-Path -LiteralPath $script:DataDir)) { New-Item -ItemType Directory -Path $script:DataDir -Force | Out-Null }
+}
+
+# Копия движка для задач планировщика: всегда в защищённом корне, пишется
+# рядом и подменяет прежнюю одним движением, а перед этим сверяется с
+# оригиналом по SHA-256.
+function Install-TaskEngine {
+    if (-not (Assert-SafeRoot)) { throw 'папка ProgramData\Win11Privacy не защищена — копию движка для задач туда класть нельзя' }
+    $dst = $script:TaskEngine
+    if ($PSCommandPath -eq $dst) { return $dst }
+    $tmp = $dst + '.new'
+    Copy-Item -LiteralPath $PSCommandPath -Destination $tmp -Force -ErrorAction Stop
+    if ((Get-FileHash -LiteralPath $tmp -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash) {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        throw 'копия движка для задач не совпала с оригиналом'
+    }
+    Move-Item -LiteralPath $tmp -Destination $dst -Force -ErrorAction Stop
+    # прежние версии в переносимом режиме клали копию рядом с данными
+    if ($script:DataDir -ne $script:SafeRoot) { Remove-Item -LiteralPath (Join-Path $script:DataDir 'engine.ps1') -Force -ErrorAction SilentlyContinue }
+    return $dst
+}
 
 # Файл пишется рядом и подменяет прежний одним движением: обрыв на середине
 # записи (выключили питание, прервали движок) не оставит от журнала отката
@@ -444,18 +580,72 @@ function Ensure-Backup {
 # Журнал читается и переписывается целиком, поэтому два одновременно
 # работающих экземпляра затирали правки друг друга — а журнал единственный
 # путь назад. Общесистемный замок делает запись неделимой.
+# Не дождались замка — не пишем вовсе: раньше после 10 секунд ожидания тело
+# выполнялось без замка, и два запуска снова затирали друг другу журнал.
 function Use-JournalLock {
     param([scriptblock]$Body)
-    $mx = $null
-    try { $mx = New-Object System.Threading.Mutex($false, 'Global\Win11Privacy-Journal') } catch { }
+    $mx = New-Object System.Threading.Mutex($false, 'Global\Win11Privacy-Journal')
     $held = $false
-    if ($mx) { try { $held = $mx.WaitOne(10000) } catch [System.Threading.AbandonedMutexException] { $held = $true } catch { } }
-    try { & $Body }
-    finally {
-        if ($mx) {
-            if ($held) { try { $mx.ReleaseMutex() } catch { } }
-            try { $mx.Dispose() } catch { }
+    try {
+        for ($i = 0; $i -lt $script:JournalLockTries -and -not $held; $i++) {
+            try { $held = $mx.WaitOne($script:JournalLockWaitMs) }
+            catch {
+                # прежний владелец завершился, не отпустив замок: замок наш
+                if ("$($_.Exception)" -match 'AbandonedMutex') { $held = $true } else { throw }
+            }
         }
+        if (-not $held) { throw 'журнал отката занят другим запуском программы' }
+        & $Body
+    } finally {
+        if ($held) { try { $mx.ReleaseMutex() } catch { } }
+        try { $mx.Dispose() } catch { }
+    }
+}
+
+# Журнал на диске. Повреждённый файл не затирается молча новыми записями —
+# раньше Load-Json возвращал пустоту, и вся история «как было» терялась при
+# следующей же записи. Теперь он откладывается рядом под своим именем.
+function Read-JournalFile {
+    $p = Join-Path $script:DataDir 'changes.json'
+    $res = @{ items = @(); legacy = $false; exists = $false }
+    if (-not (Test-Path -LiteralPath $p)) { return $res }
+    $res.exists = $true
+    try { $j = Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch {
+        $bad = Join-Path $script:DataDir ('changes.broken-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.json')
+        Move-Item -LiteralPath $p -Destination $bad -Force -ErrorAction Stop
+        Write-Log ("   [!] журнал отката был повреждён и отложен как {0}" -f (Split-Path $bad -Leaf))
+        $res.exists = $false
+        $res.legacy = $true
+        return $res
+    }
+    if ($j -and $j.PSObject.Properties['items'] -and $j.items) { $res.items = @($j.items) }
+    # Журнал прежних версий: в нём нет служб, задач и переменных среды. Пометка
+    # остаётся с ним навсегда — полный откат для них ведёт себя по-старому.
+    $res.legacy = [bool](($j.PSObject.Properties['legacy'] -and $j.legacy) -or
+                         (-not $j.PSObject.Properties['schema'] -and $res.items.Count -gt 0))
+    return $res
+}
+
+function Write-JournalFile {
+    param($Items, [bool]$Legacy)
+    Save-Json 'changes.json' @{ schema = 2; legacy = $Legacy; items = @($Items); updated = (Get-Date).ToString('s') }
+}
+
+# Перед применением: журнал должен писаться, иначе ни одно изменение не
+# смогло бы вернуться. Проверяем заранее, пока ничего не тронуто.
+function Test-JournalWritable {
+    if ($DryRun) { return $true }
+    try {
+        if (-not (Test-DataTrusted)) { throw 'папка данных программы не защищена от подмены' }
+        Use-JournalLock {
+            Save-Json 'journal-check.json' @{ time = (Get-Date).ToString('s') }
+            Remove-Item -LiteralPath (Join-Path $script:DataDir 'journal-check.json') -Force -ErrorAction Stop
+        }
+        return $true
+    } catch {
+        Write-Log ("   [!] журнал отката не записывается: {0}" -f $_.Exception.Message)
+        return $false
     }
 }
 
@@ -477,6 +667,19 @@ function ConvertTo-Fields {
     return $h
 }
 
+# Ключ записи журнала: про каждый параметр важна самая ранняя запись. Записи
+# других профилей (hive) различаются файлом куста — у каждого пользователя свой.
+function Get-JournalKey {
+    param($F)
+    $k = "$($F['kind'])"
+    if ($k -eq 'startup') { return "startup|$($F['id'])" }
+    if ($k -eq 'hive') { return ("hive|{0}|{1}|{2}" -f "$($F['file'])", "$($F['sub'])", "$($F['name'])").ToLowerInvariant() }
+    if ($k -eq 'svc')  { return ("svc|{0}" -f "$($F['name'])").ToLowerInvariant() }
+    if ($k -eq 'task') { return ("task|{0}" -f "$($F['path'])").ToLowerInvariant() }
+    if ($k -eq 'env')  { return ("env|{0}" -f "$($F['name'])").ToLowerInvariant() }
+    return ("reg|{0}|{1}" -f "$($F['path'])", "$($F['name'])").ToLowerInvariant()
+}
+
 function Compress-Journal {
     param($Items)
     $order = New-Object System.Collections.Generic.List[string]
@@ -484,8 +687,7 @@ function Compress-Journal {
     foreach ($e in @($Items)) {
         $f = ConvertTo-Fields $e
         if ($f.Count -eq 0) { continue }
-        $key = if ("$($f['kind'])" -eq 'startup') { "startup|$($f['id'])" }
-               else { ("reg|{0}|{1}" -f "$($f['path'])", "$($f['name'])").ToLowerInvariant() }
+        $key = Get-JournalKey $f
         if (-not $first.ContainsKey($key)) {
             if (-not $f.ContainsKey('count') -or [int]$f['count'] -lt 1) { $f['count'] = 1 }
             $first[$key] = $f
@@ -506,23 +708,123 @@ function Compress-Journal {
 # Дописывает накопленный журнал «что было до нас» к changes.json. Раньше это
 # делалось только в самом конце применения модулей — теперь любая команда,
 # меняющая систему, может сохранить свой след для отката одной кнопкой.
+# Ошибка записи больше не глотается: раньше программа сообщала об успехе,
+# а «как было» на диск не попадало, и откат потом молча ничего не возвращал.
+# Теперь она видна в журнале работы, а дальнейшие изменения останавливаются
+# ($script:JournalFailed) — менять систему без записи для отката нельзя.
 function Save-JournalEntries {
     param([switch]$Quiet)
     if ($DryRun -or $script:Journal.Count -eq 0) { return }
     $mine = $script:Journal.Count
-    Use-JournalLock {
-        try {
-            $prev = Load-Json 'changes.json'
+    try {
+        if (-not (Test-DataTrusted)) { throw 'папка данных программы не защищена от подмены' }
+        Use-JournalLock {
+            $prev = Read-JournalFile
             $all = New-Object System.Collections.Generic.List[object]
-            if ($prev -and $prev.items) { foreach ($e in @($prev.items)) { $all.Add($e) } }
+            foreach ($e in @($prev.items)) { $all.Add($e) }
             foreach ($e in $script:Journal) { $all.Add($e) }
-            Save-Json 'changes.json' @{ items = (Compress-Journal $all.ToArray()); updated = (Get-Date).ToString('s') }
+            Write-JournalFile (Compress-Journal $all.ToArray()) $prev.legacy
             $script:Journal.Clear()
-        } catch { }
+        }
+    } catch {
+        if (-not $script:JournalFailed) {
+            Write-Log ("   [!] журнал отката не записался: {0}" -f $_.Exception.Message)
+            Write-Log '       Дальше программа ничего не меняет: изменение без записи в журнале нельзя было бы вернуть.'
+        }
+        $script:JournalFailed = $true
+        $script:Failures++
+        return
     }
-    if (-not $Quiet -and $script:Journal.Count -eq 0) { Write-Log ("Записано в журнал отката: {0}" -f $mine) }
+    if (-not $Quiet) { Write-Log ("Записано в журнал отката: {0}" -f $mine) }
 }
 function Load-Json { param([string]$Name) $p = Join-Path $script:DataDir $Name; if (Test-Path -LiteralPath $p) { try { return (Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null } } return $null }
+
+# --- Службы, задачи и переменные среды в журнале отката --------------------- #
+#  Раньше журнал помнил только реестр, а полный откат включал службы и задачи
+#  «по умолчанию»: DiagTrack — автоматически, все задачи из списка — включить.
+#  Задача, которую человек выключил сам задолго до программы, после отката
+#  включалась. Теперь у каждой записано, какой она была до нас.
+function Add-JournalEntry {
+    param($Entry)
+    if ($DryRun) { return }
+    $Entry['time'] = (Get-Date).ToString('s')
+    $script:Journal.Add($Entry)
+    if ($script:Journal.Count -ge 10) { Save-JournalEntries -Quiet }
+}
+
+function Get-SvcJournalState {
+    param([string]$Name, $Svc)
+    $k = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
+    $start = Get-RegValue $k 'Start'
+    $delayed = Get-RegValue $k 'DelayedAutostart'
+    return @{ kind = 'svc'; name = $Name
+              old = $(if ($null -ne $start) { "$start" } else { '' })
+              delayed = $(if ($null -ne $delayed) { "$delayed" } else { '' })
+              running = [bool]($Svc -and $Svc.Status -eq 'Running')
+              newValue = '4' }
+}
+
+# Задачу программа гасит, только если она была включена, — это и запоминаем
+function Add-TaskJournal {
+    param([string]$Path)
+    Add-JournalEntry @{ kind = 'task'; path = $Path; old = 'Enabled'; newValue = 'Disabled' }
+}
+
+# Тип запуска службы словами — для страницы «Журнал изменений»
+function Get-StartName {
+    param([string]$Start, [string]$Delayed = '')
+    switch ("$Start") {
+        '0' { return 'при загрузке системы' }
+        '1' { return 'системная' }
+        '2' { if ("$Delayed" -eq '1') { return 'автоматически (отложенный запуск)' } return 'автоматически' }
+        '3' { return 'вручную' }
+        '4' { return 'отключена' }
+    }
+    return 'не было'
+}
+
+# Возвращает одну запись журнала (реестр, служба, задача, переменная среды).
+# Записи автозагрузки и чужих профилей возвращаются своими функциями.
+function Restore-JournalEntry {
+    param($e)
+    try {
+        switch ("$($e.kind)") {
+            'svc' {
+                $name = "$($e.name)"
+                if (-not (Get-Service -Name $name -ErrorAction SilentlyContinue)) { return @{ ok = $true; note = 'службы больше нет' } }
+                $start = "$($e.old)"
+                $k = "HKLM:\SYSTEM\CurrentControlSet\Services\$name"
+                $type = switch ($start) { '2' { 'Automatic' } '3' { 'Manual' } '4' { 'Disabled' } default { '' } }
+                if ($type) { Set-Service -Name $name -StartupType $type -ErrorAction Stop }
+                elseif ($start -ne '') { Set-ItemProperty -LiteralPath $k -Name 'Start' -Value ([int]$start) -Type DWord -ErrorAction Stop }
+                if ("$($e.delayed)" -ne '') { Set-ItemProperty -LiteralPath $k -Name 'DelayedAutostart' -Value ([int]"$($e.delayed)") -Type DWord -ErrorAction SilentlyContinue }
+                # работала до нас — запускаем снова, чтобы не ждать перезагрузки
+                if ($e.running -and $start -ne '4') { Start-Service -Name $name -ErrorAction SilentlyContinue }
+                return @{ ok = $true }
+            }
+            'task' {
+                if ("$($e.old)" -ne 'Enabled') { return @{ ok = $true } }
+                $r = Set-TaskEnabled "$($e.path)" $true
+                if ($r -in @('ok', 'system', 'missing')) { return @{ ok = $true } }
+                return @{ ok = $false; error = 'Windows не дала включить задачу' }
+            }
+            'env' {
+                $v = $(if ($e.existed) { "$($e.old)" } else { $null })
+                [Environment]::SetEnvironmentVariable("$($e.name)", $v, 'User')
+                return @{ ok = $true }
+            }
+            default {
+                if ($e.existed) {
+                    if (-not (Test-Path -LiteralPath $e.path)) { New-Item -Path $e.path -Force -ErrorAction Stop | Out-Null }
+                    New-ItemProperty -LiteralPath $e.path -Name $e.name -Value $e.old -PropertyType $e.type -Force -ErrorAction Stop | Out-Null
+                } else {
+                    Remove-ItemProperty -LiteralPath $e.path -Name $e.name -Force -ErrorAction SilentlyContinue
+                }
+                return @{ ok = $true }
+            }
+        }
+    } catch { return @{ ok = $false; error = $_.Exception.Message } }
+}
 
 # =========================================================================== #
 #  Определение системы
@@ -626,6 +928,13 @@ function Def {
     $seq = 0
     if ($script:DefSeq.ContainsKey($M)) { $seq = [int]$script:DefSeq[$M] }
     $script:DefSeq[$M] = $seq + 1
+    # Повтор в одном разделе (две задачи Proxy и DmClientOnScenarioDownload
+    # в списке служб) давал две одинаковые строки и считался дважды. Номер
+    # всё равно занимаем: по номерам профили помнят снятые пункты, и сдвиг
+    # переставил бы их на соседей.
+    foreach ($x in $script:Defs) {
+        if ($x.M -eq $M -and $x.T -eq $T -and "$($x.P)" -eq "$P" -and "$($x.N)" -eq "$N") { return }
+    }
     $script:Defs.Add(@{ M=$M; T=$T; P=$P; N=$N; V=$V; Type=$Type; C=$C; Min=[int]$Min
                         Id=("{0}#{1}" -f $M, $seq) })
 }
@@ -680,6 +989,18 @@ Def 'ads' 'reg' $cc 'DisableWindowsSpotlightFeatures' 1 'DWord' 'Windows Spotlig
 Def 'ads' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'Start_IrisRecommendations' 0 'DWord' 'рекомендации в меню Пуск'
 Def 'ads' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'ShowSyncProviderNotifications' 0 'DWord' 'реклама OneDrive в Проводнике'
 Def 'ads' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement' 'ScoobeSystemSettingEnabled' 0 'DWord' '«Получите больше от Windows» после обновлений — выкл'
+# Найдены в каталоге политик Windows (PolicyManager): реклама и «интересное»,
+# которые программа раньше не трогала. Пользовательские — в HKCU.
+$ccu = 'HKCU:\Software\Policies\Microsoft\Windows\CloudContent'
+Def 'ads' 'reg' $ccu 'DisableThirdPartySuggestions' 1 'DWord' 'предложения сторонних приложений в «интересном» — выкл'
+Def 'ads' 'reg' $ccu 'DisableWindowsSpotlightOnActionCenter' 1 'DWord' '«интересное» в центре уведомлений — выкл'
+Def 'ads' 'reg' $ccu 'DisableWindowsSpotlightOnSettings' 1 'DWord' '«интересное» в Параметрах — выкл'
+Def 'ads' 'reg' $ccu 'DisableWindowsSpotlightWindowsWelcomeExperience' 1 'DWord' 'приветственная реклама после обновлений — выкл'
+Def 'ads' 'reg' $ccu 'DisableSpotlightCollectionOnDesktop' 1 'DWord' 'обои «Windows: интересное» на рабочем столе — выкл'
+# Экран «Закрепите Copilot» при входе (ShellAppRuntime.exe, рекламные блоки 88000325/88000326)
+Def 'ads' 'reg' $cc 'DisableCopilotPinScreen' 1 'DWord' 'экран «Закрепите Copilot» при входе — выкл'
+# Реклама приложений в окне «Поделиться» (SharePickerUI.dll)
+Def 'ads' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\ShareSheet' 'DisableShareAppPromotions' 1 'DWord' 'реклама приложений в окне «Поделиться» — выкл'
 
 $sys = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
 Def 'activity' 'reg' $sys 'EnableActivityFeed' 0 'DWord' 'лента активности — выкл'
@@ -721,6 +1042,7 @@ Def 'copilot' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Ad
 Def 'copilot' 'reg' $ai 'DisableAIDataAnalysis' 1 'DWord' 'Recall (снимки экрана) — выкл' 26100
 Def 'copilot' 'reg' $ai 'AllowRecallEnablement' 0 'DWord' 'запрет включения Recall' 26100
 Def 'copilot' 'reg' 'HKCU:\Software\Policies\Microsoft\Windows\WindowsAI' 'DisableAIDataAnalysis' 1 'DWord' 'Recall — выкл для пользователя' 26100
+Def 'copilot' 'reg' $ai 'AllowRecallExport' 0 'DWord' 'Recall: выгрузка снимков — запрещена' 26100
 
 # Весь ИИ Windows
 Def 'ai' 'reg' $ai 'DisableClickToDo' 1 'DWord' 'Click to Do — выкл' 26100
@@ -738,6 +1060,13 @@ Def 'ai' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' 'Microsoft365CopilotChat
 Def 'ai' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer' 'DisableGraphRecentItems' 1 'DWord' 'Проводник: облачные «недавние» — выкл'
 Def 'ai' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer' 'HideRecommendedSection' 1 'DWord' 'Пуск: раздел «Рекомендуем» — скрыть' 22000
 Def 'ai' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'ShowRecommendations' 0 'DWord' 'Проводник: рекомендации в «Главной» — выкл' 22000
+# Политика выключает сам Click to Do, но задача по-прежнему скачивает его
+# модели ИИ. Администратору Windows её не отдаёт — отключается от SYSTEM.
+Def 'ai' 'task' '\Microsoft\Windows\WindowsAI\ClickToDo\ModelCachingUpdate' '' 'Disabled' '' 'Click to Do: скачивание моделей ИИ — выкл' 26100
+# ИИ-агенты работают с Windows через MCP-«коннекторы» (служба McpManagementService,
+# доступ выдаёт CapabilityAccessManager). 2 — запретить (шаблон CAM_AI.admx).
+Def 'ai' 'reg' $ai 'ConfigureAgentConnectors' 2 'DWord' 'ИИ-агенты: доступ к файлам и настройкам через MCP — запрещён' 26100
+Def 'ai' 'reg' $ai 'DisableSettingsAgent' 1 'DWord' 'ИИ-агент в Параметрах — выкл' 26100
 
 $e = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
 Def 'edge' 'reg' $e 'MetricsReportingEnabled' 0 'DWord' 'статистика использования — выкл'
@@ -782,6 +1111,7 @@ Def 'apppriv' 'reg' $ap 'LetAppsAccessTrustedDevices' 2 'DWord' 'доверен�
 Def 'apppriv' 'reg' $ap 'LetAppsGetDiagnosticInfo' 2 'DWord' 'диагностика других приложений — запрещена'
 Def 'apppriv' 'reg' $ap 'LetAppsActivateWithVoice' 2 'DWord' 'голосовая активация приложений — запрещена'
 Def 'apppriv' 'reg' $ap 'LetAppsActivateWithVoiceAboveLock' 2 'DWord' 'голосовая активация на экране блокировки — запрещена'
+Def 'apppriv' 'reg' $ap 'LetAppsAccessSystemAIModels' 2 'DWord' 'встроенные ИИ-модели Windows — запрещены приложениям' 26100
 
 # Камера, микрофон и фоновая работа — отдельно: без них приложения из магазина
 # теряют эти функции. Обычных программ (браузеров, мессенджеров) не касается.
@@ -804,14 +1134,51 @@ Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Messaging' 'Allow
 Def 'network' 'reg' 'HKCU:\SOFTWARE\Microsoft\Messaging' 'CloudServiceSyncEnabled' 0 'DWord' 'облачная синхронизация сообщений — выкл'
 Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\TCPIP\v6Transition' 'Teredo_State' 'Disabled' 'String' 'Teredo (туннель IPv6 через Microsoft) — выкл'
 Def 'network' 'reg' 'HKLM:\SOFTWARE\Microsoft\WcmSvc\wifinetworkmanager\config' 'AutoConnectAllowedOEM' 0 'DWord' 'Wi-Fi Sense — выкл'
+Def 'network' 'task' '\Microsoft\Windows\Sustainability\PowerGridForecastTask' '' 'Disabled' '' 'не скачивать прогноз нагрузки энергосети'
+# Магазин умеет ставить приложения на этот ПК по команде с сайта, без
+# действий за компьютером (служба PushToInstall, pti.store.microsoft.com).
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\PushToInstall' 'DisablePushToInstall' 1 'DWord' 'установка приложений на этот ПК по команде с сайта — выкл'
+# «Рекомендуемое устранение неполадок»: MitigationClient получает от
+# Microsoft «исправления» (troubleshooting.microsoft.com/api/Mitigation)
+# и применяет их сам. UserPreference = 1 — «не запускать».
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Microsoft\WindowsMitigation' 'UserPreference' 1 'DWord' 'не применять «исправления», присланные Microsoft'
+Def 'network' 'task' '\Microsoft\Windows\Diagnosis\RecommendedTroubleshootingScanner' '' 'Disabled' '' 'задача RecommendedTroubleshootingScanner (поиск «исправлений» Microsoft)'
+Def 'network' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\ScriptedDiagnosticsProvider\Policy' 'EnableQueryRemoteServer' 0 'DWord' 'средства устранения неполадок не обращаются к серверам Microsoft'
+
+# Облачная синхронизация и копия. Windows 11 без вопроса выгружает в облако
+# Microsoft список ваших приложений («Архивация Windows»), сети Wi-Fi, язык,
+# тему, настройки пера — и даже ваши ответы на вопросы о конфиденциальности.
+# Всё найдено на чистой Windows 11 25H2; задачи отключаются и включаются
+# обратно без последствий для системы.
+$ss = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'
+Def 'cloudsync' 'reg' $ss 'DisableSettingSync' 2 'DWord' 'синхронизация параметров между устройствами — выкл'
+Def 'cloudsync' 'reg' $ss 'DisableSettingSyncUserOverride' 1 'DWord' 'синхронизацию параметров не включить обратно в Параметрах'
+Def 'cloudsync' 'task' '\Microsoft\Windows\AppListBackup\Backup' '' 'Disabled' '' 'копия списка приложений в облако — выкл'
+Def 'cloudsync' 'task' '\Microsoft\Windows\AppListBackup\BackupNonMaintenance' '' 'Disabled' '' 'внеплановая копия списка приложений — выкл'
+Def 'cloudsync' 'task' '\Microsoft\Windows\CloudRestore\Backup' '' 'Disabled' '' 'архивация Windows в облако — выкл'
+Def 'cloudsync' 'task' '\Microsoft\Windows\ConsentUX\UnifiedConsent\UnifiedConsentSyncTask' '' 'Disabled' '' 'синхронизация ваших согласий на сбор данных — выкл'
+Def 'cloudsync' 'task' '\Microsoft\Windows\WlanSvc\CDSSync' '' 'Disabled' '' 'синхронизация сетей Wi-Fi между устройствами — выкл'
+Def 'cloudsync' 'task' '\Microsoft\Windows\International\Synchronize Language Settings' '' 'Disabled' '' 'синхронизация языковых настроек — выкл'
+Def 'cloudsync' 'task' '\Microsoft\Windows\Shell\ThemesSyncedImageDownload' '' 'Disabled' '' 'скачивание обоев с других ваших устройств — выкл'
+Def 'cloudsync' 'task' '\Microsoft\Windows\input\syncpensettings' '' 'Disabled' '' 'синхронизация настроек пера — выкл'
+# Само приложение «Архивация Windows» (CloudRestoreLauncher.dll, SyncSettings.dll)
+Def 'cloudsync' 'reg' $ss 'EnableWindowsBackup' 0 'DWord' 'приложение «Архивация Windows» — выкл'
 
 Def 'widgets' 'regpol' 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests' 0 'DWord' 'виджеты и лента новостей MSN — выкл' 22000
 Def 'widgets' 'reg' 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'TaskbarDa' 0 'DWord' 'кнопка виджетов на панели задач — убрать' 22000
 Def 'widgets' 'regpol' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds' 'EnableFeeds' 0 'DWord' 'лента новостей и интересов — выкл (запасной ключ)'
+Def 'widgets' 'regpol' 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'DisableWidgetsBoard' 1 'DWord' 'панель виджетов — выкл' 22000
+Def 'widgets' 'regpol' 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'DisableWidgetsOnLockScreen' 1 'DWord' 'виджеты на экране блокировки — выкл' 22000
 
 $dfn = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet'
 Def 'defender' 'reg' $dfn 'SpyNetReporting' 0 'DWord' 'Защитник: облачная отправка MAPS — выкл'
 Def 'defender' 'reg' $dfn 'SubmitSamplesConsent' 2 'DWord' 'Защитник: отправка образцов файлов — никогда'
+# Служба ядра Защитника (MDCoreSvc) раз в час забирает с ecs.office.com около
+# 130 удалённых настроек: включение функций, проверку запросов к ИИ-агентам,
+# уведомления Microsoft 365. Проверено в виртуалке: с этой политикой обращения
+# к ECS пропадают. Её же DisableCoreService1DSTelemetry отправку телеметрии
+# не остановил — её закрывает hosts (mobile.events.data.microsoft.com).
+Def 'defender' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Features' 'DisableCoreServiceECSIntegration' 1 'DWord' 'Защитник: удалённые настройки и эксперименты (ECS) — выкл'
 
 Def 'services' 'svc' 'DiagTrack' '' 'Disabled' '' 'служба DiagTrack (телеметрия)'
 Def 'services' 'svc' 'dmwappushservice' '' 'Disabled' '' 'служба dmwappushservice (WAP push)'
@@ -864,6 +1231,13 @@ foreach ($tp in @(
     '\Microsoft\Windows\Maps\MapsToastTask')) {
     Def 'services' 'task' $tp '' 'Disabled' '' ('задача ' + (Split-Path $tp -Leaf))
 }
+# Тоже из Windows 11 24H2–25H2, нашлись на чистой системе. InventorySvc
+# работает постоянно и составляет опись установленных программ и
+# оборудования для оценки совместимости и телеметрии. Usage and Quality
+# Insights копит на диске «факты» о том, какими функциями вы пользуетесь,
+# и выгружает их через телеметрию; её задача закрыта от администратора.
+Def 'services' 'svc' 'InventorySvc' '' 'Disabled' '' 'служба InventorySvc (опись программ и оборудования)' 26100
+Def 'services' 'task' '\Microsoft\Windows\UsageAndQualityInsights\UsageAndQualityInsights-MaintenanceTask' '' 'Disabled' '' 'задача UsageAndQualityInsights (сбор сведений об использовании)' 26100
 
 $od = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OneDrive'
 Def 'onedrive' 'reg' $od 'DisableFileSyncNGSC' 1 'DWord' 'OneDrive: синхронизация файлов — выкл'
@@ -888,6 +1262,32 @@ Def 'etw' 'regif' "$al\AppModel" 'Start' 0 'DWord' 'трассировка за�
 Def 'etw' 'reg' 'HKLM:\SYSTEM\CurrentControlSet\Control\WMI\Autologger\AutoLogger-Diagtrack-Listener' 'Enabled' 0 'DWord' 'запрет включения сборщика телеметрии'
 
 Def 'hosts' 'hosts' '' '' '' '' 'блок телеметрийных доменов в hosts'
+
+# Номер устройства в учётной записи Microsoft (GDID). Его выдаёт login.live.com
+# при входе, CDPSvc регистрирует компьютер в каталоге устройств Microsoft, а
+# DoSvc (Delivery Optimization) сообщает номер обратно. Смена IP и VPN на него
+# не влияют; DiagTrack в этой цепочке не участвует, поэтому отключённая
+# телеметрия его не останавливает. Стирать номер бесполезно: он привязан к
+# учётной записи и возвращается с серверов тем же самым. Остаётся не дать ему
+# уходить. DoSvc диспетчер служб не отдаёт даже администратору («Отказано в
+# доступе»), поэтому службы отключаются там, где диспетчер хранит их
+# настройку, — в реестре: запись идёт в журнал и откатывается как обычная.
+# Разбор цепочки: github.com/SmtimesIWndr/gdid-reversal и github.com/Korben00/no-gdid.
+$svcRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services'
+Def 'gdid' 'regsvc' "$svcRoot\CDPSvc" 'Start' 4 'DWord' 'служба CDPSvc: регистрация компьютера в каталоге устройств Microsoft — выкл'
+Def 'gdid' 'regsvc' "$svcRoot\CDPUserSvc" 'Start' 4 'DWord' 'служба CDPUserSvc: то же для каждого пользователя — выкл'
+Def 'gdid' 'regsvc' "$svcRoot\DoSvc" 'Start' 4 'DWord' 'служба DoSvc (Delivery Optimization): передача номера устройства — выкл'
+Def 'gdid' 'gdidhosts' '' '' '' '' 'серверы каталога устройств и Delivery Optimization — в hosts'
+
+# Запрет выдачи номера. Новый номер выдаёт login.live.com при первом же
+# обращении устройства — пока сервер открыт, стёртый номер сменяется новым.
+# Закрыв его, можно стереть номер насовсем. Цена — учётная запись Microsoft:
+# вход в неё, Магазин, Xbox и OneDrive перестают работать, поэтому при входе
+# в Windows через неё модуль не применяется. Что и где стирается — разбор
+# github.com/yegors/deGDID (проверено на Windows 11 25H2, сборка 26200).
+Def 'gdidlock' 'gdidlockhosts' '' '' '' '' 'сервер выдачи номера (login.live.com, account.live.com) — в hosts'
+Def 'gdidlock' 'fwsvc' 'wlidsvc' '' '' '' 'исходящие службы учётных записей Microsoft (wlidsvc) — блок'
+Def 'gdidlock' 'gdidwipe' '' '' '' '' 'номер устройства стёрт отовсюду, где Windows его хранит'
 
 # Блокировка самих адресов: hosts телеметрия обходит через шифрованный DNS
 # и зашитые IP, поэтому адреса блокируются правилом брандмауэра.
@@ -946,20 +1346,102 @@ Def 'app_vs' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\VisualStudio\SQM' 'OptIn' 
 Def 'app_vs' 'reg' 'HKCU:\Software\Microsoft\VisualStudio\Telemetry' 'TurnOffSwitch' 1 'DWord' 'Visual Studio: телеметрия — выкл'
 Def 'app_vs' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\VisualStudio\Feedback' 'DisableFeedbackDialog' 1 'DWord' 'Visual Studio: окно отзывов — выкл'
 
-$script:ModuleOrder = @('telemetry','errors','activity','input','edge','delivery','location','apppriv','network','ads','widgets','search','copilot','ai',
-                        'defender','apphw','onedrive','services','etw','hosts','firewall','fwips','doh','buffer','app_nvidia','app_vscode','app_chrome','app_firefox',
+$script:ModuleOrder = @('telemetry','errors','activity','input','edge','delivery','location','apppriv','network','cloudsync','ads','widgets','search','copilot','ai',
+                        'defender','apphw','onedrive','services','etw','hosts','gdid','gdidlock','firewall','fwips','doh','buffer','app_nvidia','app_vscode','app_chrome','app_firefox',
                         'app_office','app_devtools','app_vs','oem','cleanup','startup')
 $script:ModuleTitles = @{
     telemetry='Телеметрия и диагностика'; errors='Отчёты об ошибках'; activity='История активности и буфер обмена';
     input='Персонализация ввода, рукописный ввод, речь'; edge='Microsoft Edge'; delivery='Раздача обновлений другим ПК';
     location='Геолокация и поиск устройства'; apppriv='Разрешения приложений (запрет политикой)';
-    network='Фоновые обращения Windows в сеть'; apphw='Камера, микрофон и фоновая работа приложений'; ads='Рекламный ID и реклама в интерфейсе'; widgets='Виджеты и лента новостей';
+    network='Фоновые обращения Windows в сеть'; cloudsync='Облачная синхронизация и копия'; apphw='Камера, микрофон и фоновая работа приложений'; ads='Рекламный ID и реклама в интерфейсе'; widgets='Виджеты и лента новостей';
     search='Поиск: Bing, Cortana, облако'; copilot='Copilot и Recall';
     ai='ИИ-функции Windows'; defender='Защитник: облако и образцы'; etw='Сессии трассировки телеметрии'; onedrive='OneDrive: синхронизация и реклама'; services='Службы и задачи телеметрии'; hosts='Блокировка телеметрийных доменов (hosts)';
+    gdid='Номер устройства в учётной записи Microsoft (GDID)'; gdidlock='Запрет выдачи номера устройства';
     firewall='Брандмауэр: блокировка служб телеметрии'; fwips='Брандмауэр: адреса сбора телеметрии'; doh='Шифрованный DNS (обход блокировки)'; buffer='Неотправленная телеметрия'; app_nvidia='NVIDIA';
     app_vscode='Visual Studio Code'; app_chrome='Google Chrome'; app_firefox='Mozilla Firefox'; app_office='Microsoft Office';
     app_devtools='PowerShell 7 / .NET SDK'; app_vs='Visual Studio'; oem='Компоненты сбора данных производителя';
     cleanup='Чистка временных файлов'; startup='Автозагрузка (отчёт)'
+}
+
+# --------------------------------------------------------------------------- #
+#  Цена каждой настройки. Уровень: safe — ничего заметного не ломается,
+#  limited — какая-то функция Windows перестанет работать, caution — может
+#  задеть то, что вам нужно. По умолчанию уровень — как у модуля; отдельные
+#  пункты уточнены ниже, вместе с тем, что именно перестанет работать.
+#  Ключ — название настройки, как в Def.
+# --------------------------------------------------------------------------- #
+$script:ModuleRisk = @{
+    location = 'limited'; apppriv = 'limited'; apphw = 'limited'; onedrive = 'limited'; services = 'limited'
+    hosts = 'limited'; firewall = 'limited'; fwips = 'caution'; doh = 'limited'; defender = 'caution'
+    gdid = 'limited'; gdidlock = 'caution'; oem = 'limited'; cloudsync = 'limited'
+}
+$script:DefRisk = @{
+    'уровень телеметрии — минимальный' = 'safe'
+    'служба DiagTrack (телеметрия)' = 'safe'
+    'задача License Validation' = 'caution'
+    'Teredo (туннель IPv6 через Microsoft) — выкл' = 'limited'
+    'история буфера обмена — выкл' = 'limited'
+    'не скачивать прогноз нагрузки энергосети' = 'safe'
+    'Click to Do: скачивание моделей ИИ — выкл' = 'safe'
+    'задача UsageAndQualityInsights (сбор сведений об использовании)' = 'safe'
+    'синхронизация ваших согласий на сбор данных — выкл' = 'safe'
+    'скачивание обоев с других ваших устройств — выкл' = 'safe'
+    'не применять «исправления», присланные Microsoft' = 'limited'
+    'средства устранения неполадок не обращаются к серверам Microsoft' = 'limited'
+    'Защитник: удалённые настройки и эксперименты (ECS) — выкл' = 'limited'
+    'обои «Windows: интересное» на рабочем столе — выкл' = 'limited'
+    'ИИ-агенты: доступ к файлам и настройкам через MCP — запрещён' = 'limited'
+    'приложение «Архивация Windows» — выкл' = 'limited'
+    'облачное распознавание речи — выкл' = 'limited'
+}
+$script:DefNotes = @{
+    'уровень телеметрии — минимальный' = 'На Home и Pro Windows всё равно оставит «обязательные данные»: полностью выключает только Enterprise и Education.'
+    'история буфера обмена — выкл' = 'Win+V перестанет показывать историю скопированного.'
+    'синхронизация буфера между устройствами — выкл' = 'Буфер обмена не будет общим с телефоном и другими компьютерами.'
+    'облачное распознавание речи — выкл' = 'Голосовой ввод и диктовка через облако Microsoft перестанут работать.'
+    'веб-поиск из Пуска — выкл' = 'Поиск в Пуске будет искать только на компьютере, без результатов из интернета.'
+    'служба геолокации — выкл' = 'Карты, погода и автоматический часовой пояс не узнают, где вы.'
+    '«Поиск устройства» (отправка координат) — выкл' = 'Потерянный ноутбук нельзя будет найти через «Поиск устройства».'
+    'сведения учётной записи и возраст (Age API) — запрещены' = 'Приложения из Магазина не узнают ваше имя, аватар и возраст.'
+    'почта — запрещена приложениям' = 'Почта из Магазина не увидит ваши письма, пока вы не разрешите её вручную.'
+    'календарь — запрещён приложениям' = 'Календарь из Магазина не увидит ваши события, пока вы не разрешите его вручную.'
+    'обмен с устройствами — запрещён приложениям' = 'Приложения не смогут связываться с телефоном и устройствами Bluetooth без вашего разрешения.'
+    'камера — запрещена приложениям из магазина' = 'Камера перестанет работать в приложениях Магазина. В браузерах и обычных программах — работает.'
+    'микрофон — запрещён приложениям из магазина' = 'Микрофон перестанет работать в приложениях Магазина. В браузерах и обычных программах — работает.'
+    'фоновая работа приложений из магазина — запрещена' = 'Приложения из Магазина не будут присылать уведомления и обновляться, пока закрыты.'
+    'Teredo (туннель IPv6 через Microsoft) — выкл' = 'Сетевые игры Xbox, которым нужен Teredo, могут не подключаться.'
+    'OneDrive: синхронизация файлов — выкл' = 'OneDrive перестанет синхронизировать файлы. Сами файлы на диске остаются.'
+    'служба dmwappushservice (WAP push)' = 'Нужна, если компьютером управляет организация (MDM). Дома не используется.'
+    'задача License Validation' = 'Проверяет лицензии приложений Магазина. Если купленные приложения перестанут запускаться — снимите этот пункт.'
+    'задача FamilySafetyMonitor' = 'Родительский контроль Microsoft Family перестанет работать.'
+    'Защитник: облачная отправка MAPS — выкл' = 'Защитник теряет облачную проверку: новые угрозы он будет узнавать позже.'
+    'Защитник: отправка образцов файлов — никогда' = 'Подозрительные файлы не уйдут на анализ в Microsoft.'
+    'Windows: шифрованный DNS — запретить' = 'Ваши DNS-запросы снова видит провайдер. Зато hosts работает для всех программ.'
+    'блок телеметрийных доменов в hosts' = 'Windows Update и Магазин не затрагиваются. Изредка перестают уходить отчёты об ошибках.'
+    'блокировка адресов сбора телеметрии' = 'На тех же адресах иногда живут другие службы Microsoft — если что-то отвалится, снимите пункт.'
+    'служба CDPSvc: регистрация компьютера в каталоге устройств Microsoft — выкл' = '«Связь с телефоном» и обмен с устройствами поблизости перестанут работать.'
+    'служба DoSvc (Delivery Optimization): передача номера устройства — выкл' = 'Если Магазин перестанет скачивать приложения — снимите этот пункт.'
+    'сервер выдачи номера (login.live.com, account.live.com) — в hosts' = 'Вход в учётную запись Microsoft, Магазин, Xbox и OneDrive перестанут работать.'
+    'служба InventorySvc (опись программ и оборудования)' = 'Перед крупным обновлением Windows проверка совместимости будет знать о ваших программах меньше.'
+    'синхронизация параметров между устройствами — выкл' = 'Тема, язык и другие настройки не переедут на новый компьютер сами — их придётся задать заново.'
+    'копия списка приложений в облако — выкл' = 'На новом компьютере Windows не предложит заново поставить ваши приложения.'
+    'архивация Windows в облако — выкл' = 'Копия в OneDrive перестанет обновляться сама. Если рассчитываете на неё при переезде — снимите пункт.'
+    'синхронизация сетей Wi-Fi между устройствами — выкл' = 'Пароли Wi-Fi не будут переезжать на другие ваши компьютеры.'
+    'установка приложений на этот ПК по команде с сайта — выкл' = 'Кнопка «Установить на устройство» на сайте Магазина перестанет работать. В самом Магазине всё ставится как обычно.'
+    'не применять «исправления», присланные Microsoft' = 'Windows перестанет сама чинить известные сбои по указанию Microsoft. Средства устранения неполадок можно запускать вручную.'
+    'средства устранения неполадок не обращаются к серверам Microsoft' = 'Средства устранения неполадок будут работать только с тем, что есть на компьютере.'
+    'Защитник: удалённые настройки и эксперименты (ECS) — выкл' = 'Новые функции и усиления защиты Защитник будет получать только с обновлениями, а не с сервера экспериментов. Базы угроз обновляются как обычно.'
+    'обои «Windows: интересное» на рабочем столе — выкл' = 'Картинки «Windows: интересное» на рабочем столе перестанут меняться сами.'
+    'ИИ-агенты: доступ к файлам и настройкам через MCP — запрещён' = 'ИИ-помощники не смогут сами работать с вашими файлами и настройками Windows.'
+    'приложение «Архивация Windows» — выкл' = 'Приложение «Архивация Windows» перестанет сохранять копию в OneDrive. Файлы на диске не трогаются.'
+    'встроенные ИИ-модели Windows — запрещены приложениям' = 'Приложения из Магазина не смогут пользоваться ИИ-моделями Windows на компьютере.'
+}
+
+function Get-DefRisk {
+    param($Def)
+    if ($script:DefRisk.ContainsKey("$($Def.C)")) { return $script:DefRisk["$($Def.C)"] }
+    if ($script:ModuleRisk.ContainsKey("$($Def.M)")) { return $script:ModuleRisk["$($Def.M)"] }
+    return 'safe'
 }
 
 # =========================================================================== #
@@ -1112,10 +1594,32 @@ function Remove-JunkValues {
     return $gone
 }
 
+# Останавливает службу, отключённую через реестр, и её копии для каждого
+# пользователя (CDPUserSvc_1a2b3): запись в реестре вступает в силу только
+# после перезагрузки, а до неё служба продолжила бы работать.
+function Stop-ServiceInstances {
+    param([string]$Name)
+    foreach ($s in @(Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $Name -or $_.Name -like ($Name + '_*') })) {
+        if ($s.Status -ne 'Running') { continue }
+        try { Stop-Service -Name $s.Name -Force -ErrorAction Stop; Write-Log ("       остановлена: {0}" -f $s.Name) }
+        catch { Write-Log ("       {0} остановится после перезагрузки" -f $s.Name) }
+    }
+}
+
 function Apply-Def {
     param($d)
+    # журнал отката не пишется — больше ничего не меняем (причина уже в журнале работы)
+    if ($script:JournalFailed -and -not $DryRun) { return }
     switch ($d.T) {
         'reg' { Set-Reg -Path $d.P -Name $d.N -Value $d.V -Type $d.Type -Comment $d.C }
+        'regsvc' {
+            # служба есть не на каждой редакции Windows — чего нет, то не создаём
+            if (-not (Test-Path -LiteralPath $d.P)) { Write-Log ("   [-] {0} -- нет на этой системе" -f $d.C); return }
+            Set-Reg -Path $d.P -Name $d.N -Value $d.V -Type $d.Type -Comment $d.C
+            # останавливаем, только если отключение действительно записалось:
+            # иначе служба тут же запустилась бы снова
+            if (-not $DryRun -and "$($d.V)" -eq '4' -and "$(Get-RegValue $d.P $d.N)" -eq '4') { Stop-ServiceInstances (Split-Path $d.P -Leaf) }
+        }
         'regpol' { Set-Reg -Path $d.P -Name $d.N -Value $d.V -Type $d.Type -Comment $d.C -Policy -DefId $d.Id }
         'regif' {
             # сессия трассировки есть не на каждой сборке Windows — чего нет, то не создаём
@@ -1130,8 +1634,10 @@ function Apply-Def {
                     Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
                 }
                 Ensure-Backup
+                $was = Get-SvcJournalState $d.P $s
                 if ($s.Status -eq 'Running') { Stop-Service -Name $d.P -Force -ErrorAction SilentlyContinue }
                 Set-Service -Name $d.P -StartupType Disabled -ErrorAction Stop
+                Add-JournalEntry $was
                 Write-Log "   [+] $($d.C) -- остановлена и отключена"; $script:Changes++
             } catch { Write-Log "   [-] $($d.C) -- недоступна" }
         }
@@ -1144,8 +1650,10 @@ function Apply-Def {
                     Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
                 }
                 Ensure-Backup
+                $was = Get-SvcJournalState $d.P $s
                 if ($s.Status -eq 'Running') { Stop-Service -Name $d.P -Force -ErrorAction SilentlyContinue }
                 Set-Service -Name $d.P -StartupType Disabled -ErrorAction Stop
+                Add-JournalEntry $was
                 Write-Log "   [+] $($d.C) -- отключена"; $script:Changes++
             } catch { Write-Log "   [-] $($d.C) -- не удалось" }
         }
@@ -1153,10 +1661,15 @@ function Apply-Def {
             $pp = Split-TaskPath $d.P
             if ($DryRun) { Write-Log "   [тест] $($d.C) -- отключить"; return }
             $st = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
-            if ($st -and $st.State -eq 'Disabled') { Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return }
+            if (-not $st) { Write-Log "   [-] $($d.C) -- нет на этой системе"; return }
+            if ($st.State -eq 'Disabled') { Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return }
             Ensure-Backup
-            try { Disable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null; Write-Log "   [+] $($d.C) -- отключена"; $script:Changes++ }
-            catch { Write-Log "   [-] $($d.C) -- не найдена" }
+            switch (Set-TaskEnabled $d.P $false) {
+                'ok'      { Add-TaskJournal $d.P; Write-Log "   [+] $($d.C) -- отключена"; $script:Changes++ }
+                'system'  { Add-TaskJournal $d.P; Write-Log "   [+] $($d.C) -- отключена от имени системы (администратору Windows её не отдаёт)"; $script:Changes++ }
+                'missing' { Write-Log "   [-] $($d.C) -- нет на этой системе" }
+                default   { Write-Log "   [!] $($d.C) -- Windows не дала отключить задачу"; $script:Failures++ }
+            }
         }
         'taskglob' {
             $ts = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like $d.P })
@@ -1165,7 +1678,7 @@ function Apply-Def {
                 if ($DryRun) { Write-Log "   [тест] задача $($t.TaskName) -- отключить"; continue }
                 if ($t.State -eq 'Disabled') { Write-Log "   [в] задача $($t.TaskName) -- уже отключена"; $script:Already++; continue }
                 Ensure-Backup
-                try { Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null; Write-Log "   [+] задача $($t.TaskName) -- отключена"; $script:Changes++ }
+                try { Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null; Add-TaskJournal ($t.TaskPath + $t.TaskName); Write-Log "   [+] задача $($t.TaskName) -- отключена"; $script:Changes++ }
                 catch { Write-Log "   [-] задача $($t.TaskName) -- не удалось" }
             }
         }
@@ -1175,12 +1688,28 @@ function Apply-Def {
                 Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
             }
             Ensure-Backup
-            try { [Environment]::SetEnvironmentVariable($d.P, [string]$d.V, 'User'); Write-Log "   [+] $($d.C)"; $script:Changes++ }
+            $prevEnv = [Environment]::GetEnvironmentVariable($d.P, 'User')
+            try {
+                [Environment]::SetEnvironmentVariable($d.P, [string]$d.V, 'User')
+                Add-JournalEntry @{ kind = 'env'; name = $d.P; existed = [bool]($null -ne $prevEnv)
+                                    old = $(if ($null -ne $prevEnv) { [string]$prevEnv } else { '' }); newValue = [string]$d.V }
+                Write-Log "   [+] $($d.C)"; $script:Changes++
+            }
             catch { Write-Log "   [!] не удалось: $($d.C)"; $script:Failures++ }
         }
         'vscode'  { Set-VsCodeValue -Key $d.P -Value $d.V -Comment $d.C }
         'firefox' { Set-FirefoxPolicy -Key $d.P -Value $d.V -Comment $d.C }
         'hosts'   { Apply-Hosts }
+        'gdidhosts' { Apply-Hosts -Kind 'gdid' }
+        'gdidlockhosts' { Apply-Hosts -Kind 'lock' }
+        'gdidwipe' {
+            # Пока сервер выдачи открыт, стёртый номер сразу сменится новым —
+            # это смена номера, а не запрет. Без закрытого сервера не стираем.
+            if (-not $DryRun -and -not (Test-HostsBlock -Kind 'lock')) {
+                Write-Log ("   [-] {0} -- пропущено: сервер выдачи номера не закрыт" -f $d.C); return
+            }
+            $null = Invoke-GdidWipe
+        }
         'fwsvc'   { Apply-FwRule -Kind 'svc' -Target $d.P -Comment $d.C }
         'fwapp'   { Apply-FwRule -Kind 'app' -Target $d.P -Comment $d.C }
         'fwips'   { Apply-FwIpBlock }
@@ -1204,8 +1733,14 @@ function Check-Def {
         return @{ module=$d.M; name=$d.C; ok=$false; na=$true
                   expected="$($d.V)"; actual='нет на этой версии Windows' }
     }
+    # Запрет выдачи номера при входе через учётную запись Microsoft недоступен
+    # вовсе — индекс за него не снижается, как и за то, чего нет в этой Windows.
+    if ($d.M -eq 'gdidlock' -and (Get-GdidLockRefusal)) {
+        return @{ module=$d.M; name=$d.C; ok=$false; na=$true
+                  expected="$($d.V)"; actual=$(if ((Get-GdidLockRefusal) -eq 'msa') { 'недоступно при входе через учётную запись Microsoft' } else { 'недоступно на компьютере организации' }) }
+    }
     switch ($d.T) {
-        'regif' {
+        { $_ -in @('regif', 'regsvc') } {
             if (-not (Test-Path -LiteralPath $d.P)) { $ok = $true; $actual = 'нет на этой системе' }
             else {
                 $v = Get-RegValue $d.P $d.N
@@ -1262,10 +1797,18 @@ function Check-Def {
             $actual = if ($null -eq $v) { 'не задано' } else { "$v" }
             $ok = ($null -ne $v) -and ("$v".ToLower() -eq "$($d.V)".ToLower())
         }
-        'hosts' {
-            $ok = Test-HostsBlock; $actual = if ($ok) { 'блок установлен' } else { 'нет блока' }
+        { $_ -in @('hosts', 'gdidhosts', 'gdidlockhosts') } {
+            $hk = $(switch ($d.T) { 'gdidhosts' { 'gdid' } 'gdidlockhosts' { 'lock' } default { 'telemetry' } })
+            $ok = Test-HostsBlockCurrent -Kind $hk
+            $actual = if ($ok) { 'блок установлен' } elseif (Test-HostsBlock -Kind $hk) { 'блок устарел' } else { 'нет блока' }
         }
-        'fwips' { $ok = Test-FwIpRule; $actual = if ($ok) { 'адреса заблокированы' } else { 'нет правила' } }
+        'gdidwipe' {
+            $ok = (@(Get-GdidCopies).Count -eq 0); $actual = if ($ok) { 'номера нет' } else { 'номер на месте' }
+        }
+        'fwips' {
+            $ok = Test-FwIpRule -Fresh
+            $actual = if ($ok) { 'адреса заблокированы' } elseif (Test-FwIpRule) { 'адреса устарели' } else { 'нет правила' }
+        }
         'fwsvc' { $ok = Test-FwRule -Kind 'svc' -Target $d.P; $actual = if ($ok) { 'правило есть' } else { 'нет правила' } }
         'fwapp' { $ok = Test-FwRule -Kind 'app' -Target $d.P; $actual = if ($ok) { 'правило есть' } else { 'нет правила' } }
     }
@@ -1299,28 +1842,145 @@ $script:HostsDomains = @(
     'telecommand.telemetry.microsoft.com.nsatc.net','vortex-sandbox.data.microsoft.com',
     'cs11.wpc.v0cdn.net','cs1137.wpc.gammacdn.net','modern.watson.data.microsoft.com',
     'browser.events.data.msn.com',
+    # Найдены разбором чистой Windows 11 25H2 (сборка 26300): адреса прямой
+    # отправки 1DS, зашитые в системные файлы и в скачанную настройку UTC.
+    # mobile.events — главный из них: на него шлют Защитник (MDCoreSvc),
+    # оболочка (AriaSDKWrapper.dll), Copilot, «Архивация» и «История файлов»,
+    # минуя службу DiagTrack. Региональные v20 UTC выбирает по стране.
+    'mobile.events.data.microsoft.com','au-mobile.events.data.microsoft.com',
+    'jp-mobile.events.data.microsoft.com','uk-mobile.events.data.microsoft.com',
+    'pf.events.data.microsoft.com','eu-office.events.data.microsoft.com',
+    'browser.events.data.microsoft.com','nw-umwatson.events.data.microsoft.com',
+    'au-v10.events.data.microsoft.com','in-v10.events.data.microsoft.com','jp-v10.events.data.microsoft.com',
+    'au-v20.events.data.microsoft.com','eu-v20.events.data.microsoft.com','in-v20.events.data.microsoft.com',
+    'jp-v20.events.data.microsoft.com','uk-v20.events.data.microsoft.com','us-v20.events.data.microsoft.com',
+    'us4-v20.events.data.microsoft.com','us5-v20.events.data.microsoft.com',
+    'au.vortex-win.data.microsoft.com','uk.vortex-win.data.microsoft.com','web.vortex.data.microsoft.com',
+    'settings.data.microsoft.com','evrsettings-win.data.microsoft.com',
     'activity.windows.com','licensing.mp.microsoft.com')
 $script:HostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
 
-function Test-HostsBlock { try { return [bool](@(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop) -match $script:HostsMarkRegex) } catch { return $false } }
+# Серверы, через которые компьютер регистрируется в каталоге устройств Microsoft
+# и сообщает номер устройства. login.live.com здесь нет и быть не должно: без
+# него перестанет работать вход в учётную запись Microsoft. Первые три имени
+# публично не разрешаются, но Windows их спрашивает — блокировать есть что.
+# cs.dds.microsoft.com — нынешний адрес каталога: остальные имена каталога
+# публично не разрешаются, но Windows их спрашивает.
+$script:GdidHosts = @('cs.dds.microsoft.com', 'dds.microsoft.com', 'fd.dds.microsoft.com', 'aad.cs.dds.microsoft.com',
+                      'cdpcs.access.microsoft.com', 'geo.prod.do.dsp.mp.microsoft.com')
+
+# Сервер, который выдаёт номер новому устройству. Его закрывает только запрет
+# выдачи (модуль gdidlock) и только у тех, кто входит в Windows без учётной
+# записи Microsoft: без него эта учётная запись не работает вовсе.
+$script:GdidLockHosts = @('login.live.com', 'account.live.com')
+
+# У блоков номера устройства свои метки: блок телеметрии и они ставятся и
+# проверяются порознь. Общий шаблон $script:HostsMarkRegex узнаёт все — откат
+# убирает всё, что программа дописала в hosts.
+$script:HostsMarkGdidStart = '# --- Win11Privacy: device id block (begin) ---'
+$script:HostsMarkGdidEnd   = '# --- Win11Privacy: device id block (end) ---'
+$script:HostsMarkLockStart = '# --- Win11Privacy: device id lock (begin) ---'
+$script:HostsMarkLockEnd   = '# --- Win11Privacy: device id lock (end) ---'
+
+# Блок телеметрии — любая метка программы, кроме меток номера устройства:
+# так узнаются и метки прежних версий, побитые в «?».
+function Test-HostsBlock {
+    param([string]$Kind = 'telemetry')
+    try { $lines = @(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop) } catch { return $false }
+    if ($Kind -eq 'gdid') { return [bool]($lines -contains $script:HostsMarkGdidStart) }
+    if ($Kind -eq 'lock') { return [bool]($lines -contains $script:HostsMarkLockStart) }
+    return [bool](@(@($lines -match $script:HostsMarkRegex) | Where-Object { $_ -notlike '*device id*' }).Count -gt 0)
+}
+
+# Принадлежит ли открывающая метка блоку этого вида
+function Test-HostsMarkKind {
+    param([string]$Line, [string]$Kind)
+    switch ($Kind) {
+        'all'  { return $true }
+        'gdid' { return ($Line -eq $script:HostsMarkGdidStart) }
+        'lock' { return ($Line -eq $script:HostsMarkLockStart) }
+        default { return ($Line -notlike '*device id*') }
+    }
+}
+
+# Строка «0.0.0.0» отвечает только на запрос IPv4. Если у сервера есть адрес
+# IPv6, Windows спросит его у DNS и соединится мимо блока — поэтому на каждое
+# имя пишется и строка «::».
+function Get-HostsWanted {
+    param([string]$Kind = 'telemetry')
+    $domains = $(switch ($Kind) { 'gdid' { $script:GdidHosts } 'lock' { $script:GdidLockHosts } default { $script:HostsDomains } })
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($d in @($domains)) { $out.Add('0.0.0.0 ' + $d); $out.Add(':: ' + $d) }
+    return $out.ToArray()
+}
+
+function Get-HostsBlockLines {
+    param([string]$Kind = 'telemetry')
+    $out = New-Object System.Collections.Generic.List[string]
+    try { $lines = @(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop) } catch { return @() }
+    $inside = $false; $mine = $false
+    foreach ($l in $lines) {
+        if ($l -match $script:HostsMarkRegex) {
+            if (-not $inside) { $inside = $true; $mine = (Test-HostsMarkKind $l $Kind) } else { $inside = $false }
+            continue
+        }
+        if ($inside -and $mine -and $l -match '^\s*(0\.0\.0\.0|::)\s+(\S+)\s*$') { $out.Add($Matches[1] + ' ' + $Matches[2]) }
+    }
+    return $out.ToArray()
+}
+
+# Блок стоит и в нём ровно нужный список. Раньше хватало самой метки, и
+# домены, добавленные в новых версиях, до уже поставленного блока не доходили.
+function Test-HostsBlockCurrent {
+    param([string]$Kind = 'telemetry')
+    if (-not (Test-HostsBlock -Kind $Kind)) { return $false }
+    $have = @(Get-HostsBlockLines -Kind $Kind | Select-Object -Unique)
+    $want = @(Get-HostsWanted -Kind $Kind | Select-Object -Unique)
+    if ($have.Count -ne $want.Count) { return $false }
+    $set = @{}
+    foreach ($h in $have) { $set[$h] = $true }
+    foreach ($w in $want) { if (-not $set.ContainsKey($w)) { return $false } }
+    return $true
+}
 
 function Apply-Hosts {
-    if ($DryRun) { Write-Log ("   [тест] будет заблокировано доменов: {0}" -f $script:HostsDomains.Count); return }
+    param([string]$Kind = 'telemetry')
+    $wanted = @(Get-HostsWanted -Kind $Kind)
+    $count = [int]($wanted.Count / 2)
+    $present = Test-HostsBlock -Kind $Kind
+    if ($present -and (Test-HostsBlockCurrent -Kind $Kind)) { Write-Log '   [-] блок уже присутствует'; return }
+    if ($DryRun) {
+        Write-Log $(if ($present) { "   [тест] блок будет обновлён до доменов: $count" } else { "   [тест] будет заблокировано доменов: $count" })
+        return
+    }
     try {
         if ($script:BackupDir -and (Test-Path -LiteralPath $script:BackupDir)) {
-            Copy-Item -LiteralPath $script:HostsPath -Destination (Join-Path $script:BackupDir 'hosts.original') -Force -ErrorAction SilentlyContinue
+            $copy = Join-Path $script:BackupDir 'hosts.original'
+            # копия нужна та, что была до программы, а не после первого блока
+            if (-not (Test-Path -LiteralPath $copy)) { Copy-Item -LiteralPath $script:HostsPath -Destination $copy -Force -ErrorAction SilentlyContinue }
         }
-        if (Test-HostsBlock) { Write-Log '   [-] блок уже присутствует'; return }
-        $block = @('') + $script:HostsMarkStart
-        foreach ($d in $script:HostsDomains) { $block += ('0.0.0.0 ' + $d) }
-        $block += $script:HostsMarkEnd
-        Add-Content -LiteralPath $script:HostsPath -Value $block -Encoding ASCII -ErrorAction Stop
+        # устаревший блок переписывается целиком: так он не обрастает повторами
+        if ($present) { Remove-HostsBlock -Kind $Kind -Quiet }
+        $block = @('') + $(switch ($Kind) { 'gdid' { $script:HostsMarkGdidStart } 'lock' { $script:HostsMarkLockStart } default { $script:HostsMarkStart } })
+        $block += $wanted
+        $block += $(switch ($Kind) { 'gdid' { $script:HostsMarkGdidEnd } 'lock' { $script:HostsMarkLockEnd } default { $script:HostsMarkEnd } })
+        # Сразу после записи антивирус ненадолго держит hosts открытым, и
+        # второй блок подряд падал с «файл занят другим процессом».
+        for ($try = 1; ; $try++) {
+            try { Add-Content -LiteralPath $script:HostsPath -Value $block -Encoding ASCII -ErrorAction Stop; break }
+            catch [System.IO.IOException] { if ($try -ge 5) { throw }; Start-Sleep -Milliseconds (400 * $try) }
+        }
         ipconfig /flushdns | Out-Null
-        Write-Log ("   [+] заблокировано доменов: {0}" -f $script:HostsDomains.Count); $script:Changes++
+        if ($present) { Write-Log ("   [+] список доменов обновлён, теперь их: {0}" -f $count) }
+        else { Write-Log ("   [+] заблокировано доменов: {0}" -f $count) }
+        $script:Changes++
     } catch { Write-Log "   [!] не удалось изменить hosts: $($_.Exception.Message) (возможно, защищён антивирусом)"; $script:Failures++ }
 }
 
+# Kind = all убирает все блоки программы (общий откат); telemetry, gdid и
+# lock — только блок своего вида, остальные остаются на месте.
 function Remove-HostsBlock {
+    param([string]$Kind = 'all', [switch]$Quiet)
     try {
         $lines = @(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop)
         $keep = New-Object System.Collections.Generic.List[string]
@@ -1328,24 +1988,25 @@ function Remove-HostsBlock {
         foreach ($l in $lines) {
             if ($l -match $script:HostsMarkRegex) {
                 if (-not $inside) {
+                    if (-not (Test-HostsMarkKind $l $Kind)) { $keep.Add($l); continue }
                     $found++
                     # пустую строку перед блоком ставили мы сами
                     if ($keep.Count -gt 0 -and $keep[$keep.Count - 1] -eq '') { $keep.RemoveAt($keep.Count - 1) }
-                }
-                $inside = -not $inside
+                    $inside = $true
+                } else { $inside = $false }
                 continue
             }
             # Внутри блока убираем только свои строки. Чужая строка значит, что
             # закрывающую метку кто-то стёр: дальше идёт уже не наше.
-            if ($inside -and $l -notmatch '^\s*(0\.0\.0\.0\s+\S+)?\s*$') { $inside = $false }
+            if ($inside -and $l -notmatch '^\s*((0\.0\.0\.0|::)\s+\S+)?\s*$') { $inside = $false }
             if (-not $inside) { $keep.Add($l) }
         }
         if ($found -gt 0) {
             # Default, а не ASCII: чужие строки с нелатинскими буквами остаются как были
             Set-Content -LiteralPath $script:HostsPath -Value $keep.ToArray() -Encoding Default -Force -ErrorAction Stop
             ipconfig /flushdns | Out-Null
-            Write-Log '   [+] блок блокировки доменов удалён'
-        } else { Write-Log '   [-] блока в hosts нет' }
+            if (-not $Quiet) { Write-Log '   [+] блок блокировки доменов удалён' }
+        } elseif (-not $Quiet) { Write-Log '   [-] блока в hosts нет' }
     } catch { Write-Log "   [!] hosts: $($_.Exception.Message)" }
 }
 
@@ -1390,40 +2051,58 @@ $script:TelemetryIps = @(
 # молчащем DNS роутера — по 10–15 секунд. По очереди шаг тянулся минутами без
 # единой строки в журнале и выглядел зависшим. Кто не ответил за отведённое
 # время, в правило не попадёт — известные адреса выше в нём есть всегда.
+# Имена спрашиваются у DNS-сервера В ОБХОД hosts. Раньше разрешение шло через
+# системный резолвер, а он сначала смотрит в hosts: при стоящем блоке каждое
+# имя «разрешалось» в 0.0.0.0, отсеивалось, и в правило попадали только
+# зашитые адреса. Имена спрашиваются все сразу, в пуле потоков: по одному шаг
+# тянулся минутами, пока мёртвые имена ждали ответа. Берутся и адреса IPv6.
 function Get-TelemetryIpList {
-    param([int]$TimeoutMs = 8000)
+    param([int]$TimeoutMs = 10000)
     $set = @{}
     foreach ($ip in $script:TelemetryIps) { $set[$ip] = $true }
-    # каждое имя ждёт ответа в своём потоке пула — пусть потоков хватит на все
-    $w = 0; $io = 0
-    [System.Threading.ThreadPool]::GetMinThreads([ref]$w, [ref]$io)
-    if ($w -lt 64) { $null = [System.Threading.ThreadPool]::SetMinThreads(64, $io) }
-    $tasks = New-Object System.Collections.Generic.List[System.Threading.Tasks.Task]
-    $seen = @{}
-    foreach ($d in $script:HostsDomains) {
-        if ($seen.ContainsKey($d)) { continue }
-        $seen[$d] = $true
-        try { $tasks.Add([System.Net.Dns]::GetHostAddressesAsync($d)) } catch { }
+    $names = @($script:HostsDomains | Select-Object -Unique)
+    $pool = [runspacefactory]::CreateRunspacePool(1, 32)
+    $pool.Open()
+    $jobs = New-Object System.Collections.Generic.List[object]
+    foreach ($nm in $names) {
+        $parsed = $null
+        if ([System.Net.IPAddress]::TryParse($nm, [ref]$parsed)) { if (Test-PublicIp $nm) { $set[$nm] = $true }; continue }
+        $ps = [powershell]::Create()
+        $ps.RunspacePool = $pool
+        # -DnsOnly: мёртвое имя не уходит искать себя по локальной сети (LLMNR, NetBIOS)
+        $null = $ps.AddScript('param($n) @(Resolve-DnsName -Name $n -Type A_AAAA -NoHostsFile -DnsOnly -QuickTimeout -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress } | ForEach-Object { [string]$_.IPAddress })').AddArgument($nm)
+        $jobs.Add(@{ ps = $ps; h = $ps.BeginInvoke() })
     }
-    # WaitAll бросает, если какое-то имя не существует, — это не ошибка
-    if ($tasks.Count -gt 0) { try { $null = [System.Threading.Tasks.Task]::WaitAll($tasks.ToArray(), $TimeoutMs) } catch { } }
+    $until = (Get-Date).AddMilliseconds($TimeoutMs)
     $answered = 0
-    foreach ($t in $tasks) {
-        if ($t.Status -ne 'RanToCompletion') { continue }
-        $answered++
-        foreach ($a in $t.Result) {
-            # только IPv4, как было с Resolve-DnsName -Type A
-            if ($a.AddressFamily -ne 'InterNetwork') { continue }
-            $s = $a.IPAddressToString
-            if (Test-PublicIp $s) { $set[$s] = $true }
+    foreach ($j in $jobs) {
+        $left = [int][math]::Max(0, ($until - (Get-Date)).TotalMilliseconds)
+        if ($j.h.AsyncWaitHandle.WaitOne($left)) {
+            try {
+                $res = @($j.ps.EndInvoke($j.h))
+                if ($res.Count -gt 0) { $answered++ }
+                foreach ($a in $res) { if (Test-PublicIp "$a") { $set["$a"] = $true } }
+            } catch { }
+            $j.ps.Dispose()
+        } else {
+            # Не ответившее имя не ждём: синхронная остановка висела бы, пока
+            # DNS не сдастся сам. Хвосты уйдут вместе с процессом движка.
+            try { $null = $j.ps.BeginStop($null, $null) } catch { }
         }
     }
-    $ipList = @($set.Keys)
-    return @{ ips = $ipList; answered = $answered; asked = $tasks.Count }
+    try { $null = $pool.BeginClose($null, $null) } catch { }
+    return @{ ips = @($set.Keys); answered = $answered; asked = $names.Count }
 }
 
+# Правило помнит дату обновления в описании. Адреса серверов меняются, и
+# старше двух недель правило считается устаревшим — страж его обновит.
 function Test-FwIpRule {
-    return [bool](Get-NetFirewallRule -DisplayName $script:FwIpRuleName -ErrorAction SilentlyContinue)
+    param([switch]$Fresh)
+    $r = Get-NetFirewallRule -DisplayName $script:FwIpRuleName -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $r) { return $false }
+    if (-not $Fresh) { return $true }
+    if ("$($r.Description)" -match '(\d{4}-\d{2}-\d{2})') { try { return ([datetime]$Matches[1]) -gt (Get-Date).AddDays(-14) } catch { } }
+    return $false
 }
 
 function Apply-FwIpBlock {
@@ -1436,7 +2115,7 @@ function Apply-FwIpBlock {
         if ($ips.Count -eq 0) { Write-Log '   [-] адреса не определились'; return }
         Get-NetFirewallRule -DisplayName $script:FwIpRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
         New-NetFirewallRule -DisplayName $script:FwIpRuleName -Group $script:FwGroup -Direction Outbound -Action Block `
-            -RemoteAddress $ips -Profile Any -Enabled True -ErrorAction Stop | Out-Null
+            -RemoteAddress $ips -Profile Any -Enabled True -Description ('Win11Privacy: updated ' + (Get-Date).ToString('yyyy-MM-dd')) -ErrorAction Stop | Out-Null
         Write-Log ("   [+] заблокировано адресов: {0}" -f $ips.Count)
         Write-Log '   [-] если что-то перестанет работать — снимите этот пункт и нажмите «Откат»'
         $script:Changes++
@@ -1462,6 +2141,69 @@ function Get-DohStatus {
               blocked = ("$policy" -eq '1' -and "$edge" -eq 'off' -and "$chrome" -eq 'off') }
 }
 
+# --------------------------------------------------------------------------- #
+#  Проверка утечек «в бою». Имя каждого сервера сбора разрешается так, как его
+#  разрешит любая программа — с учётом hosts, — и к нему пробуется соединение
+#  на порт 443. Данных не уходит: соединение сразу закрывается. Отвечает на
+#  вопрос, которого не задаёт проверка настроек: дойдёт ли отправка на деле.
+# --------------------------------------------------------------------------- #
+function Invoke-LeakTest {
+    param([int]$TimeoutMs = 8000)
+    $names = @(@($script:HostsDomains) + @($script:GdidHosts) | Select-Object -Unique)
+    # Имя, закрытое в hosts строками «0.0.0.0» и «::», Windows отдаёт как «нет
+    # данных» — без этого списка оно попадало бы в «имя не отвечает».
+    $sunk = @{}
+    try {
+        foreach ($l in @(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop)) {
+            if ($l -match '^\s*(0\.0\.0\.0|::)\s+(\S+)') { $sunk[$Matches[2].ToLowerInvariant()] = $true }
+        }
+    } catch { }
+    $w = 0; $io = 0
+    [System.Threading.ThreadPool]::GetMinThreads([ref]$w, [ref]$io)
+    if ($w -lt 64) { $null = [System.Threading.ThreadPool]::SetMinThreads(64, $io) }
+    $dns = @{}
+    $dnsTasks = New-Object System.Collections.Generic.List[System.Threading.Tasks.Task]
+    foreach ($nm in $names) { try { $t = [System.Net.Dns]::GetHostAddressesAsync($nm); $dns[$nm] = $t; $dnsTasks.Add($t) } catch { } }
+    # WaitAll бросает, если какое-то имя не существует, — это не ошибка
+    if ($dnsTasks.Count -gt 0) { try { $null = [System.Threading.Tasks.Task]::WaitAll($dnsTasks.ToArray(), $TimeoutMs) } catch { } }
+
+    $items = New-Object System.Collections.Generic.List[object]
+    $conn = @{}
+    $connTasks = New-Object System.Collections.Generic.List[System.Threading.Tasks.Task]
+    foreach ($nm in $names) {
+        $t = $dns[$nm]; $state = 'none'; $ip = ''
+        if ($sunk.ContainsKey($nm.ToLowerInvariant())) { $state = 'hosts' }
+        elseif ($t -and $t.Status -eq 'RanToCompletion') {
+            $addrs = @($t.Result)
+            $pub = @($addrs | Where-Object { Test-PublicIp $_.IPAddressToString })
+            if ($addrs.Count -gt 0 -and $pub.Count -eq 0) { $state = 'hosts' }
+            elseif ($pub.Count -gt 0) {
+                $a = @($pub | Where-Object { "$($_.AddressFamily)" -eq 'InterNetwork' } | Select-Object -First 1)
+                $a = $(if ($a.Count -gt 0) { $a[0] } else { $pub[0] })
+                $ip = $a.IPAddressToString
+                try {
+                    $cl = New-Object System.Net.Sockets.TcpClient($a.AddressFamily)
+                    $ct = $cl.ConnectAsync($a, 443)
+                    $conn[$nm] = @{ client = $cl; task = $ct }; $connTasks.Add($ct)
+                    $state = 'pending'
+                } catch { $state = 'blocked' }
+            }
+        }
+        $items.Add(@{ name = $nm; state = $state; ip = $ip })
+    }
+    if ($connTasks.Count -gt 0) { try { $null = [System.Threading.Tasks.Task]::WaitAll($connTasks.ToArray(), 4000) } catch { } }
+    foreach ($it in $items) {
+        if ($it.state -ne 'pending') { continue }
+        $cn = $conn[$it.name]
+        $it.state = $(if ("$($cn.task.Status)" -eq 'RanToCompletion' -and $cn.client.Connected) { 'open' } else { 'blocked' })
+        try { $cn.client.Close() } catch { }
+    }
+    $count = { param($s) @($items | Where-Object { $_.state -eq $s }).Count }
+    return @{ time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); total = $items.Count
+              open = (& $count 'open'); blocked = (& $count 'blocked'); hosts = (& $count 'hosts'); none = (& $count 'none')
+              doh = (Get-DohStatus); items = $items.ToArray() }
+}
+
 function Remove-FwRules {
     try {
         $rules = @(Get-NetFirewallRule -Group $script:FwGroup -ErrorAction SilentlyContinue)
@@ -1470,24 +2212,364 @@ function Remove-FwRules {
     } catch { Write-Log "   [!] брандмауэр: $($_.Exception.Message)" }
 }
 
+# =========================================================================== #
+#  НОМЕР УСТРОЙСТВА (GDID): где лежит, как сменить, как запретить выдачу
+#  Номер — идентификатор «устройства» в службе учётных записей Microsoft
+#  (Device PUID). Его выдаёт login.live.com, когда служба wlidsvc заводит
+#  компьютеру «личность»: отдельную учётную запись устройства с ключом в
+#  хранилище учётных данных. Номер привязан к этой личности, а не к железу —
+#  поэтому переустановка Windows даёт новый. Копий номера в реестре несколько,
+#  и пока цела личность, стёртые копии возвращаются тем же номером. Стереть
+#  личность целиком — значит сменить номер: при следующем обращении Windows
+#  заведёт новую и получит новый. Если сервер выдачи закрыт — не получит.
+#  Разбор: github.com/SmtimesIWndr/gdid-reversal, github.com/yegors/deGDID.
+# =========================================================================== #
+$script:IdCrlRoots = @(
+    @{ who = 'user';   path = 'HKCU:\SOFTWARE\Microsoft\IdentityCRL' },
+    @{ who = 'system'; path = 'Registry::HKEY_USERS\.DEFAULT\Software\Microsoft\IdentityCRL' },
+    @{ who = 'system'; path = 'Registry::HKEY_USERS\S-1-5-18\Software\Microsoft\IdentityCRL' })
+$script:IdCrlNegCache = 'HKLM:\SOFTWARE\Microsoft\IdentityCRL\NegativeCache'
+$script:DevicePuidRegex = '^0018[0-9A-Fa-f]{12}$'
+# Учётные данные «личности» устройства — у пользователя и у самой системы
+$script:GdidCredUser   = @('WindowsLive:target=virtualapp/didlogical', 'MicrosoftAccount:target=SSO_POP_Device')
+$script:GdidCredSystem = @('WindowsLive:target=virtualapp/didlogical')
+$script:GdidRefusal = $null
+
+function ConvertTo-Gdid {
+    param([string]$Hex)
+    if ($Hex -notmatch '^[0-9A-Fa-f]{1,16}$') { return '' }
+    try { return 'g:' + [Convert]::ToUInt64($Hex, 16) } catch { return '' }
+}
+
+function Get-SvcStart {
+    param([string]$Name)
+    $v = Get-RegValue "HKLM:\SYSTEM\CurrentControlSet\Services\$Name" 'Start'
+    if ($null -eq $v) { return -1 }
+    return [int]$v
+}
+
+# Где лежат копии номера. Только чтение.
+function Get-GdidCopies {
+    $found = New-Object System.Collections.Generic.List[object]
+    $seenSystem = $false
+    foreach ($r in $script:IdCrlRoots) {
+        if (-not (Test-Path -LiteralPath $r.path)) { continue }
+        # .DEFAULT и S-1-5-18 — один и тот же куст SYSTEM: считаем его один раз
+        if ($r.who -eq 'system') { if ($seenSystem) { continue }; $seenSystem = $true }
+        $lidVal = Get-RegValue "$($r.path)\ExtendedProperties" 'LID'
+        if ("$lidVal") { $found.Add(@{ who = $r.who; place = 'lid'; puid = "$lidVal" }) }
+        try {
+            $pk = Get-Item -LiteralPath "$($r.path)\Immersive\production\Property" -ErrorAction Stop
+            foreach ($vn in @($pk.GetValueNames())) {
+                if ($vn -match $script:DevicePuidRegex) { $found.Add(@{ who = $r.who; place = 'property'; puid = $vn }) }
+            }
+        } catch { }
+        foreach ($tk in @(Get-ChildItem -LiteralPath "$($r.path)\Immersive\production\Token" -ErrorAction SilentlyContinue)) {
+            $tn = @($tk.GetValueNames())
+            if ($tn -contains 'DeviceId' -or $tn -contains 'DeviceTicket') {
+                $found.Add(@{ who = $r.who; place = 'token'; puid = "$(Get-RegValue $tk.PSPath 'DeviceId')" })
+            }
+        }
+        foreach ($sk in @(Get-ChildItem -LiteralPath "$($r.path)\DeviceIdentities\production" -ErrorAction SilentlyContinue)) {
+            if ($sk.PSChildName -eq 'Logs') { continue }
+            foreach ($ik in @(Get-ChildItem -LiteralPath $sk.PSPath -ErrorAction SilentlyContinue)) {
+                $found.Add(@{ who = $(if ($sk.PSChildName -like 'S-1-5-21-*') { 'user' } else { 'system' })
+                              place = 'identity'; puid = "$(Get-RegValue $ik.PSPath 'DeviceId')" })
+            }
+        }
+    }
+    foreach ($nk in @(Get-ChildItem -LiteralPath $script:IdCrlNegCache -ErrorAction SilentlyContinue)) {
+        if ($nk.PSChildName -match '^(0018[0-9A-Fa-f]{12})_') { $found.Add(@{ who = 'system'; place = 'cache'; puid = $Matches[1] }) }
+    }
+    return $found.ToArray()
+}
+
+function Test-MsaLogon {
+    try { return ("$((Get-LocalUser -Name $env:USERNAME -ErrorAction Stop).PrincipalSource)" -eq 'MicrosoftAccount') } catch { }
+    # Модуля учётных записей нет — судим осторожно: есть учётная запись
+    # Microsoft хоть где-то в профиле, значит, считаем, что вход через неё.
+    return (@(Get-ChildItem 'HKCU:\SOFTWARE\Microsoft\IdentityCRL\UserExtendedProperties' -ErrorAction SilentlyContinue).Count -gt 0)
+}
+
+# Компьютер организации: там номер устройства связан с её учётной записью,
+# и трогать его — сломать вход на работе. Встроенные «поставщики» Local, Deploy
+# и Cloud Authority есть на любом домашнем компьютере — их не считаем.
+function Get-ManagedReason {
+    try { if ((Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).PartOfDomain) { return 'компьютер в домене организации' } } catch { }
+    if (@(Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\CloudDomainJoin\JoinInfo' -ErrorAction SilentlyContinue).Count -gt 0) { return 'компьютер подключён к Entra ID организации' }
+    if (@(Get-ChildItem 'HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\WorkplaceJoin\JoinInfo' -ErrorAction SilentlyContinue).Count -gt 0) { return 'в Windows добавлена рабочая или учебная учётная запись' }
+    foreach ($ek in @(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Enrollments' -ErrorAction SilentlyContinue)) {
+        $prov = "$(Get-RegValue $ek.PSPath 'ProviderID')"
+        if ($prov -and $prov -notin @('Local Authority', 'Deploy Authority', 'Cloud Authority') -and "$(Get-RegValue $ek.PSPath 'EnrollmentState')" -eq '1') {
+            return 'компьютер под управлением организации (MDM)'
+        }
+    }
+    return ''
+}
+
+# 'msa' — вход в Windows через учётную запись Microsoft, 'managed' — компьютер
+# организации, '' — запрет выдачи номера доступен. Считается один раз за запуск.
+function Get-GdidLockRefusal {
+    if ($null -ne $script:GdidRefusal) { return $script:GdidRefusal }
+    $script:GdidRefusal = ''
+    if (Test-MsaLogon) { $script:GdidRefusal = 'msa' }
+    elseif (Get-ManagedReason) { $script:GdidRefusal = 'managed' }
+    return $script:GdidRefusal
+}
+
+function Stop-ServiceWait {
+    param([string]$Name)
+    $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    if (-not $svc -or $svc.Status -eq 'Stopped') { return $true }
+    for ($i = 1; $i -le 3; $i++) {
+        try { Stop-Service -Name $Name -Force -ErrorAction Stop; $svc.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(10)); return $true }
+        catch { Start-Sleep -Milliseconds (500 * $i) }
+    }
+    return $false
+}
+
+# Короткая задача планировщика: команда от имени пользователя без повышения
+# или от имени SYSTEM. Учётные данные устройства лежат в хранилище каждого из
+# них, а у повышенного сеанса своё пространство — отсюда их не видно.
+function Invoke-OneShotTask {
+    param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem)
+    try {
+        $act = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument ('/d /c ' + $CmdLine)
+        $who = $(if ($AsSystem) { New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest }
+                 else { New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited })
+        $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
+        Register-ScheduledTask -TaskName $TaskName -Action $act -Principal $who -Settings $set -Force -ErrorAction Stop | Out-Null
+        Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        # 267011 — ещё не запускалась, 267009 — выполняется
+        $until = (Get-Date).AddSeconds(30)
+        do {
+            Start-Sleep -Milliseconds 400
+            $res = (Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue).LastTaskResult
+        } while (($res -eq 267009 -or $res -eq 267011) -and (Get-Date) -lt $until)
+        return $true
+    } catch { return $false }
+    finally { try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { } }
+}
+
+# Часть задач Windows закрыла от администратора: читать их можно, менять —
+# только SYSTEM (UsageAndQualityInsights, модели Click to Do). Раньше такая
+# задача оставалась включённой с пометкой «не найдена». Теперь, если
+# администратору отказано, то же делает короткая задача от имени SYSTEM.
+# Ответ: ok, system (сделано от SYSTEM), missing (задачи нет), fail.
+function Set-TaskEnabled {
+    param([string]$Full, [bool]$Enabled)
+    $pp = Split-TaskPath $Full
+    $t = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
+    if (-not $t) { return 'missing' }
+    try {
+        if ($Enabled) { Enable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null }
+        else { Disable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null }
+        return 'ok'
+    } catch { }
+    $flag = $(if ($Enabled) { '/enable' } else { '/disable' })
+    $null = Invoke-OneShotTask -TaskName 'Win11Privacy Task' -CmdLine ('schtasks.exe /change /tn "{0}" {1}' -f $Full, $flag) -AsSystem
+    $t = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
+    if ($t -and (($t.State -eq 'Disabled') -ne $Enabled)) { return 'system' }
+    return 'fail'
+}
+
+# Стирает «личность» устройства и все известные копии номера. Пока сервер
+# выдачи открыт, Windows при следующем обращении получит новый номер — это
+# смена. Под запретом выдачи — номера не станет вовсе.
+function Invoke-GdidWipe {
+    $why = Get-ManagedReason
+    if ($why) {
+        Write-Log ("   [!] номер устройства не тронут: {0}. На таком компьютере он связан с учётной записью организации." -f $why)
+        $script:Failures++; return $false
+    }
+    $before = @(Get-GdidCopies)
+    if ($DryRun) { Write-Log ("   [тест] копий номера устройства: {0} -- будут стёрты вместе с «личностью» устройства" -f $before.Count); return $true }
+    Write-Log ("   найдено копий номера: {0}" -f $before.Count)
+
+    # Службы держат номер в памяти и вернули бы его на место. wlidsvc на время
+    # стирания ещё и запрещаем запускать: её поднимает любой запрос Магазина.
+    $wasRunning = @(Get-Service -ErrorAction SilentlyContinue |
+                    Where-Object { ($_.Name -in @('wlidsvc', 'CDPSvc') -or $_.Name -like 'CDPUserSvc_*') -and $_.Status -eq 'Running' } |
+                    ForEach-Object { $_.Name })
+    $wlidType = $null
+    try { $wlidType = (Get-Service wlidsvc -ErrorAction Stop).StartType; Set-Service wlidsvc -StartupType Disabled -ErrorAction Stop } catch { $wlidType = $null }
+    if (-not (Stop-ServiceWait 'wlidsvc')) {
+        if ($null -ne $wlidType) { try { Set-Service wlidsvc -StartupType $wlidType -ErrorAction SilentlyContinue } catch { } }
+        Write-Log '   [!] служба учётных записей Microsoft (wlidsvc) занята и не остановилась. Закройте Магазин и Параметры и повторите или перезагрузите компьютер. Ничего не стёрто.'
+        $script:Failures++; return $false
+    }
+    foreach ($n in $wasRunning) { if ($n -ne 'wlidsvc') { $null = Stop-ServiceWait $n } }
+
+    $fails = 0
+    # 1. учётные данные «личности» устройства
+    foreach ($t in $script:GdidCredUser) { $null = & cmdkey.exe "/delete:$t" 2>&1 }
+    $userCmd = (@($script:GdidCredUser | ForEach-Object { 'cmdkey /delete:' + $_ }) -join ' & ')
+    $sysCmd  = (@($script:GdidCredSystem | ForEach-Object { 'cmdkey /delete:' + $_ }) -join ' & ')
+    if (Invoke-OneShotTask 'Win11Privacy GDID user' $userCmd) { Write-Log '   [+] учётные данные устройства у пользователя убраны' }
+    else { Write-Log '   [!] учётные данные устройства у пользователя убрать не удалось'; $fails++ }
+    if (Invoke-OneShotTask 'Win11Privacy GDID system' $sysCmd -AsSystem) { Write-Log '   [+] учётные данные устройства у системы убраны' }
+    else { Write-Log '   [!] учётные данные устройства у системы убрать не удалось'; $fails++ }
+
+    # 2. копии номера в реестре: сам номер, его метка, билеты приложений, личности
+    foreach ($r in $script:IdCrlRoots) {
+        if (-not (Test-Path -LiteralPath $r.path)) { continue }
+        Remove-ItemProperty -LiteralPath "$($r.path)\ExtendedProperties" -Name 'LID' -Force -ErrorAction SilentlyContinue
+        $pk = "$($r.path)\Immersive\production\Property"
+        try {
+            foreach ($vn in @((Get-Item -LiteralPath $pk -ErrorAction Stop).GetValueNames())) {
+                if ($vn -match $script:DevicePuidRegex) { Remove-ItemProperty -LiteralPath $pk -Name $vn -Force -ErrorAction SilentlyContinue }
+            }
+        } catch { }
+        foreach ($tk in @(Get-ChildItem -LiteralPath "$($r.path)\Immersive\production\Token" -ErrorAction SilentlyContinue)) {
+            foreach ($vn in @('DeviceId', 'DeviceTicket')) { Remove-ItemProperty -LiteralPath $tk.PSPath -Name $vn -Force -ErrorAction SilentlyContinue }
+        }
+        $ids = "$($r.path)\DeviceIdentities\production"
+        if (Test-Path -LiteralPath $ids) { Remove-Item -LiteralPath $ids -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($nk in @(Get-ChildItem -LiteralPath $script:IdCrlNegCache -ErrorAction SilentlyContinue)) {
+        if ($nk.PSChildName -match '^0018[0-9A-Fa-f]{12}_') { Remove-Item -LiteralPath $nk.PSPath -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    # 3. кэш платформы подключённых устройств: в нём регистрация в каталоге
+    $null = Clear-FolderContents (Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform') 'кэш платформы подключённых устройств'
+
+    # 4. службы — как были
+    if ($null -ne $wlidType) {
+        try { Set-Service wlidsvc -StartupType $wlidType -ErrorAction Stop }
+        catch { Write-Log '   [!] тип запуска службы wlidsvc вернуть не удалось'; $fails++ }
+    }
+    foreach ($n in $wasRunning) { try { Start-Service -Name $n -ErrorAction Stop } catch { } }
+
+    $after = @(Get-GdidCopies)
+    if ($after.Count -eq 0) { Write-Log '   [+] номер устройства стёрт отовсюду, где Windows его хранит'; $script:Changes++ }
+    else { Write-Log ("   [!] осталось копий номера: {0} -- Windows их не отдала" -f $after.Count); $script:Failures++ }
+    return ($after.Count -eq 0 -and $fails -eq 0)
+}
+
+# Состояние для вкладки «Номер устройства». Только чтение.
+function Get-GdidStatus {
+    $copies = @(Get-GdidCopies)
+    $userLid = Get-RegValue 'HKCU:\SOFTWARE\Microsoft\IdentityCRL\ExtendedProperties' 'LID'
+    $svcs = @()
+    foreach ($n in @('CDPSvc', 'CDPUserSvc', 'DoSvc', 'wlidsvc')) {
+        $run = @(Get-Service -ErrorAction SilentlyContinue | Where-Object { ($_.Name -eq $n -or $_.Name -like ($n + '_*')) -and $_.Status -eq 'Running' }).Count -gt 0
+        $svcs += @{ name = $n; start = (Get-SvcStart $n); running = $run }
+    }
+    $nums = @($copies | ForEach-Object { "$($_.puid)" } | Where-Object { $_ -match $script:DevicePuidRegex } | Select-Object -Unique)
+    return @{
+        time = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+        gdid = (ConvertTo-Gdid "$userLid")
+        copies = $copies.Count; numbers = $nums.Count
+        userCopies = @($copies | Where-Object { $_.who -eq 'user' }).Count
+        systemCopies = @($copies | Where-Object { $_.who -eq 'system' }).Count
+        transmitOff = ((Get-SvcStart 'CDPSvc') -eq 4 -and (Get-SvcStart 'DoSvc') -eq 4)
+        ddsBlocked = (Test-HostsBlock -Kind 'gdid')
+        locked = (Test-HostsBlock -Kind 'lock'); wlidBlocked = (Test-FwRule 'svc' 'wlidsvc')
+        msaLogon = (Test-MsaLogon); managed = (Get-ManagedReason)
+        admin = (Test-Admin)
+        services = $svcs
+    }
+}
+
 # --- аудит соединений (монитор) -------------------------------------------- #
+# Монитор считается включённым, когда журнал пишет и разрешённые соединения
+# (5156), и отклонённые (5157). Раньше включались только отказы, и список «кто
+# отправляет», который строится по разрешённым, в живой системе был пуст.
 function Get-MonitorEnabled {
     try {
         $out = & auditpol.exe /get /subcategory:$script:AuditGuid /r 2>$null
         $csv = $out | Where-Object { $_ -and $_ -notmatch '^Machine Name' -and $_ -notmatch '^Имя компьютера' } | Select-Object -Last 1
         if (-not $csv) { return $false }
-        return ($csv -match 'Failure|Отказ|Сбой')
+        return (($csv -match 'Success|Успех|Успешн') -and ($csv -match 'Failure|Отказ|Сбой'))
     } catch { return $false }
 }
+
+# Журнал безопасности по умолчанию — 20 МБ: с записью всех соединений он
+# переписывал бы себя за часы. Под монитор он растёт до 128 МБ — через журнал
+# изменений, чтобы откат вернул прежний размер.
+$script:SecurityLogKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Security'
+$script:SecurityLogMin = 134217728
 
 function Set-MonitorEnabled {
     param([bool]$On)
     $flag = if ($On) { 'enable' } else { 'disable' }
     try {
-        $null = & auditpol.exe /set /subcategory:$script:AuditGuid /failure:$flag 2>&1
-        Write-Log ("   [+] журнал перехваченных соединений: {0}" -f $(if ($On) { 'включён' } else { 'выключен' }))
+        $null = & auditpol.exe /set /subcategory:$script:AuditGuid /success:$flag /failure:$flag 2>&1
+        Write-Log ("   [+] журнал соединений брандмауэра: {0}" -f $(if ($On) { 'включён' } else { 'выключен' }))
+        if ($On) {
+            $size = Get-RegValue $script:SecurityLogKey 'MaxSize'
+            if ($null -eq $size -or [long]$size -lt $script:SecurityLogMin) {
+                Set-Reg -Path $script:SecurityLogKey -Name 'MaxSize' -Value $script:SecurityLogMin -Type 'DWord' -Comment 'журнал безопасности — 128 МБ, чтобы монитор не вытеснял другие записи'
+                Save-JournalEntries -Quiet
+            }
+        }
         return $true
     } catch { Write-Log "   [!] auditpol: $($_.Exception.Message)"; return $false }
+}
+
+# --------------------------------------------------------------------------- #
+#  Новые программы в сети. Разрешённые исходящие соединения (5156) берутся из
+#  журнала аудита брандмауэра, программа сравнивается со списком известных.
+#  Первый час после включения — обучение: всё, что выходит в сеть, считается
+#  своим, иначе первое же уведомление перечислило бы полсистемы.
+# --------------------------------------------------------------------------- #
+$script:NetTask = 'Win11Privacy Network'
+
+function Get-NetAppKey {
+    param([string]$Raw)
+    $p = ConvertFrom-DevicePath $Raw
+    if (-not $p) { $p = $Raw }
+    return $p.ToLowerInvariant()
+}
+
+function Get-NetAppsSince {
+    param([datetime]$Since, [int]$Max = 20000)
+    $apps = @{}
+    $events = @()
+    try { $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 5156; StartTime = $Since } -MaxEvents $Max -ErrorAction Stop) } catch { }
+    foreach ($ev in $events) {
+        try {
+            $x = [xml]$ev.ToXml()
+            $data = @{}
+            foreach ($n in $x.Event.EventData.Data) { $data[[string]$n.Name] = [string]$n.'#text' }
+            if ($data['Direction'] -ne '%%14593') { continue }              # только исходящие
+            if (-not (Test-PublicIp $data['DestAddress'])) { continue }
+            $raw = [string]$data['Application']
+            if (-not $raw) { continue }
+            $key = Get-NetAppKey $raw
+            if ($apps.ContainsKey($key)) { $apps[$key].count++; continue }
+            $apps[$key] = @{ key = $key; name = ($raw -split '\\')[-1]; path = (ConvertFrom-DevicePath $raw); count = 1
+                             ip = $data['DestAddress']; time = $ev.TimeCreated.ToString('yyyy-MM-dd HH:mm') }
+        } catch { }
+    }
+    return $apps
+}
+
+function Invoke-NetGuard {
+    param([switch]$Quiet)
+    $state = Load-Json 'net-apps.json'
+    $known = @{}
+    if ($state -and $state.known) { foreach ($k in @($state.known)) { $known["$k"] = $true } }
+    $recent = New-Object System.Collections.Generic.List[object]
+    if ($state -and $state.recent) { foreach ($r in @($state.recent)) { $recent.Add($r) } }
+    $learnUntil = $(if ($state -and $state.learnUntil) { [datetime]$state.learnUntil } else { (Get-Date).AddHours(1) })
+    $since = $(if ($state -and $state.last) { ([datetime]$state.last).AddMinutes(-1) } else { (Get-Date).AddMinutes(-20) })
+    $now = Get-Date
+    $fresh = @()
+    foreach ($a in @((Get-NetAppsSince -Since $since).Values)) {
+        if ($known.ContainsKey($a.key)) { continue }
+        $known[$a.key] = $true
+        if ($now -lt $learnUntil) { continue }                              # обучение: молча запоминаем
+        $fresh += $a
+        $recent.Insert(0, @{ name = $a.name; path = $a.path; time = $a.time; ip = $a.ip })
+    }
+    while ($recent.Count -gt 30) { $recent.RemoveAt($recent.Count - 1) }
+    Save-Json 'net-apps.json' @{ known = @($known.Keys); recent = $recent.ToArray(); learnUntil = $learnUntil.ToString('s'); last = $now.ToString('s') }
+    if ($fresh.Count -gt 0 -and -not $Quiet) {
+        $msg = (@($fresh | Select-Object -First 3 | ForEach-Object { $_.name }) -join ', ')
+        if ($fresh.Count -gt 3) { $msg += (' и ещё ' + ($fresh.Count - 3)) }
+        Show-Toast 'Новая программа вышла в сеть' ($msg + '. Запретить ей выход — на странице «Монитор».')
+    }
+    return $fresh
 }
 
 function Test-PublicIp {
@@ -1559,9 +2641,19 @@ function Get-MonitorStats {
                         blocked = [bool]($path -and (Test-FwRule 'app' $path)) }
     }
     $destList = @($byDest.Values | Sort-Object { $_.count } -Descending | Select-Object -First 25)
+    # впервые вышедшие в сеть — из записей слежения за сетью
+    $newList = @()
+    $ns = Load-Json 'net-apps.json'
+    if ($ns -and $ns.recent) {
+        foreach ($r in @($ns.recent | Select-Object -First 12)) {
+            $newList += @{ name = "$($r.name)"; path = "$($r.path)"; time = "$($r.time)"; ip = "$($r.ip)"
+                           blocked = [bool]("$($r.path)" -and (Test-FwRule 'app' "$($r.path)")) }
+        }
+    }
     return @{ enabled=(Get-MonitorEnabled); hours=$Hours; since=$since.ToString('yyyy-MM-dd HH:mm'); total=$total;
               telemetryHits=$telemetryHits; events=$events.Count; blocked=$blockedTotal
-              byProcess=$procList; byDest=$destList;
+              byProcess=$procList; byDest=$destList; newApps=$newList
+              netGuard=[bool](Get-ScheduledTask -TaskName $script:NetTask -ErrorAction SilentlyContinue)
               firewallRules=@(Get-NetFirewallRule -Group $script:FwGroup -ErrorAction SilentlyContinue).Count }
 }
 
@@ -1582,10 +2674,25 @@ function Get-DnsEvidence {
 }
 
 # --- буфер телеметрии ------------------------------------------------------- #
+# Что считается неотправленной телеметрией: очередь событий (EventStore.db и
+# его журналы; у приложений — свой в TenantStorage), старые очереди *.rbs и
+# трассировки *.etl. Скачанные настройки и папки не трогаем.
+# ВАЖНО: в PowerShell 5.1 -Include вместе с -LiteralPath молча не работает.
+# Раньше сюда попадало всё содержимое папки, включая сами папки: удалялись
+# и настройки, а Remove-Item на непустой папке задавал вопрос «удалить с
+# содержимым?» и без окна (файл «Для других ПК») ждал ответа вечно.
+$script:BufferFileRx = '\.(rbs|etl)$|^EventStore\.db(-wal|-shm)?$'
+function Get-BufferFiles {
+    param([switch]$Strict)
+    $ea = $(if ($Strict) { 'Stop' } else { 'SilentlyContinue' })
+    return @(Get-ChildItem -LiteralPath $script:DiagDir -Recurse -Force -File -ErrorAction $ea |
+             Where-Object { $_.Name -match $script:BufferFileRx })
+}
+
 function Get-BufferInfo {
     $size = -1; $files = 0
     try {
-        $items = @(Get-ChildItem -LiteralPath $script:DiagDir -Recurse -Force -Include '*.rbs','*.etl' -ErrorAction Stop)
+        $items = @(Get-BufferFiles -Strict)
         $files = $items.Count
         $sum = ($items | Measure-Object -Property Length -Sum).Sum
         $size = if ($sum) { [math]::Round($sum / 1MB, 2) } else { 0 }
@@ -1606,7 +2713,7 @@ function Purge-Buffer {
         $null = & icacls.exe "$script:DiagDir" /grant '*S-1-5-32-544:(OI)(CI)F' /T /C /Q 2>&1
     } catch { }
     $deleted = 0; $bytes = 0
-    foreach ($f in @(Get-ChildItem -LiteralPath $script:DiagDir -Recurse -Force -Include '*.rbs','*.etl' -ErrorAction SilentlyContinue)) {
+    foreach ($f in @(Get-BufferFiles)) {
         try { $len = $f.Length; Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop; $deleted++; $bytes += $len } catch { }
     }
     if ($wasRunning -and $svc.StartType -ne 'Disabled') { Start-Service -Name DiagTrack -ErrorAction SilentlyContinue }
@@ -1633,6 +2740,7 @@ if ($Detect) {
         guardInstalled = [bool]$guardTask
         watcherInstalled = [bool](Get-ScheduledTask -TaskName 'Win11Privacy Watcher' -ErrorAction SilentlyContinue)
         sensorGuardInstalled = [bool](Get-ScheduledTask -TaskName $script:SensorTask -ErrorAction SilentlyContinue)
+        netGuardInstalled = [bool](Get-ScheduledTask -TaskName $script:NetTask -ErrorAction SilentlyContinue)
         guardLast = $guardLast
         guardModules = $(if ($guardProfile) { @($guardProfile.modules) } else { @() })
         monitorEnabled = (Get-MonitorEnabled)
@@ -1978,12 +3086,17 @@ function Run-Guard {
     $profile = Load-Json 'profile.json'
     if (-not $profile -or -not $profile.modules) { Write-Log 'Профиль стража не найден.'; return @{ error='нет профиля' } }
     $mods = @($profile.modules)
+    # Запрет выдачи номера ставится со своей вкладки, а не со страницы
+    # настроек: пока он стоит, страж следит и за ним.
+    if ($mods -notcontains 'gdidlock' -and (Test-HostsBlock -Kind 'lock')) { $mods += 'gdidlock' }
+    $skipped = @($(if ($profile.PSObject.Properties['skip']) { @($profile.skip) } else { @() }) | ForEach-Object { "$_" })
     $last = Load-Json 'guard-last.json'
     $lastTime = if ($last -and $last.time) { [datetime]$last.time } else { (Get-Date).AddDays(-30) }
 
     $drifted = @()
     foreach ($d in $script:Defs) {
         if ($mods -notcontains $d.M) { continue }
+        if ($skipped -contains $d.Id) { continue }
         if ($d.T -in @('taskglob','svcopt')) { continue }
         $r = Check-Def $d
         if ($r.na) { continue }                      # чего нет на этой Windows — не сбито
@@ -1991,16 +3104,37 @@ function Run-Guard {
     }
     $driftModules = @($drifted | ForEach-Object { $_.module } | Select-Object -Unique)
     $fixed = 0
+    # чинить, не имея куда записать «как было», страж не берётся
+    if ($driftModules.Count -gt 0 -and -not (Test-JournalWritable)) {
+        Write-Log '   [!] страж ничего не чинит: журнал отката не записывается'
+        $driftModules = @()
+    }
     if ($driftModules.Count -gt 0) {
         $script:Modules = $driftModules
         foreach ($m in $driftModules) {
             if ($m -in @('cleanup','startup','buffer','oem')) { continue }
+            if ($m -eq 'gdidlock' -and (Get-GdidLockRefusal)) { continue }
             Write-Section ($script:ModuleTitles[$m])
-            foreach ($d in $script:Defs) { if ($d.M -eq $m) { Apply-Def $d; $fixed++ } }
+            foreach ($d in $script:Defs) { if ($d.M -eq $m -and $skipped -notcontains $d.Id) { Apply-Def $d; $fixed++ } }
         }
     }
     $kbs = Get-RecentHotfixes -Since $lastTime
     $newStartup = @(Find-NewStartup)
+    # Номер устройства: страж замечает, что Windows его сменила, и что номер
+    # снова появился под запретом выдачи. Сам номер не хранится — только хеш.
+    $gNow = ConvertTo-Gdid "$(Get-RegValue 'HKCU:\SOFTWARE\Microsoft\IdentityCRL\ExtendedProperties' 'LID')"
+    $gHash = ''
+    if ($gNow) {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $gHash = (@($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($gNow)) | ForEach-Object { $_.ToString('x2') }) -join '')
+        $sha.Dispose()
+    }
+    $gPrev = $(if ($last -and $last.PSObject.Properties['gdidHash']) { "$($last.gdidHash)" } else { $null })
+    if ($driftModules -contains 'gdidlock') {
+        Show-Toast 'Номер устройства появился снова' 'Под запретом выдачи Windows снова получила номер — страж его стёр. Проверьте, не снят ли блок в hosts.'
+    } elseif ($gHash -and $gPrev -and $gPrev -ne $gHash) {
+        Show-Toast 'Номер устройства сменился' 'Windows получила новый номер устройства. Подробности — на вкладке «Номер устройства».'
+    }
     # дневной замер телеметрии для хронологии — если запись рентгена включена
     try {
         if ((Test-XrayModule) -and (Get-XrayViewingEnabled)) {
@@ -2014,7 +3148,7 @@ function Run-Guard {
     $summary = @{
         time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); checked = $mods; drifted = @($drifted | ForEach-Object { $_.name })
         driftModules = @($driftModules | ForEach-Object { $script:ModuleTitles[$_] }); fixed = $fixed; hotfixes = $kbs
-        newStartup = @($newStartup | ForEach-Object { $_.name })
+        newStartup = @($newStartup | ForEach-Object { $_.name }); gdidHash = $gHash
     }
     Save-Json 'guard-last.json' $summary
     $line = "{0}  проверено модулей: {1}, сбито: {2}, исправлено: {3}, обновления: {4}" -f $summary.time, $mods.Count, $drifted.Count, $fixed, ($kbs -join ' ')
@@ -2063,10 +3197,11 @@ if ($InstallGuard) {
     Write-Section 'Страж приватности'
     try {
         Ensure-DataDir
-        $engineDst = Join-Path $script:DataDir 'engine.ps1'
-        Copy-Item -LiteralPath $PSCommandPath -Destination $engineDst -Force
+        $engineDst = Install-TaskEngine
         $mods = @($Modules | Where-Object { $_ -notin @('cleanup','startup','buffer') })
-        Save-Json 'profile.json' @{ version=1; modules=$mods; created=(Get-Date).ToString('s') }
+        # Снятые внутри модуля пункты страж тоже помнит: иначе он «чинил» бы
+        # то, что человек оставил нарочно, — например, DoSvc ради Магазина.
+        Save-Json 'profile.json' @{ version=1; modules=$mods; skip=@($SkipItems); created=(Get-Date).ToString('s') }
         $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -Guard' + $script:DataArg)
         $t1 = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
         $t1.Delay = 'PT3M'
@@ -2229,7 +3364,8 @@ $script:FactRules = @(
        re = '"(?:deviceMake|deviceModel|SystemManufacturer|SystemProductName|Model|Manufacturer)"\s*:\s*"([^"]{2,80})"' },
     @{ id = 'ids';     title = 'Идентификаторы, которыми вас метят'
        what = 'Постоянные номера устройства и учётной записи: по ним события связываются в один профиль.'
-       re = '"(?:localId|deviceId|machineId|userId|globalDeviceId|sqmId)"\s*:\s*"([^"]{6,120})"' },
+       # номер устройства в учётной записи (GDID) событие несёт полем device.id: «g:» и цифры
+       re = '(?:"(?:localId|deviceId|machineId|userId|globalDeviceId|sqmId)"\s*:\s*"|"id"\s*:\s*"(?=g:\d{6}))([^"]{6,120})' },
     @{ id = 'serial';  title = 'Серийные номера железа'
        what = 'Серийный номер не меняется никогда — это самая надёжная метка устройства.'
        re = '"(?:SerialNumber|BaseBoardSerial|BiosSerial|DiskSerial)"\s*:\s*"([^"]{4,80})"' },
@@ -2712,8 +3848,7 @@ if ($InstallWatcher) {
     Write-Section 'Живые уведомления'
     try {
         Ensure-DataDir
-        $engineDst = Join-Path $script:DataDir 'engine.ps1'
-        if ($PSCommandPath -ne $engineDst) { Copy-Item -LiteralPath $PSCommandPath -Destination $engineDst -Force }
+        $engineDst = Install-TaskEngine
         if (-not (Get-MonitorEnabled)) { Set-MonitorEnabled $true | Out-Null }
         foreach ($d in $script:Defs) { if ($d.M -eq 'firewall') { Apply-Def $d } }
 
@@ -2972,6 +4107,14 @@ function Get-Footprint {
     $sqm = Get-RegValue 'HKLM:\SOFTWARE\Microsoft\SQMClient' 'MachineId'
     & $add 'machineid' 'Постоянные метки компьютера' 'MachineGuid и SQM MachineId — метки, которыми помечается телеметрия. Нужны системе, стереть нельзя.' ("$mg " + "$sqm").Trim() 0 2 $false ''
 
+    # Номер устройства в учётной записи Microsoft (GDID). Лежит открытым текстом
+    # шестнадцатеричным числом; Microsoft знает его в десятичном виде с «g:».
+    # Простое стирание бесполезно — работа с ним на своей вкладке.
+    $gdid = ConvertTo-Gdid "$(Get-RegValue 'HKCU:\SOFTWARE\Microsoft\IdentityCRL\ExtendedProperties' 'LID')"
+    $gdidOff = ((Get-SvcStart 'CDPSvc') -eq 4 -and (Get-SvcStart 'DoSvc') -eq 4)
+    $gdidWarn = $(if ($gdid -and -not $gdidOff) { 'передаётся' } else { '' })
+    & $add 'gdid' 'Номер устройства в учётной записи Microsoft (GDID)' 'По этому номеру Microsoft узнаёт компьютер даже через VPN и выдаёт его по запросу властей. Не передавать, сменить или запретить выдачу — на вкладке «Номер устройства».' $(if ($gdid) { $gdid } else { '—' }) 0 $(if ($gdid) { 1 } else { 0 }) $false $gdidWarn
+
     # История сетей
     $netNames = @()
     try {
@@ -3149,7 +4292,9 @@ if ($ListDefs) {
         if ($mi.Count -eq 0) { continue }
         $groups += @{ module = $m; title = $script:ModuleTitles[$m]
                       items = @($mi | ForEach-Object { @{ id = $_.Id; name = $_.C; kind = $_.T
-                                                          target = "$($_.P)"; valueName = "$($_.N)" } }) }
+                                                          target = "$($_.P)"; valueName = "$($_.N)"
+                                                          risk = (Get-DefRisk $_)
+                                                          note = $(if ($script:DefNotes.ContainsKey("$($_.C)")) { $script:DefNotes["$($_.C)"] } else { '' }) } }) }
     }
     Emit-Json @{ groups = $groups }
     exit 0
@@ -3166,6 +4311,8 @@ if ($Spy) {
 }
 
 if ($Footprint) { Emit-Json (Get-Footprint); exit 0 }
+
+if ($LeakTest) { Emit-Json (Invoke-LeakTest); exit 0 }
 
 if ($FootprintWipe) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
@@ -3192,8 +4339,7 @@ if ($InstallSensorGuard) {
     Write-Section 'Слежение за датчиками'
     try {
         Ensure-DataDir
-        $engineDst = Join-Path $script:DataDir 'engine.ps1'
-        if ($PSCommandPath -ne $engineDst) { Copy-Item -LiteralPath $PSCommandPath -Destination $engineDst -Force }
+        $engineDst = Install-TaskEngine
 
         # закладываем текущий список программ как известный — без уведомлений
         $r0 = Get-SpyReport
@@ -3215,6 +4361,48 @@ if ($InstallSensorGuard) {
     Write-Log '###DONE###'
     exit 0
 }
+
+if ($InstallNetGuard) {
+    if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
+    Write-Section 'Слежение за сетью'
+    try {
+        Ensure-DataDir
+        $engineDst = Install-TaskEngine
+        # без журнала разрешённых соединений слежению не из чего брать программы
+        if (-not (Get-MonitorEnabled)) { $null = Set-MonitorEnabled $true }
+        # Известными считаем всех, кто выходил в сеть за неделю, и тех, у кого
+        # соединение открыто прямо сейчас; ещё час слежение учится молча.
+        $known = @{}
+        foreach ($k in @((Get-NetAppsSince -Since (Get-Date).AddDays(-7)).Keys)) { $known[$k] = $true }
+        foreach ($c in @(Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue)) {
+            try { $p = (Get-Process -Id $c.OwningProcess -ErrorAction Stop).Path; if ($p) { $known[$p.ToLowerInvariant()] = $true } } catch { }
+        }
+        Save-Json 'net-apps.json' @{ known = @($known.Keys); recent = @(); learnUntil = (Get-Date).AddHours(1).ToString('s'); last = (Get-Date).ToString('s') }
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -NetGuard' + $script:DataArg)
+        $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Days 3650)
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+        $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+        Register-ScheduledTask -TaskName $script:NetTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
+        Write-Log '   [+] слежение включено: сверка журнала брандмауэра каждые 15 минут'
+        Write-Log ("   [+] известных программ: {0}; первый час слежение учится и молчит" -f $known.Count)
+        Write-Log '   [+] новая программа выйдет в сеть — придёт уведомление, а на странице «Монитор» её можно отрезать'
+    } catch { Write-Log "   [!] не удалось: $($_.Exception.Message)" }
+    Write-Log '###DONE###'
+    exit 0
+}
+
+if ($RemoveNetGuard) {
+    if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
+    Write-Section 'Слежение за сетью'
+    try { Unregister-ScheduledTask -TaskName $script:NetTask -Confirm:$false -ErrorAction Stop; Write-Log '   [+] слежение отключено' }
+    catch { Write-Log '   [-] задача слежения не найдена' }
+    Write-Log '   [i] журнал соединений остаётся — он нужен монитору; выключается кнопкой монитора.'
+    Write-Log '###DONE###'
+    exit 0
+}
+
+# периодический запуск из планировщика: тихо, без вывода
+if ($NetGuard) { $null = Invoke-NetGuard; exit 0 }
 
 if ($RemoveSensorGuard) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
@@ -3759,16 +4947,113 @@ if ($Audit) {
 #  ОТКАТ ПО ЖУРНАЛУ
 #  Возвращает каждый параметр реестра в то значение, которое было до нас.
 # =========================================================================== #
+# --------------------------------------------------------------------------- #
+#  Другие пользователи и профиль по умолчанию. Настройки из HKCU касаются
+#  только вошедшего. С -AllProfiles они ложатся и в кусты других профилей
+#  этого компьютера, и в профиль Default — его копию получает каждый новый
+#  пользователь. Не загруженный куст подключается на время записи.
+# --------------------------------------------------------------------------- #
+function Get-OtherProfiles {
+    $me = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    $out = New-Object System.Collections.Generic.List[object]
+    $out.Add(@{ name = 'Default'; sid = ''; file = (Join-Path $env:SystemDrive 'Users\Default\NTUSER.DAT') })
+    foreach ($p in @(Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue)) {
+        if ($p.Special -or -not $p.LocalPath -or "$($p.SID)" -eq $me -or "$($p.SID)" -notlike 'S-1-5-21-*') { continue }
+        $out.Add(@{ name = (Split-Path $p.LocalPath -Leaf); sid = "$($p.SID)"; file = (Join-Path $p.LocalPath 'NTUSER.DAT') })
+    }
+    return @($out | Where-Object { Test-Path -LiteralPath $_.file })
+}
+
+# Выполняет $Body с корнем куста профиля. Вошедший пользователь — его куст уже
+# загружен; иначе файл NTUSER.DAT подключается под временным именем и
+# отключается обратно.
+function Use-ProfileHive {
+    param($Prof, [scriptblock]$Body)
+    if ($Prof.sid -and (Test-Path -LiteralPath ('Registry::HKEY_USERS\' + $Prof.sid))) {
+        $null = & $Body ('Registry::HKEY_USERS\' + $Prof.sid); return $true
+    }
+    $mount = 'W11P_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $null = & reg.exe load "HKU\$mount" "$($Prof.file)" 2>&1
+    if ($LASTEXITCODE -ne 0) { return $false }
+    try { $null = & $Body ('Registry::HKEY_USERS\' + $mount) }
+    finally {
+        # пока живы ссылки на ключи, куст не отключится
+        for ($i = 0; $i -lt 6; $i++) {
+            [gc]::Collect(); [gc]::WaitForPendingFinalizers()
+            $null = & reg.exe unload "HKU\$mount" 2>&1
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    return $true
+}
+
+function Apply-ProfilesHives {
+    $defs = @($script:Defs | Where-Object { ($Modules -contains $_.M) -and ($SkipItems -notcontains $_.Id) -and
+                                            ($script:RegTypes -contains $_.T) -and "$($_.P)" -like 'HKCU:\*' -and (Test-DefApplicable $_) })
+    if ($defs.Count -eq 0) { return }
+    Write-Section 'Другие пользователи и профиль по умолчанию'
+    foreach ($pr in @(Get-OtherProfiles)) {
+        if ($DryRun) { Write-Log ("   [тест] профиль {0}: настроек {1}" -f $pr.name, $defs.Count); continue }
+        $cnt = @{ changed = 0; failed = 0 }
+        $mounted = Use-ProfileHive $pr {
+            param($root)
+            foreach ($d in $defs) {
+                $sub = ("$($d.P)" -replace '^HKCU:\\', '')
+                $kp = "$root\$sub"
+                $cur = Get-RegValue $kp $d.N
+                if ($null -ne $cur -and "$cur" -eq "$($d.V)") { continue }
+                try {
+                    if (-not (Test-Path -LiteralPath $kp)) { New-Item -Path $kp -Force -ErrorAction Stop | Out-Null }
+                    New-ItemProperty -LiteralPath $kp -Name $d.N -Value $d.V -PropertyType $d.Type -Force -ErrorAction Stop | Out-Null
+                    $script:Journal.Add(@{ kind = 'hive'; file = $pr.file; sid = $pr.sid; profile = $pr.name; sub = $sub
+                                           name = $d.N; type = $d.Type; existed = ($null -ne $cur)
+                                           old = $(if ($null -ne $cur) { $cur } else { '' }); newValue = "$($d.V)"; time = (Get-Date).ToString('s') })
+                    $cnt.changed++
+                } catch { $cnt.failed++ }
+            }
+        }
+        if (-not $mounted) { Write-Log ("   [!] профиль {0}: куст не подключился (пользователь занят или файл недоступен)" -f $pr.name); $script:Failures++; continue }
+        Write-Log ("   [+] профиль {0}: изменено настроек {1}{2}" -f $pr.name, $cnt.changed, $(if ($cnt.failed) { ", не удалось $($cnt.failed)" } else { '' }))
+        $script:Changes += $cnt.changed; $script:Failures += $cnt.failed
+    }
+    Save-JournalEntries -Quiet
+}
+
+# Возвращает одну запись другого профиля в то, что было до программы
+function Restore-HiveEntry {
+    param($Entry)
+    $res = @{ ok = $false; error = '' }
+    $mounted = Use-ProfileHive @{ name = "$($Entry.profile)"; sid = "$($Entry.sid)"; file = "$($Entry.file)" } {
+        param($root)
+        $kp = "$root\$($Entry.sub)"
+        try {
+            if ($Entry.existed) {
+                if (-not (Test-Path -LiteralPath $kp)) { New-Item -Path $kp -Force -ErrorAction Stop | Out-Null }
+                New-ItemProperty -LiteralPath $kp -Name $Entry.name -Value $Entry.old -PropertyType $Entry.type -Force -ErrorAction Stop | Out-Null
+            } else { Remove-ItemProperty -LiteralPath $kp -Name $Entry.name -Force -ErrorAction SilentlyContinue }
+            $res.ok = $true
+        } catch { $res.error = $_.Exception.Message }
+    }
+    if (-not $mounted) { $res.error = 'куст профиля не подключился' }
+    return $res
+}
+
 function Restore-Journal {
-    $j = Load-Json 'changes.json'
-    if (-not $j -or -not $j.items) { Write-Log '   [-] журнал пуст — возвращать нечего'; return @{ restored = 0; failed = 0 } }
+    if (-not (Test-DataTrusted)) {
+        Write-Log '   [!] папка данных программы не защищена от подмены -- журналу отката сейчас нельзя верить, ничего не возвращаем'
+        $script:Failures++
+        return @{ restored = 0; failed = 0 }
+    }
+    $jf = Read-JournalFile
+    if ($jf.items.Count -eq 0) { Write-Log '   [-] журнал пуст — возвращать нечего'; return @{ restored = 0; failed = 0; legacy = $jf.legacy } }
     # Журнал идёт от старых записей к новым, и про каждый параметр нужна
     # первая: она помнит состояние до нас. Раньше список переворачивался, и у
     # журнала с повторами (версии до схлопывания) возвращалось то значение,
     # которое программа сама же записала в прошлый раз.
-    $ok = 0; $seen = @{}; $startBack = 0
+    $ok = 0; $seen = @{}; $startBack = 0; $svcBack = 0
     $failed = New-Object System.Collections.Generic.List[object]
-    foreach ($e in @($j.items)) {
+    foreach ($e in @($jf.items)) {
         # записи автозагрузки возвращаем тем же способом, каким гасили
         if ("$($e.kind)" -eq 'startup') {
             $key = "startup|$($e.id)"
@@ -3778,32 +5063,34 @@ function Restore-Journal {
             if ($r.ok) { $startBack++ } else { $failed.Add($e) }
             continue
         }
-        if ("$($e.kind)" -ne 'reg') { continue }
-        $key = ("$($e.path)|$($e.name)").ToLowerInvariant()
+        if ("$($e.kind)" -eq 'hive') {
+            $key = Get-JournalKey (ConvertTo-Fields $e)
+            if ($seen.ContainsKey($key)) { continue }
+            $seen[$key] = $true
+            $r = Restore-HiveEntry $e
+            if ($r.ok) { $ok++ } else { $failed.Add($e) }
+            continue
+        }
+        $kind = "$($e.kind)"
+        if ($kind -notin @('reg', 'svc', 'task', 'env')) { continue }
+        $key = Get-JournalKey (ConvertTo-Fields $e)
         if ($seen.ContainsKey($key)) { continue }      # только самое раннее состояние
         $seen[$key] = $true
-        try {
-            if ($e.existed) {
-                if (-not (Test-Path -LiteralPath $e.path)) { New-Item -Path $e.path -Force -ErrorAction Stop | Out-Null }
-                New-ItemProperty -LiteralPath $e.path -Name $e.name -Value $e.old -PropertyType $e.type -Force -ErrorAction Stop | Out-Null
-            } else {
-                Remove-ItemProperty -LiteralPath $e.path -Name $e.name -Force -ErrorAction SilentlyContinue
-            }
-            $ok++
-        } catch { $failed.Add($e) }
+        $r = Restore-JournalEntry $e
+        if (-not $r.ok) { $failed.Add($e); Write-Log ("   [!] не вернулось: {0} -- {1}" -f $key, $r.error); continue }
+        if ($kind -eq 'reg') { $ok++ } else { $svcBack++ }
     }
     $bad = $failed.Count
     Write-Log ("   [+] возвращено параметров реестра: {0}" -f $ok)
+    if ($svcBack -gt 0) { Write-Log ("   [+] возвращено служб, задач и переменных среды: {0}" -f $svcBack) }
     if ($startBack -gt 0) { Write-Log ("   [+] возвращено записей автозагрузки: {0}" -f $startBack) }
     # Что вернуть не удалось, остаётся в журнале: раньше он стирался целиком,
     # даже когда откат прошёл не весь, и вторая попытка была невозможна.
-    if ($bad -gt 0) {
-        Write-Log ("   [!] не удалось вернуть: {0} -- эти записи остались в журнале" -f $bad)
-        Save-Json 'changes.json' @{ items = $failed.ToArray(); updated = (Get-Date).ToString('s') }
-    } else {
-        try { Remove-Item -LiteralPath (Join-Path $script:DataDir 'changes.json') -Force -ErrorAction SilentlyContinue } catch { }
-    }
-    return @{ restored = $ok; startup = $startBack; failed = $bad }
+    # Пустой журнал остаётся файлом: по нему видно, что он нового образца.
+    if ($bad -gt 0) { Write-Log ("   [!] не удалось вернуть: {0} -- эти записи остались в журнале" -f $bad) }
+    try { Use-JournalLock { Write-JournalFile $failed.ToArray() $jf.legacy } }
+    catch { Write-Log ("   [!] журнал отката не переписался: {0}" -f $_.Exception.Message); $script:Failures++ }
+    return @{ restored = $ok + $svcBack; startup = $startBack; failed = $bad; legacy = $jf.legacy }
 }
 
 # --------------------------------------------------------------------------- #
@@ -3830,6 +5117,32 @@ function Get-ChangeGroups {
             $where = 'автозагрузка'
             $was = $(if ("$($e.old)" -eq 'On') { 'запускалась' } else { 'была отключена' })
             $now = $(if ("$($e.newValue)" -eq 'On') { 'запускается' } else { 'отключена' })
+        } elseif ($kind -eq 'hive') {
+            # настройка другого профиля: называется так же, как своя, а где — видно по профилю
+            $key = Get-JournalKey (ConvertTo-Fields $e)
+            $pk = ("HKCU:\{0}|{1}" -f "$($e.sub)", "$($e.name)").ToLowerInvariant()
+            $title = $(if ($byPath.ContainsKey($pk)) { $byPath[$pk].title } else { "$($e.name)" })
+            $where = ("профиль {0}: {1}" -f "$($e.profile)", "$($e.sub)")
+            $was = $(if ($e.existed) { "$($e.old)" } else { 'не было' })
+            $now = "$($e.newValue)"
+        } elseif ($kind -in @('svc', 'task', 'env')) {
+            $key = Get-JournalKey (ConvertTo-Fields $e)
+            $target = $(if ($kind -eq 'task') { "$($e.path)" } else { "$($e.name)" })
+            $def = @($script:Defs | Where-Object { "$($_.P)" -eq $target -and (
+                        ($kind -eq 'svc' -and $_.T -in @('svc', 'svcopt')) -or ($kind -eq 'task' -and $_.T -eq 'task') -or ($kind -eq 'env' -and $_.T -eq 'env')) } | Select-Object -First 1)
+            $title = $(if ($def.Count -gt 0) { [string]$def[0].C } elseif ($kind -eq 'task') { Split-Path $target -Leaf } else { $target })
+            if ($kind -eq 'svc') {
+                $where = 'службы Windows'
+                $was = Get-StartName "$($e.old)" "$($e.delayed)"
+                $now = Get-StartName "$($e.newValue)"
+            } elseif ($kind -eq 'task') {
+                $where = 'планировщик задач'
+                $was = 'включена'; $now = 'отключена'
+            } else {
+                $where = 'переменные среды'
+                $was = $(if ($e.existed) { "$($e.old)" } else { 'не было' })
+                $now = "$($e.newValue)"
+            }
         } else {
             $key = ("reg|{0}|{1}" -f "$($e.path)", "$($e.name)").ToLowerInvariant()
             $pk = ("{0}|{1}" -f "$($e.path)", "$($e.name)").ToLowerInvariant()
@@ -3862,29 +5175,26 @@ function Get-ChangeGroups {
 # Возвращает одну запись журнала и убирает её из changes.json
 function Restore-ChangeKey {
     param([string]$Key)
-    $j = Load-Json 'changes.json'
-    if (-not $j -or -not $j.items) { return @{ ok = $false; error = 'журнал пуст' } }
-    $items = @($j.items)
+    if (-not (Test-DataTrusted)) { return @{ ok = $false; error = 'папка данных программы не защищена от подмены' } }
+    $jf = Read-JournalFile
+    if ($jf.items.Count -eq 0) { return @{ ok = $false; error = 'журнал пуст' } }
     $mine = @(); $rest = @()
-    foreach ($e in $items) {
-        $k = $(if ("$($e.kind)" -eq 'startup') { 'startup|' + "$($e.id)" }
-               else { ("reg|{0}|{1}" -f "$($e.path)", "$($e.name)").ToLowerInvariant() })
+    foreach ($e in $jf.items) {
+        $k = Get-JournalKey (ConvertTo-Fields $e)
         if ($k -eq $Key) { $mine += $e } else { $rest += $e }
     }
     if ($mine.Count -eq 0) { return @{ ok = $false; error = 'запись не найдена' } }
     $first = $mine[0]              # самое раннее состояние
-    try {
-        if ("$($first.kind)" -eq 'startup') {
-            $r = Set-StartupState ([string]$first.id) ("$($first.old)" -eq 'On')
-            if (-not $r.ok) { return @{ ok = $false; error = "$($r.error)" } }
-        } elseif ($first.existed) {
-            if (-not (Test-Path -LiteralPath $first.path)) { New-Item -Path $first.path -Force -ErrorAction Stop | Out-Null }
-            New-ItemProperty -LiteralPath $first.path -Name $first.name -Value $first.old -PropertyType $first.type -Force -ErrorAction Stop | Out-Null
-        } else {
-            Remove-ItemProperty -LiteralPath $first.path -Name $first.name -Force -ErrorAction SilentlyContinue
-        }
-    } catch { return @{ ok = $false; error = $_.Exception.Message } }
-    Save-Json 'changes.json' @{ items = $rest; updated = (Get-Date).ToString('s') }
+    if ("$($first.kind)" -eq 'startup') {
+        $r = Set-StartupState ([string]$first.id) ("$($first.old)" -eq 'On')
+    } elseif ("$($first.kind)" -eq 'hive') {
+        $r = Restore-HiveEntry $first
+    } else {
+        $r = Restore-JournalEntry $first
+    }
+    if (-not $r.ok) { return @{ ok = $false; error = "$($r.error)" } }
+    try { Use-JournalLock { Write-JournalFile $rest $jf.legacy } }
+    catch { return @{ ok = $false; error = ('возвращено, но журнал не переписался: ' + $_.Exception.Message) } }
     return @{ ok = $true }
 }
 
@@ -3916,6 +5226,54 @@ if ($RestoreItems) {
 }
 
 # --------------------------------------------------------------------------- #
+#  Номер устройства: состояние, смена, возврат как было
+# --------------------------------------------------------------------------- #
+if ($GdidStatus) { Emit-Json (Get-GdidStatus); exit 0 }
+
+if ($GdidReissue) {
+    if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
+    Write-Section 'Смена номера устройства'
+    $lockedNow = Test-HostsBlock -Kind 'lock'
+    if ($lockedNow) { Write-Log '   [i] сервер выдачи закрыт: после стирания нового номера Windows не получит' }
+    $wiped = Invoke-GdidWipe
+    if ($wiped -and -not $lockedNow) {
+        Write-Log '   [i] Новый номер Windows получит при следующем обращении к учётной записи Microsoft (Магазин, Параметры) или после перезагрузки.'
+        Write-Log '   [i] Магазин, Xbox и OneDrive могут попросить войти заново.'
+    }
+    Emit-Json (Get-GdidStatus)
+    Write-Log '###DONE###'
+    exit 0
+}
+
+if ($GdidRestore) {
+    if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
+    Write-Section 'Номер устройства: вернуть как было'
+    # тип запуска служб — по журналу: ровно то, что было до программы
+    foreach ($n in @('CDPSvc', 'CDPUserSvc', 'DoSvc')) {
+        $r = Restore-ChangeKey (("reg|HKLM:\SYSTEM\CurrentControlSet\Services\{0}|Start" -f $n).ToLowerInvariant())
+        if ($r.ok) { Write-Log ("   [+] служба {0}: тип запуска возвращён" -f $n); $script:Changes++ }
+        else { Write-Log ("   [-] служба {0}: программа её не меняла" -f $n) }
+    }
+    Remove-HostsBlock -Kind 'gdid'
+    Remove-HostsBlock -Kind 'lock'
+    try { Remove-NetFirewallRule -DisplayName (Get-FwRuleName 'svc' 'wlidsvc') -ErrorAction Stop; Write-Log '   [+] правило брандмауэра для wlidsvc снято' }
+    catch { Write-Log '   [-] правила брандмауэра для wlidsvc не было' }
+    # иначе страж тут же поставил бы всё обратно
+    $prof = Load-Json 'profile.json'
+    if ($prof -and $prof.modules -and @(@($prof.modules) | Where-Object { $_ -in @('gdid', 'gdidlock') }).Count -gt 0) {
+        $profSkip = @($(if ($prof.PSObject.Properties['skip']) { @($prof.skip) } else { @() }))
+        Save-Json 'profile.json' @{ version = 1; modules = @(@($prof.modules) | Where-Object { $_ -notin @('gdid', 'gdidlock') })
+                                    skip = $profSkip; created = "$($prof.created)" }
+        Write-Log '   [+] страж больше не следит за номером устройства'
+    }
+    if ((Get-SvcStart 'CDPSvc') -ne 4) { try { Start-Service CDPSvc -ErrorAction Stop } catch { } }
+    Write-Log '   [i] Стёртый раньше номер не вернётся: Windows получит новый при следующем обращении к учётной записи Microsoft.'
+    Emit-Json (Get-GdidStatus)
+    Write-Log '###DONE###'
+    exit 0
+}
+
+# --------------------------------------------------------------------------- #
 #  Что программа накопила о вас у себя. Для программы про приватность честно
 #  показывать и свои файлы — и уметь их стереть.
 # --------------------------------------------------------------------------- #
@@ -3929,7 +5287,8 @@ $script:DataFiles = @(
     @{ file = 'xray-baseline.json';  title = 'Эталон рентгена: сколько событий уходило до настройки' },
     @{ file = 'profile.json';        title = 'Профиль стража: какие разделы он сторожит' },
     @{ file = 'guard-last.json';     title = 'Последняя проверка стража' },
-    @{ file = 'guard.log';           title = 'Журнал работы стража' }
+    @{ file = 'guard.log';           title = 'Журнал работы стража' },
+    @{ file = 'net-apps.json';       title = 'Программы, выходившие в сеть, — по ним слежение замечает новые' }
 )
 
 function Get-DataFiles {
@@ -4000,28 +5359,41 @@ if ($Revert) {
     Write-Log 'ОТКАТ ИЗМЕНЕНИЙ'
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
 
-    Write-Section 'Настройки реестра'; $null = Restore-Journal
+    Write-Section 'Настройки реестра, службы, задачи'; $rj = Restore-Journal
+    # Журнал прежних версий (или его нет вовсе) не знает, какими были службы,
+    # задачи и переменные среды до программы. Только для него — прежний откат
+    # «по умолчанию», и только для того, что сейчас выключено.
+    $legacyRevert = [bool]$rj.legacy -or -not (Test-Path -LiteralPath (Join-Path $script:DataDir 'changes.json'))
     Write-Section 'Файл hosts'; Remove-HostsBlock
     Write-Section 'Брандмауэр'; Remove-FwRules
     Write-Section 'Монитор'; if (Get-MonitorEnabled) { Set-MonitorEnabled $false | Out-Null } else { Write-Log '   [-] журнал аудита не включён' }
     Write-Section 'Страж'
     try { Unregister-ScheduledTask -TaskName $script:GuardTask -Confirm:$false -ErrorAction Stop; Write-Log '   [+] задача стража удалена' } catch { Write-Log '   [-] стража нет' }
     try { Unregister-ScheduledTask -TaskName $script:SensorTask -Confirm:$false -ErrorAction Stop; Write-Log '   [+] слежение за датчиками удалено' } catch { Write-Log '   [-] слежения за датчиками нет' }
+    try { Unregister-ScheduledTask -TaskName $script:NetTask -Confirm:$false -ErrorAction Stop; Write-Log '   [+] слежение за сетью удалено' } catch { Write-Log '   [-] слежения за сетью нет' }
     try { Unregister-ScheduledTask -TaskName 'Win11Privacy Watcher' -Confirm:$false -ErrorAction Stop; Write-Log '   [+] живые уведомления удалены' } catch { Write-Log '   [-] живых уведомлений нет' }
 
-    Write-Section 'Службы'
-    foreach ($svc in @(@{N='DiagTrack';S='Automatic'}, @{N='dmwappushservice';S='Manual'}, @{N='NvTelemetryContainer';S='Automatic'})) {
-        try { $null = Get-Service -Name $svc.N -ErrorAction Stop; Set-Service -Name $svc.N -StartupType $svc.S -ErrorAction Stop; Write-Log "   [+] $($svc.N) -> $($svc.S)" }
-        catch { Write-Log "   [-] $($svc.N) -- пропущено" }
-    }
-    Write-Section 'Задачи планировщика'
-    foreach ($d in $script:Defs) {
-        if ($d.T -eq 'task') {
-            $pp = Split-TaskPath $d.P
-            try { Enable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null; Write-Log "   [+] включена: $($pp[1])" } catch { Write-Log "   [-] пропущена: $($pp[1])" }
-        } elseif ($d.T -eq 'taskglob') {
-            foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like $d.P })) {
-                try { Enable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null; Write-Log "   [+] включена: $($t.TaskName)" } catch { }
+    if ($legacyRevert) {
+        Write-Section 'Службы (журнал прежней версии)'
+        foreach ($svc in @(@{N='DiagTrack';S='Automatic'}, @{N='dmwappushservice';S='Manual'}, @{N='NvTelemetryContainer';S='Automatic'}, @{N='InventorySvc';S='Automatic'})) {
+            try {
+                $s = Get-Service -Name $svc.N -ErrorAction Stop
+                if ($s.StartType -ne 'Disabled') { continue }       # не выключена — не трогаем
+                Set-Service -Name $svc.N -StartupType $svc.S -ErrorAction Stop; Write-Log "   [+] $($svc.N) -> $($svc.S)"
+            } catch { Write-Log "   [-] $($svc.N) -- пропущено" }
+        }
+        Write-Section 'Задачи планировщика (журнал прежней версии)'
+        foreach ($d in $script:Defs) {
+            if ($d.T -eq 'task') {
+                $pp = Split-TaskPath $d.P
+                $st = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
+                if (-not $st) { continue }
+                if ($st.State -ne 'Disabled') { continue }
+                if ((Set-TaskEnabled $d.P $true) -in @('ok', 'system')) { Write-Log "   [+] включена: $($pp[1])" } else { Write-Log "   [-] пропущена: $($pp[1])" }
+            } elseif ($d.T -eq 'taskglob') {
+                foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like $d.P -and $_.State -eq 'Disabled' })) {
+                    try { Enable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null; Write-Log "   [+] включена: $($t.TaskName)" } catch { }
+                }
             }
         }
     }
@@ -4038,38 +5410,53 @@ if ($Revert) {
     } else { Write-Log '   [-] ничего не отключалось' }
 
     Write-Section 'Сторонние программы'
-    foreach ($v in @('POWERSHELL_TELEMETRY_OPTOUT','POWERSHELL_UPDATECHECK','DOTNET_CLI_TELEMETRY_OPTOUT')) {
-        try { [Environment]::SetEnvironmentVariable($v, $null, 'User'); Write-Log "   [+] переменная $v удалена" } catch { }
+    # Переменные среды возвращает журнал. Журнал прежней версии их не знает:
+    # тогда убираем только то, что стоит ровно в нашем значении.
+    if ($legacyRevert) {
+        foreach ($d in @($script:Defs | Where-Object { $_.T -eq 'env' })) {
+            if ([string][Environment]::GetEnvironmentVariable($d.P, 'User') -ne [string]$d.V) { continue }
+            try { [Environment]::SetEnvironmentVariable($d.P, $null, 'User'); Write-Log "   [+] переменная $($d.P) удалена" } catch { }
+        }
     }
     foreach ($f in @((Get-VsCodeSettingsPath), (Get-FirefoxPoliciesPath))) {
         if ($f -and (Test-Path -LiteralPath "$f.win11privacy.bak")) {
             try { Copy-Item -LiteralPath "$f.win11privacy.bak" -Destination $f -Force -ErrorAction Stop; Remove-Item -LiteralPath "$f.win11privacy.bak" -Force -ErrorAction SilentlyContinue; Write-Log "   [+] восстановлен: $f" } catch { }
         }
     }
-    foreach ($k in @('HKLM:\SOFTWARE\Policies\Google\Chrome','HKCU:\Software\Policies\Microsoft\office','HKLM:\SOFTWARE\Policies\Microsoft\VisualStudio')) {
-        # политики сторонних программ создавались только нами — удаляем целиком
-        if (Test-Path -LiteralPath $k) { try { Remove-Item -LiteralPath $k -Recurse -Force -ErrorAction Stop; Write-Log "   [+] удалены политики: $k" } catch { } }
-    }
+    # Политики Chrome, Office и Visual Studio раньше удалялись целыми ветками —
+    # вместе с корпоративными, которых программа не ставила. Это обычные
+    # параметры реестра, и журнал уже вернул каждый из них как было.
 
-    Write-Section 'Геолокация, Защитник, виджеты'
-    foreach ($rv in @(
-        @{ P='HKLM:\SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors'; N='DisableLocation' },
-        @{ P='HKLM:\SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors'; N='DisableWindowsLocationProvider' },
-        @{ P='HKLM:\SOFTWARE\Policies\Microsoft\FindMyDevice'; N='AllowFindMyDevice' },
-        @{ P='HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet'; N='SpyNetReporting' },
-        @{ P='HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet'; N='SubmitSamplesConsent' },
-        @{ P='HKLM:\SOFTWARE\Policies\Microsoft\Dsh'; N='AllowNewsAndInterests' })) {
-        try { Remove-ItemProperty -LiteralPath $rv.P -Name $rv.N -Force -ErrorAction Stop; Write-Log "   [+] снято: $($rv.N)" } catch { }
+    if ($legacyRevert) {
+        # Самые старые версии ставили это без журнала. Снимаем, только если
+        # стоит ровно наше значение.
+        Write-Section 'Геолокация, Защитник, виджеты (журнал прежней версии)'
+        foreach ($rv in @(
+            @{ P='HKLM:\SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors'; N='DisableLocation'; V='1' },
+            @{ P='HKLM:\SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors'; N='DisableWindowsLocationProvider'; V='1' },
+            @{ P='HKLM:\SOFTWARE\Policies\Microsoft\FindMyDevice'; N='AllowFindMyDevice'; V='0' },
+            @{ P='HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet'; N='SpyNetReporting'; V='0' },
+            @{ P='HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet'; N='SubmitSamplesConsent'; V='2' },
+            @{ P='HKLM:\SOFTWARE\Policies\Microsoft\Dsh'; N='AllowNewsAndInterests'; V='0' })) {
+            if ("$(Get-RegValue $rv.P $rv.N)" -ne $rv.V) { continue }
+            try { Remove-ItemProperty -LiteralPath $rv.P -Name $rv.N -Force -ErrorAction Stop; Write-Log "   [+] снято: $($rv.N)" } catch { }
+        }
+        $locKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location'
+        if ("$(Get-RegValue $locKey 'Value')" -eq 'Deny') {
+            try { New-ItemProperty -LiteralPath $locKey -Name 'Value' -Value 'Allow' -PropertyType String -Force -ErrorAction Stop | Out-Null; Write-Log '   [+] доступ к местоположению возвращён (Allow)' } catch { }
+        }
     }
-    try { New-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location' -Name 'Value' -Value 'Allow' -PropertyType String -Force -ErrorAction Stop | Out-Null; Write-Log '   [+] доступ к местоположению возвращён (Allow)' } catch { }
 
     Write-Section 'Данные программы'
     $left = @(Get-DataFiles)
     # копия движка для стража больше не нужна — задача уже удалена
+    try { Remove-Item -LiteralPath $script:TaskEngine -Force -ErrorAction SilentlyContinue } catch { }
     try { Remove-Item -LiteralPath (Join-Path $script:DataDir 'engine.ps1') -Force -ErrorAction SilentlyContinue } catch { }
     if ($left.Count -eq 0) { Write-Log '   [-] программа ничего о вас не хранит' }
     else {
         foreach ($d in $left) {
+            # что вернуть не удалось, остаётся в журнале для второй попытки
+            if ($d.file -eq 'changes.json' -and [int]$rj.failed -gt 0) { Write-Log '   [-] журнал отката оставлен: в нём то, что вернуть не удалось'; continue }
             try { Remove-Item -LiteralPath (Join-Path $script:DataDir $d.file) -Force -ErrorAction Stop; Write-Log ("   [+] удалён: {0}" -f $d.file) }
             catch { Write-Log ("   [!] не удалось удалить {0}" -f $d.file) }
         }
@@ -4104,6 +5491,13 @@ if (-not $DryRun -and -not (Load-Json 'proof-before.json')) {
 
 $script:BackupEnabled = $true    # дальше идёт ручное применение
 
+# Журнал отката должен писаться до первого изменения, а не выясниться в конце
+if (-not (Test-JournalWritable)) {
+    Write-Log 'ПРИМЕНЕНИЕ ОТМЕНЕНО: журнал отката не записывается, а без него изменения нельзя было бы вернуть. Система не тронута.'
+    Write-Log '###DONE###'
+    exit 1
+}
+
 # --- Уборка за старыми версиями --------------------------------------------- #
 $junkFound = @(Find-JunkValues)
 if ($junkFound.Count -gt 0) {
@@ -4126,6 +5520,16 @@ foreach ($m in $script:ModuleOrder) {
     $modDefs = @($script:Defs | Where-Object { $_.M -eq $m })
     if ($modDefs.Count -eq 0) { continue }
     Write-Section $script:ModuleTitles[$m]
+    # Без сервера выдачи номера учётная запись Microsoft не работает вовсе —
+    # при входе в Windows через неё запрет не ставим, а объясняем почему.
+    if ($m -eq 'gdidlock' -and (Get-GdidLockRefusal)) {
+        if ((Get-GdidLockRefusal) -eq 'msa') {
+            Write-Log '   [!] не применено: вы входите в Windows через учётную запись Microsoft, а без сервера выдачи номера она перестанет работать.'
+            Write-Log '       Сначала перейдите на локальную учётную запись: Параметры > Учётные записи > Ваши данные.'
+        } else { Write-Log ("   [!] не применено: {0}" -f (Get-ManagedReason)) }
+        $script:Failures++
+        continue
+    }
     $failBefore = $script:Failures + $script:Blocked
     foreach ($d in $modDefs) {
         if ($SkipItems -contains $d.Id) { Write-Log ("   [п] {0} -- пропущено по вашему выбору" -f $d.C); continue }
@@ -4138,7 +5542,7 @@ foreach ($m in $script:ModuleOrder) {
 }
 
 # --- Компоненты производителя ---------------------------------------------- #
-if (Use-Module 'oem') {
+if ((Use-Module 'oem') -and -not $script:JournalFailed) {
     Write-Section 'Компоненты сбора данных производителя'
     $oem = Detect-Oem
     Write-Log ("   производитель: {0} {1}" -f $oem.manufacturer, $oem.model)
@@ -4166,11 +5570,14 @@ if (Use-Module 'oem') {
     }
 }
 
+# --- Другие пользователи и профиль по умолчанию ----------------------------- #
+if ($AllProfiles -and -not $script:JournalFailed) { Apply-ProfilesHives }
+
 # --- Буфер телеметрии ------------------------------------------------------- #
-if (Use-Module 'buffer') { Purge-Buffer }
+if ((Use-Module 'buffer') -and -not $script:JournalFailed) { Purge-Buffer }
 
 # --- Чистка ----------------------------------------------------------------- #
-if (Use-Module 'cleanup') {
+if ((Use-Module 'cleanup') -and -not $script:JournalFailed) {
     Write-Section 'Чистка временных файлов'
     $total = 0.0
     $wu = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
@@ -4239,6 +5646,9 @@ if (Use-Module 'startup') {
 Write-Section 'Итог'
 # журнал для отката — дописываем к тому, что было раньше
 Save-JournalEntries
+if ($script:JournalFailed) {
+    Write-Log '[!] Применение остановлено на середине: журнал отката перестал записываться. Что успело измениться до остановки, видно выше.'
+}
 # что Windows не отдала — запоминаем для проверки; что отдала — забываем
 if (-not $DryRun -and ($script:BlockedIds.Count -gt 0 -or $script:UnblockedIds.Count -gt 0)) {
     try {

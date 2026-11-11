@@ -163,7 +163,7 @@ namespace Win11Privacy
             // Хронология: что случилось за месяц
             if (_lastTimeline != null && Json.GetArr(_lastTimeline, "notes").Count > 0)
             {
-                h.Append("<h2>").Append(Esc(L.T("Хронология приватности"))).Append("</h2>");
+                h.Append("<h2>").Append(Esc(L.T("Хронология"))).Append("</h2>");
                 h.Append("<table><tr><th>").Append(Esc(L.T("Дата"))).Append("</th><th>").Append(Esc(L.T("Событие"))).Append("</th></tr>");
                 List<object> notes = Json.GetArr(_lastTimeline, "notes");
                 for (int i = notes.Count - 1; i >= 0; i--)
@@ -172,7 +172,7 @@ namespace Win11Privacy
                     string kind = Json.GetStr(n, "kind");
                     string text;
                     if (kind == "update") text = L.T("Обновление Windows: ") + Json.GetStr(n, "list");
-                    else if (kind == "drift") text = L.T("Страж нашёл сбитых настроек: ") + Json.GetInt(n, "a") + L.T(", вернул: ") + Json.GetInt(n, "b");
+                    else if (kind == "drift") text = L.T("Автозащита нашла сбитых настроек: ") + Json.GetInt(n, "a") + L.T(", вернул: ") + Json.GetInt(n, "b");
                     else text = L.T("Телеметрия выросла: было ") + Json.GetInt(n, "a") + L.T(" событий в сутки, стало ") + Json.GetInt(n, "b");
                     h.Append("<tr><td>").Append(Esc(Json.GetStr(n, "date"))).Append("</td><td class=\"")
                      .Append(kind == "update" ? "" : "bad").Append("\">").Append(Esc(text)).Append("</td></tr>");
@@ -268,7 +268,7 @@ namespace Win11Privacy
             // Досье
             if (_lastSpy != null)
             {
-                h.Append(L.T("<h2>Досье: кто включал камеру, микрофон и геолокацию</h2>"));
+                h.Append(L.T("<h2>Кто включал камеру, микрофон и геолокацию</h2>"));
                 h.Append(L.T("<table><tr><th>Программа</th><th>Датчик</th><th>Когда</th><th>Длительность</th></tr>"));
                 foreach (object co in Json.GetArr(_lastSpy, "caps"))
                 {
@@ -297,8 +297,12 @@ namespace Win11Privacy
                 foreach (object o in Json.GetArr(_lastFoot, "items"))
                 {
                     Dictionary<string, object> it = Json.Obj(o);
+                    string val = Json.GetStr(it, "value");
+                    // Отчёт пересылают и прикладывают к вопросам. Номер устройства —
+                    // ровно то, по чему Microsoft находит компьютер, — в него не идёт.
+                    if (Json.GetStr(it, "id") == "gdid" && val.StartsWith("g:")) val = L.T("есть — в отчёт не выводится");
                     h.Append("<tr><td>").Append(Esc(L.T(Json.GetStr(it, "title")))).Append("</td><td>")
-                     .Append(Esc(Json.GetStr(it, "value"))).Append("</td></tr>");
+                     .Append(Esc(val)).Append("</td></tr>");
                 }
                 h.Append("</table>");
             }

@@ -118,7 +118,7 @@ jobs:
           $env:WIN11_TEST_MOCK = '1'
           $env:WIN11_TEST_DELAY = '1500'
           $env:WIN11_TEST_DUMP = '1'      # вместе со снимком печатается геометрия страницы
-          $pages = @('home','settings','xray','dossier','audit','monitor','apps','startup','guard','changes','timeline','log','about')
+          $pages = @('home','settings','xray','dossier','gdid','audit','monitor','apps','startup','guard','changes','timeline','log','about')
           $bad = 0
           # два размера окна: обычный и самый маленький — там текст обрезается первым
           foreach ($size in @('normal', 'min')) {

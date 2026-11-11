@@ -34,27 +34,43 @@ using System.Threading;
 namespace Win11Privacy
 {
     // ================================================================== //
-    //  Язык интерфейса. По умолчанию берётся язык Windows: русский —
-    //  как есть, всё остальное — английский. Переключается на странице
-    //  «О программе» и запоминается вместе с размером окна.
+    //  Язык интерфейса. По умолчанию — язык Windows, и он проверяется при
+    //  каждом запуске: русский — как есть, любой другой — английский.
+    //  На странице «О программе» можно закрепить русский или английский.
     // ================================================================== //
     internal static class L
     {
         private static bool _en;
-        private static bool _explicit;
+        private static int _choice;            // 0 — как в Windows, 1 — русский, 2 — английский
         private static Dictionary<string, string> _map;
 
         public static bool English
         {
             get { return _en; }
-            set { _en = value; _explicit = true; }
+            set { _en = value; _choice = value ? 2 : 1; }
+        }
+
+        // Выбор языка: 0 — как в Windows, 1 — русский, 2 — английский
+        public static int Choice
+        {
+            get { return _choice; }
+            set
+            {
+                _choice = (value == 1 || value == 2) ? value : 0;
+                _en = _choice == 0 ? SystemEnglish() : _choice == 2;
+            }
+        }
+
+        // Язык интерфейса Windows: русский — как есть, любой другой — английский
+        public static bool SystemEnglish()
+        {
+            try { return !Thread.CurrentThread.CurrentUICulture.TwoLetterISOLanguageName.Equals("ru", StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
         }
 
         public static void DetectFromSystem()
         {
-            if (_explicit) return;
-            try { _en = !Thread.CurrentThread.CurrentUICulture.TwoLetterISOLanguageName.Equals("ru", StringComparison.OrdinalIgnoreCase); }
-            catch { _en = false; }
+            if (_choice == 0) _en = SystemEnglish();
         }
 
         public static string T(string ru)

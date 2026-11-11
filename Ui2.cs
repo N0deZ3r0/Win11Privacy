@@ -191,7 +191,7 @@ namespace Win11Privacy
             }
             using (Font f = new Font(Font.FontFamily, Font.Size * 0.78F, FontStyle.Bold))
             using (SolidBrush b = new SolidBrush(Theme.TextFaint))
-                g.DrawString(Text.ToUpperInvariant(), f, b, u * 0.6F, (Height - f.Height) / 2F);
+                g.DrawString(Text, f, b, u * 0.6F, (Height - f.Height) / 2F);
         }
     }
 
@@ -223,18 +223,34 @@ namespace Win11Privacy
         protected override void OnPaintBackground(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
+            // Под списком — тот же градиент со свечением, что у всей боковой
+            // панели. Раньше здесь была сплошная заливка цветом панели, и поверх
+            // градиента проступал прямоугольник: в светлой теме он читался как
+            // рамка вокруг разделов с зазубринами у каждого пункта.
+            if (Parent != null)
+            {
+                GraphicsState st = g.Save();
+                g.TranslateTransform(-Left, -Top);
+                Rectangle clip = e.ClipRectangle;
+                clip.Offset(Left, Top);
+                using (PaintEventArgs pe = new PaintEventArgs(g, clip)) InvokePaintBackground(Parent, pe);
+                g.Restore(st);
+            }
+            else using (SolidBrush b = new SolidBrush(Theme.SideTop)) g.FillRectangle(b, ClientRectangle);
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (SolidBrush b = new SolidBrush(Parent != null ? Parent.BackColor : Theme.SideTop))
-                g.FillRectangle(b, ClientRectangle);
             if (!_has || Width < 10) return;
             RectangleF r = new RectangleF(4, _y.Value + 2, Width - 8, _h.Value - 4);
             if (r.Height < 2) return;
-            // выбранный пункт — яркая градиентная «пилюля»
-            using (GraphicsPath p = Theme.RoundRect(r, 8))
-            using (LinearGradientBrush lb = new LinearGradientBrush(
-                new RectangleF(r.X, r.Y, Math.Max(1, r.Width), Math.Max(1, r.Height)),
-                Theme.Accent, Theme.Accent2, LinearGradientMode.Horizontal))
-                g.FillPath(lb, p);
+            // выбранный пункт — едва заметная подложка и тонкая акцентная
+            // полоса слева, как в строгих консолях
+            using (GraphicsPath p = Theme.RoundRect(r, 6))
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(Theme.Dark ? 22 : 18, Theme.Text)))
+                g.FillPath(b, p);
+            float bar = Math.Max(2F, Font.Height * 0.16F);
+            float inset = r.Height * 0.26F;
+            using (GraphicsPath p = Theme.RoundRect(new RectangleF(r.X, r.Y + inset, bar, r.Height - inset * 2), bar / 2F))
+            using (SolidBrush b = new SolidBrush(Theme.Accent))
+                g.FillPath(b, p);
         }
     }
 
@@ -253,23 +269,8 @@ namespace Win11Privacy
         {
             Graphics g = e.Graphics;
             if (Width < 2 || Height < 2) return;
-            using (LinearGradientBrush lb = new LinearGradientBrush(
-                new Rectangle(0, 0, Width, Height), Theme.SideTop, Theme.SideBottom, LinearGradientMode.Vertical))
-                g.FillRectangle(lb, ClientRectangle);
-
-            // мягкое свечение акцентом сверху
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            int r = (int)(Width * 1.5F);
-            using (GraphicsPath p = new GraphicsPath())
-            {
-                p.AddEllipse(-r / 3, -r / 2, r, r);
-                using (PathGradientBrush pg = new PathGradientBrush(p))
-                {
-                    pg.CenterColor = Color.FromArgb(Theme.Dark ? 30 : 22, Theme.Accent);
-                    pg.SurroundColors = new[] { Color.FromArgb(0, Theme.Accent) };
-                    g.FillPath(pg, p);
-                }
-            }
+            // ровный фон без градиента и свечения
+            using (SolidBrush b = new SolidBrush(Theme.SideTop)) g.FillRectangle(b, ClientRectangle);
             // правая разделительная линия
             using (Pen pen = new Pen(Theme.CardBorder)) g.DrawLine(pen, Width - 1, 0, Width - 1, Height);
         }
@@ -286,11 +287,18 @@ namespace Win11Privacy
         public string CenterSub = "";
         public string EmptyHint = "";
 
-        private static readonly Color[] Palette = {
-            Color.FromArgb(0x4C,0xB0,0xFF), Color.FromArgb(0x7E,0xD4,0x92), Color.FromArgb(0xF6,0xB0,0x5A),
-            Color.FromArgb(0xC9,0x8B,0xFF), Color.FromArgb(0xFF,0x8A,0x80), Color.FromArgb(0x5A,0xD1,0xC5),
-            Color.FromArgb(0xFF,0xD5,0x6B), Color.FromArgb(0x8F,0xA8,0xFF)
-        };
+        // Оттенки одного акцента вместо радуги: категории различимы, а
+        // диаграмма не спорит по цвету с пометками о состоянии.
+        private static Color[] Palette
+        {
+            get
+            {
+                float[] t = { 0F, 0.28F, 0.46F, 0.60F, 0.71F, 0.80F, 0.87F, 0.92F };
+                Color[] c = new Color[t.Length];
+                for (int i = 0; i < t.Length; i++) c[i] = Theme.Mix(Theme.Accent, Theme.CardBg, t[i]);
+                return c;
+            }
+        }
 
         public DonutChart()
         {
@@ -457,35 +465,28 @@ namespace Win11Privacy
             if (Width < 20 || Height < 20) return;
             int u = Font.Height;
 
+            bool status = Theme.IsStatus(Accent);
             RectangleF r = new RectangleF(0.5F, 0.5F, Width - 1, Height - 1);
-            using (GraphicsPath p = Theme.RoundRect(r, 9))
+            using (GraphicsPath p = Theme.RoundRect(r, 8))
             {
-                using (LinearGradientBrush lb = new LinearGradientBrush(new Rectangle(0, 0, Width, Height),
-                    Theme.Mix(Theme.CardBg, Accent, _hover ? 0.10F : 0.05F), Theme.CardBg, LinearGradientMode.Vertical))
-                    g.FillPath(lb, p);
-                using (Pen pen = new Pen(_hover ? Theme.Mix(Theme.CardBorder, Accent, 0.5F) : Theme.CardBorder)) g.DrawPath(pen, p);
+                using (SolidBrush b = new SolidBrush(_hover ? Theme.RowHover : Theme.CardBg)) g.FillPath(b, p);
+                using (Pen pen = new Pen(Theme.CardBorder)) g.DrawPath(pen, p);
             }
-            // верхний блик
-            using (Pen pen = new Pen(Color.FromArgb(Theme.Dark ? 26 : 40, Color.White)))
-                g.DrawLine(pen, 8, 1, Width - 8, 1);
 
             int pad = (int)(u * 0.95F);
-            Font icon = Theme.IconFont(Font.Size * 1.15F);
+            Font icon = Theme.IconFont(Font.Size * 1.05F);
             int capX = pad;
-            // иконка в цветном чипе — как у современных панелей
+            // одноцветный значок без подложки
             int chip = (int)(u * 1.85F);
             if (icon != null && !string.IsNullOrEmpty(Glyph))
             {
-                using (GraphicsPath p = Theme.RoundRect(new RectangleF(pad, (int)(u * 0.55F), chip, chip), chip * 0.32F))
-                using (SolidBrush b = new SolidBrush(Theme.Mix(Theme.CardBg, Accent, 0.20F))) g.FillPath(b, p);
-                TextRenderer.DrawText(g, Glyph, icon, new Rectangle(pad, (int)(u * 0.55F), chip, chip),
-                    Accent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-                capX = pad + chip + (int)(u * 0.6F);
+                TextRenderer.DrawText(g, Glyph, icon, new Rectangle(pad, (int)(u * 0.55F), (int)(u * 1.3F), chip),
+                    status ? Accent : Theme.TextDim, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                capX = pad + (int)(u * 1.3F) + (int)(u * 0.5F);
             }
-            using (Font cf = new Font(Font.FontFamily, Font.Size * 0.82F, FontStyle.Bold))
-                TextRenderer.DrawText(g, Caption.ToUpperInvariant(), cf,
-                    new Rectangle(capX, (int)(u * 0.55F), Width - capX - pad, chip), Theme.TextFaint,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+            TextRenderer.DrawText(g, Caption, Font,
+                new Rectangle(capX, (int)(u * 0.55F), Width - capX - pad, chip), Theme.TextDim,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
 
             string val = Display();
             using (Font vf = Theme.PickFont(new[] { "Segoe UI Variable Display", "Segoe UI Semibold", "Segoe UI", "Tahoma" },
@@ -493,7 +494,7 @@ namespace Win11Privacy
             {
                 Size vs = TextRenderer.MeasureText(g, val, vf, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
                 TextRenderer.DrawText(g, val, vf, new Rectangle(pad, (int)(u * 2.55F), Width - pad * 2, (int)(u * 1.95F)),
-                    Accent, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                    status ? Accent : Theme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
                 if (!string.IsNullOrEmpty(Suffix))
                     TextRenderer.DrawText(g, Suffix, Font,
                         new Rectangle(pad + vs.Width + (int)(u * 0.15F), (int)(u * 2.55F), Width - pad, (int)(u * 1.95F)),

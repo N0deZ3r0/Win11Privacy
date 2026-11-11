@@ -99,12 +99,79 @@ namespace Win11Privacy
             catch { return false; }
         }
 
-        private static string Dir()
+        // --- корень ProgramData\Win11Privacy -------------------------------- //
+        //  Над bin лежит корень, и он важен не меньше: его владелец может
+        //  переименовать bin и подставить свою папку между проверкой и
+        //  запуском. А права ProgramData по умолчанию дают обычным
+        //  пользователям создавать файлы и папки во всех её подпапках —
+        //  подложенный заранее файл (журнал отката, копия движка для стража)
+        //  остался бы их собственностью. Поэтому: корень, заведённый не
+        //  администратором, откладывается целиком; подложенное внутрь
+        //  прежней папки — в карантин рядом; права закрываются на запись для
+        //  всех, кроме системы и администраторов. То же делает и движок.
+        private static readonly string[] TrustedOwners =
+            { "S-1-5-18", "S-1-5-32-544", "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464" };
+
+        private static bool Trusted(FileSystemSecurity sec)
         {
-            string safe = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                                       "Win11Privacy\\bin");
+            SecurityIdentifier sid = sec.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
+            return sid != null && Array.IndexOf(TrustedOwners, sid.Value) >= 0;
+        }
+
+        private static bool TrustedItem(string path, bool dir)
+        {
             try
             {
+                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return false;
+                return dir ? Trusted(Directory.GetAccessControl(path, AccessControlSections.Owner))
+                           : Trusted(File.GetAccessControl(path, AccessControlSections.Owner));
+            }
+            catch { return false; }
+        }
+
+        internal static bool IsSecure(string dir)
+        {
+            try
+            {
+                if (!TrustedItem(dir, true)) return false;
+                DirectorySecurity sec = Directory.GetAccessControl(dir, AccessControlSections.Access);
+                if (!sec.AreAccessRulesProtected) return false;
+                // запись, удаление, смена прав или владельца — в том числе общими правами
+                const long write = 0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000;
+                foreach (FileSystemAccessRule r in sec.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+                {
+                    if (r.AccessControlType != AccessControlType.Allow) continue;
+                    if (Array.IndexOf(TrustedOwners, r.IdentityReference.Value) >= 0) continue;
+                    if (((long)r.FileSystemRights & write) != 0) return false;
+                }
+                return true;
+            }
+            catch { return false; }
+        }
+
+        internal static void SecureRoot(string root)
+        {
+            string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            if (Directory.Exists(root) && !TrustedItem(root, true))
+                Directory.Move(root, root + ".untrusted-" + stamp);
+            if (!Directory.Exists(root)) { Directory.CreateDirectory(root, Rules()); return; }
+            if (IsSecure(root)) return;
+            string aside = root + ".untrusted-" + stamp;
+            foreach (string d in Directory.GetDirectories(root))
+                if (!TrustedItem(d, true)) { Directory.CreateDirectory(aside); Directory.Move(d, Path.Combine(aside, Path.GetFileName(d))); }
+            foreach (string f in Directory.GetFiles(root))
+                if (!TrustedItem(f, false)) { Directory.CreateDirectory(aside); File.Move(f, Path.Combine(aside, Path.GetFileName(f))); }
+            Directory.SetAccessControl(root, Rules());
+            if (!IsSecure(root)) throw new UnauthorizedAccessException(root);
+        }
+
+        private static string Dir()
+        {
+            string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Win11Privacy");
+            string safe = Path.Combine(root, "bin");
+            try
+            {
+                SecureRoot(root);
                 if (Directory.Exists(safe) && !OwnedByAdmins(safe)) Directory.Delete(safe, true);
                 DirectorySecurity sec = Rules();
                 if (!Directory.Exists(safe)) Directory.CreateDirectory(safe, sec);

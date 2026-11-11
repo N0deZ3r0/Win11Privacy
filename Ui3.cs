@@ -203,7 +203,7 @@ namespace Win11Privacy
             {
                 TextRenderer.DrawText(g,
                     L.T("Здесь появится история по дням.\n") +
-                    L.T("Включите «Следить за датчиками» на странице «Страж» —\n") +
+                    L.T("Включите «Следить за датчиками» на странице «Автозащита» —\n") +
                     L.T("она будет пополняться сама."),
                     Font, ClientRectangle, Theme.TextDim,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
@@ -213,7 +213,9 @@ namespace Win11Privacy
             // легенда
             int lx = Width - (int)(u * 0.3F);
             string[] names = { L.T("Другое"), L.T("Гео"), L.T("Микрофон"), L.T("Камера") };
-            Color[] cols = { Theme.TextFaint, Theme.Accent, Theme.Warn, Theme.Err };
+            // оттенки одного акцента: камера — самый насыщенный, «другое» — серый
+            Color[] cols = { Theme.Mix(Theme.TextFaint, Theme.CardBg, 0.35F), Theme.Mix(Theme.Accent, Theme.CardBg, 0.62F),
+                             Theme.Mix(Theme.Accent, Theme.CardBg, 0.32F), Theme.Accent };
             using (Font lf = new Font(Font.FontFamily, Font.Size * 0.85F))
             {
                 for (int i = 0; i < names.Length; i++)

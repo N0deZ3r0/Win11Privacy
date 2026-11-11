@@ -36,7 +36,10 @@ namespace Win11Privacy
                 "\"byDest\":[{\"ip\":\"20.42.65.90\",\"domain\":\"v20.events.data.microsoft.com\",\"count\":31,\"port\":\"443\"}," +
                 "{\"ip\":\"13.89.178.26\",\"domain\":\"self.events.data.microsoft.com\",\"count\":14,\"port\":\"443\"}," +
                 "{\"ip\":\"142.250.150.100\",\"domain\":\"clients4.google.com\",\"count\":11,\"port\":\"443\"}," +
-                "{\"ip\":\"20.190.160.14\",\"domain\":\"login.microsoftonline.com\",\"count\":6,\"port\":\"443\"}]}";
+                "{\"ip\":\"20.190.160.14\",\"domain\":\"login.microsoftonline.com\",\"count\":6,\"port\":\"443\"}]," +
+                "\"netGuard\":true,\"newApps\":[" +
+                "{\"name\":\"AdobeARM.exe\",\"path\":\"C:\\\\Program Files (x86)\\\\Common Files\\\\Adobe\\\\ARM\\\\1.0\\\\AdobeARM.exe\",\"time\":\"2026-08-31 14:05\",\"ip\":\"23.37.1.2\",\"blocked\":false}," +
+                "{\"name\":\"msedgewebview2.exe\",\"path\":\"C:\\\\Program Files (x86)\\\\Microsoft\\\\EdgeWebView\\\\Application\\\\msedgewebview2.exe\",\"time\":\"2026-08-30 22:41\",\"ip\":\"13.107.21.200\",\"blocked\":true}]}";
             RenderMonitor(Json.ParseObject(mon));
 
             string det = "{\"os\":\"" + (L.English ? "Windows 11 Home" : "Windows 11 Домашняя") + "\",\"build\":\"26100\",\"edition\":\"Core\",\"editionKind\":\"home\",\"guardInstalled\":true,\"monitorEnabled\":true," +
@@ -108,6 +111,7 @@ namespace Win11Privacy
             string foot = "{\"time\":\"2026-08-31 19:21\",\"totalMb\":37.8,\"wipeable\":7,\"items\":[" +
                 "{\"id\":\"adid\",\"title\":\"Рекламный идентификатор\",\"what\":\"Уникальный ID, по которому рекламные сети узнают вас во всех приложениях.\",\"value\":\"a1b2c3d4-e5f6-7890-abcd-ef0123456789\",\"mb\":0,\"count\":1,\"canWipe\":true}," +
                 "{\"id\":\"machineid\",\"title\":\"Постоянные метки компьютера\",\"what\":\"MachineGuid и SQM MachineId — метки, которыми помечается телеметрия. Нужны системе, стереть нельзя.\",\"value\":\"cdfc5378-…\",\"mb\":0,\"count\":2,\"canWipe\":false}," +
+                "{\"id\":\"gdid\",\"title\":\"Номер устройства в учётной записи Microsoft (GDID)\",\"what\":\"По этому номеру Microsoft узнаёт компьютер даже через VPN и выдаёт его по запросу властей. Не передавать, сменить или запретить выдачу — на вкладке «Номер устройства».\",\"value\":\"g:6755400000000000\",\"mb\":0,\"count\":1,\"canWipe\":false}," +
                 "{\"id\":\"networks\",\"title\":\"История сетей Wi-Fi и Ethernet\",\"what\":\"Список всех сетей, к которым подключался компьютер — по ним видно, где вы бывали. Пароли Wi-Fi не трогаются.\",\"value\":\"Home_5G, Cafe_Free, Airport-WiFi …\",\"mb\":0,\"count\":14,\"canWipe\":true}," +
                 "{\"id\":\"usb\",\"title\":\"История подключённых флешек\",\"what\":\"Windows помнит каждую флешку и внешний диск. Запись системная, показываем для сведения.\",\"value\":\"Kingston DataTraveler, WD Elements …\",\"mb\":0,\"count\":6,\"canWipe\":false}," +
                 "{\"id\":\"activity\",\"title\":\"База истории активности\",\"what\":\"ActivitiesCache.db — какие программы и документы вы открывали, с точным временем.\",\"value\":\"18.2 МБ\",\"mb\":18.2,\"count\":5,\"canWipe\":true}," +
@@ -174,8 +178,7 @@ namespace Win11Privacy
                 "{\"date\":\"22.08\",\"kind\":\"drift\",\"a\":6,\"b\":6,\"list\":\"\"}," +
                 "{\"date\":\"29.08\",\"kind\":\"update\",\"a\":0,\"b\":0,\"list\":\"KB5070101\"}]}");
             RenderTimeline(Json.ParseObject(tl.ToString()));
-            if (_qcStartup != null) _qcStartup.SetStatus(5 + L.T(" лишних из ") + 8, Theme.Warn);
-            if (_qcTimeline != null) _qcTimeline.SetStatus("29.08 — " + L.T("обновление Windows"), Theme.Accent);
+            _homeStartupAdvise = 5;
 
             SetAboutBody(_aboutData, "Папка: C:\\ProgramData\\Win11Privacy\n" +
                 "• История датчиков по дням: кто включал камеру, микрофон и геолокацию — 9,9 КБ, изменён 2026-09-01 20:03\n" +
@@ -186,6 +189,13 @@ namespace Win11Privacy
             _lastFoot = Json.ParseObject(foot);
             if (Environment.GetEnvironmentVariable("WIN11_TEST_ONLYFOOT") == "1") _lastSpy = null;
             RenderDossier();
+
+            _lastGdid = Json.ParseObject("{\"time\":\"2026-08-31 15:22\",\"gdid\":\"g:6755400000000000\",\"copies\":36,\"numbers\":3," +
+                "\"userCopies\":17,\"systemCopies\":19,\"transmitOff\":false,\"ddsBlocked\":false,\"locked\":false,\"wlidBlocked\":false," +
+                "\"msaLogon\":true,\"managed\":\"\",\"admin\":true,\"services\":[" +
+                "{\"name\":\"CDPSvc\",\"start\":2,\"running\":true},{\"name\":\"CDPUserSvc\",\"start\":2,\"running\":true}," +
+                "{\"name\":\"DoSvc\",\"start\":3,\"running\":false},{\"name\":\"wlidsvc\",\"start\":3,\"running\":false}]}");
+            RenderGdid();
 
             RefreshHome();
             _xrayRecording = true;
