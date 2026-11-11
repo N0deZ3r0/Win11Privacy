@@ -970,11 +970,27 @@ if ($wipeFound.Count -eq $wipeFns.Count) {
     function Get-IdCrlRoots { return $script:IdCrlRoots }
     $script:IdCrlNegCache = "$gt\NegativeCache"
     $script:wipeCalls = New-Object System.Collections.Generic.List[string]
+    # службы, которые «работают», и та, что «не останавливается»
+    $script:fakeSvcs = @(); $script:stuckSvc = ''
     function Get-ManagedReason { return '' }
-    function Stop-ServiceWait { param([string]$Name) $script:wipeCalls.Add("stop $Name"); return $true }
-    function Get-Service { }
+    function Stop-ServiceWait { param([string]$Name) $script:wipeCalls.Add("stop $Name"); return ($Name -ne $script:stuckSvc) }
+    function Get-Service { param([string]$Name, $ErrorAction) if ($Name) { @($script:fakeSvcs | Where-Object { $_.Name -eq $Name }) } else { @($script:fakeSvcs) } }
     function Set-Service { $script:wipeCalls.Add('set-service') }
-    function Start-Service { }
+    function Start-Service { param([string]$Name, $ErrorAction) $script:wipeCalls.Add("start $Name") }
+    # Закрыть пробный ключ от чтения самому себе — так Windows отвечает на
+    # чужие хранилища. Хозяин ключа всегда может вернуть права обратно.
+    function Set-TestKeyLock {
+        param([string]$Rel, [bool]$Lock)
+        $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+        $rule = New-Object System.Security.AccessControl.RegistryAccessRule($me, [System.Security.AccessControl.RegistryRights]'QueryValues, EnumerateSubKeys', 'Deny')
+        $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($Rel, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
+                                                                [System.Security.AccessControl.RegistryRights]'ChangePermissions, ReadPermissions')
+        if (-not $k) { return }
+        try { $acl = $k.GetAccessControl(); if ($Lock) { $acl.AddAccessRule($rule) } else { $null = $acl.RemoveAccessRule($rule) }; $k.SetAccessControl($acl) }
+        finally { $k.Close() }
+    }
+    $gtRel = 'Software\Win11PrivacyGdidTest'
+    $locks = @("$gtRel\User\Immersive\production\Property", "$gtRel\System\DeviceIdentities\production\S-1-5-18\02lockedidentity")
     function Invoke-OneShotTask { param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem) $script:wipeCalls.Add("task $CmdLine"); return $true }
     function cmdkey.exe { $script:wipeCalls.Add("cmdkey $args") }
     function Clear-FolderContents { $script:wipeCalls.Add('clear-cdp'); return 0.0 }
@@ -1015,13 +1031,37 @@ if ($wipeFound.Count -eq $wipeFns.Count) {
                (@($script:wipeCalls | Where-Object { $_ -like 'task *SSO_POP_Device*' }).Count -eq 1)) ($script:wipeCalls -join ' | ')
         Check 'wlidsvc останавливается до стирания' ($script:wipeCalls.IndexOf('stop wlidsvc') -ge 0 -and
                                                    $script:wipeCalls.IndexOf('stop wlidsvc') -lt $script:wipeCalls.IndexOf('clear-cdp'))
+
+        # служба не остановилась — не стирается ничего, службы запускаются обратно
+        New-ItemProperty -LiteralPath "$gt\User\ExtendedProperties" -Name 'LID' -Value $dev -Force | Out-Null
+        $script:fakeSvcs = @([pscustomobject]@{ Name = 'wlidsvc'; Status = 'Running'; StartType = 'Manual' },
+                             [pscustomobject]@{ Name = 'DoSvc'; Status = 'Running'; StartType = 'Automatic' })
+        $script:stuckSvc = 'DoSvc'; $script:wipeCalls.Clear(); $failsBefore = $script:Failures
+        $ok2 = Invoke-GdidWipe
+        Check 'служба не остановилась — номер не стирается' ((-not $ok2) -and ((Get-RegValue "$gt\User\ExtendedProperties" 'LID') -eq $dev) -and
+                                                             (@($script:wipeCalls | Where-Object { $_ -like 'task *' -or $_ -eq 'clear-cdp' }).Count -eq 0)) ($script:wipeCalls -join ' | ')
+        Check '…и службы возвращаются как были' (($script:wipeCalls -contains 'start wlidsvc') -and ($script:wipeCalls -contains 'start DoSvc') -and
+                                                ($script:wipeCalls -contains 'set-service') -and $script:Failures -eq ($failsBefore + 1)) ($script:wipeCalls -join ' | ')
+        $script:fakeSvcs = @(); $script:stuckSvc = ''
+
+        # закрытые ключи внутри хранилища — «не проверено», а не «пусто»
+        New-Item -Path "$gt\System\DeviceIdentities\production\S-1-5-18\02lockedidentity" -Force | Out-Null
+        foreach ($lk in $locks) { Set-TestKeyLock $lk $true }
+        $null = Get-GdidCopies
+        $un = @($script:GdidUnreadable | Select-Object -Unique)
+        Check 'закрытые ключи внутри хранилища не считаются пустыми' ((@($un | Where-Object { $_ -like '*\Immersive\production\Property' }).Count -eq 1) -and
+                                                                      (@($un | Where-Object { $_ -like '*\02lockedidentity' }).Count -eq 1)) ($un -join '; ')
+        $stP = Remove-RegStatus "$gt\User\Immersive\production\Property" $usr; $stK = Remove-RegStatus "$gt\User\Immersive\production\Property"
+        Check 'закрытая запись — «не дала», а не «не было»' ("$stP|$stK" -eq 'denied|denied') "$stP|$stK"
+        Check 'стирание с закрытыми местами не выдаётся за успех' (-not (Invoke-GdidWipe))
     } catch {
         # раньше исключение здесь молча обрывало блок — десять проверок просто
         # не выполнялись, а итог оставался зелёным
         Check 'стирание номера отработало без исключений' $false "$($_.Exception.Message)"
     } finally {
+        foreach ($lk in $locks) { try { Set-TestKeyLock $lk $false } catch { } }
         Remove-Item -LiteralPath $gt -Recurse -Force -ErrorAction SilentlyContinue
-        foreach ($f in @('Get-ManagedReason', 'Stop-ServiceWait', 'Get-Service', 'Set-Service', 'Start-Service', 'Invoke-OneShotTask', 'cmdkey.exe', 'Clear-FolderContents', 'Get-IdCrlRoots')) {
+        foreach ($f in @('Get-ManagedReason', 'Stop-ServiceWait', 'Get-Service', 'Set-Service', 'Start-Service', 'Invoke-OneShotTask', 'cmdkey.exe', 'Clear-FolderContents', 'Get-IdCrlRoots', 'Set-TestKeyLock')) {
             Remove-Item -Path ("Function:\" + $f) -ErrorAction SilentlyContinue
         }
     }

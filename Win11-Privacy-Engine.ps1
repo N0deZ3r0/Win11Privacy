@@ -2287,16 +2287,23 @@ function Get-UncheckedProfiles {
 # denied — Windows не дала. Раньше всё удалялось молча, и отказ выглядел как успех.
 function Remove-RegStatus {
     param([string]$Path, [string]$Name = '')
+    # «Не было» — только когда Windows прямо ответила, что такого ключа нет.
+    # Раньше параметр читался через Get-RegValue, а она и при отказе в доступе
+    # отдаёт пустоту: закрытая запись засчитывалась как «не было», хотя номер
+    # в ней оставался. Test-Path тоже не годится — на закрытый ключ он говорит
+    # «есть», и дальше уже не понять, отчего не вышло.
+    try { $key = Get-Item -LiteralPath $Path -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { return 'absent' }
+    catch { return 'denied' }
     try {
         if ($Name) {
-            if ($null -eq (Get-RegValue $Path $Name)) { return 'absent' }
+            if (@($key.GetValueNames()) -notcontains $Name) { return 'absent' }
             Remove-ItemProperty -LiteralPath $Path -Name $Name -Force -ErrorAction Stop
         } else {
-            if (-not (Test-Path -LiteralPath $Path)) { return 'absent' }
             Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
         }
         return 'removed'
-    } catch { return 'denied' }
+    } catch { return 'denied' } finally { if ($key) { $key.Close() } }
 }
 $script:DevicePuidRegex = '^0018[0-9A-Fa-f]{12}$'
 # Учётные данные «личности» устройства — у пользователя и у самой системы
@@ -2322,39 +2329,54 @@ function Get-GdidCopies {
     $found = New-Object System.Collections.Generic.List[object]
     $script:GdidUnreadable.Clear()
     $seenSystem = $false
+    # Каждое место, куда Windows не пустила, записывается само по себе: «не
+    # нашли» там — не то же самое, что «нет». Раньше так отмечалось только всё
+    # хранилище целиком, а закрытые ключи внутри (свойства, личности, кэш)
+    # молча считались пустыми.
+    $open = {
+        param($path)
+        try { return (Get-Item -LiteralPath $path -ErrorAction Stop) }
+        catch [System.Management.Automation.ItemNotFoundException] { return $null }
+        catch { $script:GdidUnreadable.Add("$path"); return $null }
+    }
+    $list = {
+        param($path)
+        $ev = $null
+        $items = @(Get-ChildItem -LiteralPath $path -ErrorAction SilentlyContinue -ErrorVariable ev)
+        foreach ($e in @($ev)) {
+            if ($e.Exception -is [System.Management.Automation.ItemNotFoundException]) { continue }
+            # закрытый подключ называет себя сам; иначе — то, что перечисляли
+            $script:GdidUnreadable.Add($(if ($e.TargetObject -is [string] -and $e.TargetObject) { "$($e.TargetObject)" } else { "$path" }))
+        }
+        $items
+    }
     foreach ($r in (Get-IdCrlRoots)) {
-        if (-not (Test-Path -LiteralPath $r.path)) { continue }
-        # нет доступа к самому хранилищу — отмечаем, а не считаем пустым
-        try { $null = Get-Item -LiteralPath $r.path -ErrorAction Stop } catch { $script:GdidUnreadable.Add($r.path); continue }
+        if (-not (& $open $r.path)) { continue }
         # .DEFAULT и S-1-5-18 — один и тот же куст SYSTEM: считаем его один раз
         if ($r.who -eq 'system') { if ($seenSystem) { continue }; $seenSystem = $true }
-        $lidVal = Get-RegValue "$($r.path)\ExtendedProperties" 'LID'
-        if ("$lidVal") { $found.Add(@{ who = $r.who; place = 'lid'; puid = "$lidVal" }) }
-        try {
-            $pk = Get-Item -LiteralPath "$($r.path)\Immersive\production\Property" -ErrorAction Stop
+        $ek = & $open "$($r.path)\ExtendedProperties"
+        if ($ek -and "$($ek.GetValue('LID'))") { $found.Add(@{ who = $r.who; place = 'lid'; puid = "$($ek.GetValue('LID'))" }) }
+        $pk = & $open "$($r.path)\Immersive\production\Property"
+        if ($pk) {
             foreach ($vn in @($pk.GetValueNames())) {
                 if ($vn -match $script:DevicePuidRegex) { $found.Add(@{ who = $r.who; place = 'property'; puid = $vn }) }
             }
-        } catch { }
-        $ev = $null
-        foreach ($tk in @(Get-ChildItem -LiteralPath "$($r.path)\Immersive\production\Token" -ErrorAction SilentlyContinue -ErrorVariable +ev)) {
+        }
+        foreach ($tk in @(& $list "$($r.path)\Immersive\production\Token")) {
             $tn = @($tk.GetValueNames())
             if ($tn -contains 'DeviceId' -or $tn -contains 'DeviceTicket') {
-                $found.Add(@{ who = $r.who; place = 'token'; puid = "$(Get-RegValue $tk.PSPath 'DeviceId')" })
+                $found.Add(@{ who = $r.who; place = 'token'; puid = "$($tk.GetValue('DeviceId'))" })
             }
         }
-        foreach ($sk in @(Get-ChildItem -LiteralPath "$($r.path)\DeviceIdentities\production" -ErrorAction SilentlyContinue -ErrorVariable +ev)) {
+        foreach ($sk in @(& $list "$($r.path)\DeviceIdentities\production")) {
             if ($sk.PSChildName -eq 'Logs') { continue }
-            foreach ($ik in @(Get-ChildItem -LiteralPath $sk.PSPath -ErrorAction SilentlyContinue)) {
+            foreach ($ik in @(& $list $sk.PSPath)) {
                 $found.Add(@{ who = $(if ($sk.PSChildName -like 'S-1-5-21-*') { 'user' } else { 'system' })
-                              place = 'identity'; puid = "$(Get-RegValue $ik.PSPath 'DeviceId')" })
+                              place = 'identity'; puid = "$($ik.GetValue('DeviceId'))" })
             }
-        }
-        foreach ($e in @($ev)) {
-            if ("$($e.Exception.GetType().Name)" -match 'Unauthorized|Security') { $script:GdidUnreadable.Add("$($r.path)"); break }
         }
     }
-    foreach ($nk in @(Get-ChildItem -LiteralPath $script:IdCrlNegCache -ErrorAction SilentlyContinue)) {
+    foreach ($nk in @(& $list $script:IdCrlNegCache)) {
         if ($nk.PSChildName -match '^(0018[0-9A-Fa-f]{12})_') { $found.Add(@{ who = 'system'; place = 'cache'; puid = $Matches[1] }) }
     }
     return $found.ToArray()
@@ -2486,7 +2508,15 @@ function Invoke-GdidWipe {
         Write-Log '   [!] служба учётных записей Microsoft (wlidsvc) занята и не остановилась. Закройте Магазин и Параметры и повторите или перезагрузите компьютер. Ничего не стёрто.'
         $script:Failures++; return $false
     }
-    foreach ($n in $wasRunning) { if ($n -ne 'wlidsvc') { $null = Stop-ServiceWait $n } }
+    # Служба, которая не остановилась, держит номер в памяти и записала бы его
+    # обратно посреди стирания. Тогда не стираем ничего и возвращаем всё как было.
+    $stuck = @($wasRunning | Where-Object { $_ -ne 'wlidsvc' -and -not (Stop-ServiceWait $_) })
+    if ($stuck.Count -gt 0) {
+        if ($null -ne $wlidType) { try { Set-Service wlidsvc -StartupType $wlidType -ErrorAction SilentlyContinue } catch { } }
+        foreach ($n in $wasRunning) { try { Start-Service -Name $n -ErrorAction Stop } catch { } }
+        Write-Log ("   [!] служба не остановилась: {0}. Она держит номер устройства и вернула бы его на место. Ничего не стёрто -- повторите позже или после перезагрузки." -f ($stuck -join ', '))
+        $script:Failures++; return $false
+    }
 
     $fails = 0
     # 1. учётные данные «личности» устройства
@@ -2514,8 +2544,14 @@ function Invoke-GdidWipe {
             foreach ($vn in @((Get-Item -LiteralPath $pk -ErrorAction Stop).GetValueNames())) {
                 if ($vn -match $script:DevicePuidRegex) { & $note (Remove-RegStatus $pk $vn) $pk }
             }
-        } catch { if (Test-Path -LiteralPath $pk) { & $note 'denied' $pk } }
-        foreach ($tk in @(Get-ChildItem -LiteralPath "$($r.path)\Immersive\production\Token" -ErrorAction SilentlyContinue)) {
+        } catch [System.Management.Automation.ItemNotFoundException] { }
+        catch { & $note 'denied' $pk }
+        $tev = $null
+        $tks = @(Get-ChildItem -LiteralPath "$($r.path)\Immersive\production\Token" -ErrorAction SilentlyContinue -ErrorVariable tev)
+        foreach ($e in @($tev)) {
+            if (-not ($e.Exception -is [System.Management.Automation.ItemNotFoundException])) { & $note 'denied' "$($r.path)\Immersive\production\Token"; break }
+        }
+        foreach ($tk in $tks) {
             foreach ($vn in @('DeviceId', 'DeviceTicket')) { & $note (Remove-RegStatus $tk.PSPath $vn) "$($tk.PSPath)" }
         }
         & $note (Remove-RegStatus "$($r.path)\DeviceIdentities\production") "$($r.path)\DeviceIdentities"
