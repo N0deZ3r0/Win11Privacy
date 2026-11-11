@@ -211,6 +211,8 @@ By hand, if you prefer:
 | **app.ico / app.png** | The application icon. To change it, run `python tools/set_icon.py logo-16.png ... logo-256.png`: it builds app.ico and puts the same images into app.res. |
 | **tests/engine-tests.ps1** | Behaviour checks for the engine; the GitHub build runs the same ones. Read-only. |
 | **tests/roundtrip.ps1** | Apply, verify and revert for real, then compare every value with the original one. It changes the system, so it needs the `-Confirmed` switch; the build runs it on a disposable machine. |
+| **CHANGELOG.md** | What changed in every version. The release text on GitHub is taken from here. |
+| **tools/release_notes.py** | Builds the release text: the version's section from `CHANGELOG.md`, how to run, and the attached files. |
 | **tools/make_winget.py** | Builds the winget catalogue manifest from the version and the release checksum. |
 | **tools/set_version.py** | Writes the program version into `app.res` — the one Windows shows in the file properties. `--check` compares them, and the build insists on it. |
 | **tools/submit_winget.py** | Submits the manifest of a new version to the winget catalogue: creates a branch in the fork, uploads the files and opens a pull request. The catalogue itself is never cloned — it weighs gigabytes. |
@@ -391,6 +393,16 @@ The repository has automated builds (GitHub Actions):
   the program, the built exe is published to a release together with the checksums
   and the winget manifest, and the manifest itself is submitted to the catalogue
   as a pull request.
+
+The release text comes from **`CHANGELOG.md`**: a build of tag `v1.11.0` looks for
+the `## 1.11.0` section there and adds "how to run" and the file list to it. If the
+section is missing, the build fails before compiling, so no release goes out without
+a description. New entries go under «Не выпущено» (Unreleased), which is renamed to
+the version number before the release. To preview the text:
+
+```
+python tools/release_notes.py --version unreleased
+```
 
 Submitting to the catalogue is enabled by the repository secret **`WINGET_TOKEN`** —
 a personal token with the `public_repo` scope: the build's built-in token cannot
