@@ -19,24 +19,26 @@ about you. Watches so that updates do not quietly turn the tracking back on.**
 
 <img src="docs/en/home.png" alt="Overview">
 
+Eight sections: **Overview**, **Settings**, **Apps** (and startup), **Observation** (data collection, traces on this PC, network, timeline), **Device ID**, **Verify** (and the change log), **Auto-protection**, **About**.
+
 ---
 
 ## What other tools do not have
 
 | | |
 |---|---|
-| **Dossier** | Who turned on your camera, microphone and location, and when — with duration and a "right now" marker. Plus the digital trace left on disk: advertising ID, the history of Wi-Fi networks and USB sticks, clipboard history — each erasable on its own. |
-| **Telemetry X-ray** | Reads the actual events Windows has collected about this computer and shows their raw contents — the very JSON that goes to Microsoft. |
+| **Traces on this PC** | Who turned on your camera, microphone and location, and when — with duration and a "right now" marker. Plus the digital trace left on disk: advertising ID, the history of Wi-Fi networks and USB sticks, clipboard history — each erasable on its own. |
+| **Data collection, from the inside** | Reads the actual events Windows has collected about this computer and shows their raw contents — the very JSON that goes to Microsoft. |
 | **What they learned about you** | Those events are turned into plain facts: names of installed programs, hardware model and serial numbers, connected devices, the markers you are recognised by. Not "1,420 events", but what follows from them. |
-| **Privacy timeline** | Telemetry events by day, Windows updates, the program's own changes and the guard's reversions — on one axis. You can see the system rolling settings back after an update. |
+| **Privacy timeline** | Telemetry events by day, Windows updates, the program's own changes and auto-protection's reversions — on one axis. You can see the system rolling settings back after an update. |
 | **Verification in practice** | Reads the real state of the system and computes a privacy index, instead of drawing "done" ticks. |
-| **The guard** | Major Windows updates quietly restore some settings — the guard checks the system on a schedule and puts back what was knocked out. |
+| **Auto-protection** | Major Windows updates quietly restore some settings — auto-protection checks the system on a schedule and puts back what was knocked out. |
 | **Sensor watch** | A notification at the moment a new program gains access to the camera or microphone for the first time. |
-| **Leak monitor** | Who is actually sending data and where, from the firewall log — allowed connections and rejected attempts shown separately. |
+| **Network watch** | Who is actually sending data and where, from the firewall log — allowed connections and rejected attempts shown separately. |
 | **Time machine** | Snapshots of the settings state, and a comparison: what drifted, and when. |
 | **Revoke access in place** | You saw a program using the camera — you deny it access with a button on the same row. |
 | **Removing preinstalled apps** | The list of apps Windows installs without asking, marked with what is safe to remove. System components do not appear in it. |
-| **Block internet access** | The monitor shows who is sending data where — and a button on the same row cuts that program off from the network. The rule is created in Windows Firewall and removed by the same click. |
+| **Block internet access** | The Network tab shows who is sending data where — and a button on the same row cuts that program off from the network. The rule is created in Windows Firewall and removed by the same click. |
 | **Startup under control** | What starts with Windows, with an answer to "why is this here": an updater, a telemetry agent, a vendor's helper. Disabled reversibly, the same way Task Manager does it, and included in the general rollback. |
 | **Setting-by-setting control** | A module expands into a list of individual settings: you can apply some of them rather than all. |
 | **Address blocking** | The firewall cuts off the data-collection IPs themselves — through `hosts` alone telemetry simply goes around. |
@@ -55,13 +57,13 @@ about you. Watches so that updates do not quietly turn the tracking back on.**
 | **Background network calls** | Device metadata, on-demand fonts, offline maps, disk-health and speech models, Teredo — what Windows downloads and sends by itself. Taken from Microsoft's own list, safe items only. |
 | **Cloud sync and backup** | Found on a clean Windows 11 25H2: the system uploads your app list, Wi-Fi networks, language, theme, pen settings and even your answers to the privacy questions to the cloud on its own. A separate section turns this off with a policy and scheduled tasks. Also new: the InventorySvc service (an inventory of your programs for Microsoft) and the "Usage and Quality Insights" collector. Tasks that Windows keeps from administrators are turned off as SYSTEM. |
 | **Hidden channels found by taking the system apart** | A clean Windows 11 was recorded for over two hours while every scheduled task was started one by one, and its system files were searched. Findings: Defender pulls about 130 settings from an experiments server every hour, Microsoft 365 notifications among them, which a separate policy now stops; 1DS telemetry (`mobile.events.data.microsoft.com` and regional hosts) leaves Defender, the shell and Copilot bypassing the DiagTrack service, and these hosts are now blocked; the Store can install apps on command from the website, and "Recommended troubleshooting" applies "mitigations" sent by Microsoft, and both can now be turned off. |
-| **Windows logs in the digital trace** | Thousands of entries about which programs ran and what they accessed — shown in the Dossier and wiped along with the rest of the trace. |
+| **Windows logs in the digital trace** | Thousands of entries about which programs ran and what they accessed — shown in Traces on this PC and wiped along with the rest of the trace. |
 | **One question on first run** | Instead of thirteen sections at once — "basic privacy", "strict", or "first show me what has been collected about me". The wizard applies nothing: it ticks a set and shows what will be done. |
 | **Long work is visible and can be stopped** | A "Stop" button in the status bar. Reading stops at once, applying stops after a warning — everything the engine already changed is in the journal and can be reverted on the Changes page. Closing the window mid-run asks as well, instead of leaving the engine running unseen. |
 | **The undo journal is written as it goes** | It used to be saved once, at the very end: an interrupted run left the changes in the system with nothing to revert them with. Now it hits the disk after every module and at least once every ten edits. If it cannot be written (or another copy holds it for more than a minute), the program says so and stops changing anything; before applying it checks this up front, while nothing has been touched. A damaged journal is set aside, not overwritten. |
 | **The engine and its data live where nothing writes without administrator rights** | The script runs with full rights, and the undo journal is written back into the registry with full rights, so both must be out of reach of ordinary programs. `C:\ProgramData\Win11Privacy` gets explicit permissions (only SYSTEM and administrators can write); anything a non-administrator placed there beforehand is moved aside, and a folder created by someone else is set aside as a whole. Before every launch the engine file is checked against the SHA-256 of what is embedded in the exe, and the copy the guard runs is checked the same way. |
 | **A clear error instead of the .NET dialog** | When the program trips over something, it explains what happened and writes `crash.log` you can attach to a bug report. |
-| **The guard comes right after an update** | A Windows update is what knocks the settings out, and a schedule could wait until Sunday. The guard now has a third alarm — the update installation itself: it checks the system five minutes later. |
+| **Auto-protection comes right after an update** | A Windows update is what knocks the settings out, and a schedule could wait until Sunday. Auto-protection now has a third alarm — the update installation itself: it checks the system five minutes later. |
 | **One copy of the program** | A second launch brings up the window that is already open. Two windows with administrator rights would apply settings at the same time and overwrite each other's undo journal. |
 | **You can see how far the check has got** | Verifying 283 settings takes up to half a minute and used to stay silent until the very end. Now the engine reports its progress and the window shows "15 / 34" and the name of the current section. |
 | **The run log can be saved to a file** | A button on the Log page: these logs are what "it applied the wrong thing" cases are settled by, and a screenshot is no longer needed. |
@@ -84,7 +86,7 @@ window size and language in `%LOCALAPPDATA%`. Put a **`portable.txt`** file next
 into a `Win11Privacy-Data` folder beside the program itself: the change log, sensor
 history, snapshots, registry backups and window settings. On someone else's
 computer nothing is left behind except the system changes themselves — which can
-still be rolled back. The one exception is the guard: the copy of the engine its
+still be rolled back. The one exception is auto-protection: the copy of the engine its
 scheduled tasks run with administrator rights is always kept in
 `C:\ProgramData\Win11Privacy`, because next to the exe any of your programs could
 swap it.
@@ -139,25 +141,25 @@ into Windows, and the engine is embedded inside the exe.
 
 ## What it looks like
 
-| Settings — a module expanded into individual items | Dossier — who turned on the camera and microphone |
+| Settings — profile and sections | Observation → Traces on this PC — who turned on the camera and microphone |
 |---|---|
-| <img src="docs/en/settings.png" alt="Settings"> | <img src="docs/en/dossier.png" alt="Dossier"> |
+| <img src="docs/en/settings.png" alt="Settings"> | <img src="docs/en/dossier.png" alt="Traces on this PC"> |
 
-| Apps — removing preinstalled software | Telemetry X-ray |
+| Observation → Data collection — what Windows learned about the PC | Device ID — the one that shows through a VPN |
 |---|---|
-| <img src="docs/en/apps.png" alt="Apps"> | <img src="docs/en/xray.png" alt="X-ray"> |
+| <img src="docs/en/xray.png" alt="Data collection"> | <img src="docs/en/gdid.png" alt="Device ID"> |
 
-| Audit — the index, what was not applied, and what does not exist on this Windows |
-|---|
-| <img src="docs/en/audit.png" alt="Audit"> |
-
-| Startup — what launches with Windows | Monitor — who is sending, and who is cut off |
+| Verify — what is in effect and what is not | Verify → Changes — what was altered and how to undo it |
 |---|---|
-| <img src="docs/en/startup.png" alt="Startup"> | <img src="docs/en/monitor.png" alt="Monitor"> |
+| <img src="docs/en/audit.png" alt="Verify"> | <img src="docs/en/changes.png" alt="Changes"> |
 
-| Changes — what the program altered and how to undo it | Timeline — telemetry by day and Windows updates |
+| Apps — removing preinstalled software | Apps → Startup — what launches with Windows |
 |---|---|
-| <img src="docs/en/changes.png" alt="Changes"> | <img src="docs/en/timeline.png" alt="Timeline"> |
+| <img src="docs/en/apps.png" alt="Apps"> | <img src="docs/en/startup.png" alt="Startup"> |
+
+| Observation → Network — who is sending, and who is cut off | Observation → Timeline — telemetry by day and Windows updates |
+|---|---|
+| <img src="docs/en/monitor.png" alt="Network"> | <img src="docs/en/timeline.png" alt="Timeline"> |
 
 ---
 
@@ -185,7 +187,7 @@ By hand, if you prefer:
 | **Win11-Privacy-Engine.ps1** | The engine. All the work with the system: registry, services, scheduled tasks, hosts, firewall, telemetry X-ray, dossier (sensors and digital trace), the guard, state snapshots, cleanup. Embedded in the exe as the `engine.ps1` resource; before a launch it is placed in `C:\ProgramData\Win11Privacy\bin` — a folder nothing writes to without administrator rights. Can also run on its own. |
 | **MainForm.cs** | The window: building the frame and pages, system detection at start, window state between launches, icon and title bar. |
 | **Navigation.cs** | Sections and tabs, the sidebar (collapse, its animation), moving between pages. |
-| **Page*.cs** | One file per page: Overview, Settings, Apps and Startup, X-ray, Dossier, Network, Timeline, Device ID, Verify, Changes, Auto-protection, About, Log. |
+| **Page*.cs** | One file per page: Overview, Settings, Apps and Startup, Data collection, Traces on this PC, Network, Timeline, Device ID, Verify, Changes, Auto-protection, About, Log. |
 | **ListPage.cs** | The shared frame of list pages (search, card, buttons) and helpers for them. |
 | **EngineRunner.cs** | Launching the engine: streamed output, `###JSON###` replies, the busy state and the Stop button. |
 | **Program.cs** | The entry point, command-line mode and the interface test runs. |
@@ -335,7 +337,9 @@ interface), `WIN11_TEST_SHOT=path.png` (capture the window and exit),
 (press "Check for update"), `WIN11_TEST_DUMP=1` (print the control tree with
 "ВЫЛЕЗ" and "ОБРЕЗАНО" markers), `WIN11_TEST_SIDE=folder` (collapse and expand
 the sidebar, print the time of each frame as `SIDEFRAME` and save the frames to
-the folder; `-` means timing only). There are also the build flags `BIGFONT`,
+the folder; `-` means timing only), `WIN11_TEST_README=1` (with `WIN11_TEST_MOCK=1`:
+put the test data back and set the status bar to "Done" right before the
+screenshot — this is how the pictures in `docs/` are taken). There are also the build flags `BIGFONT`,
 which simulates a display at 150% scaling, and `LIGHTTEST` for the light theme.
 
 The checks for the interface's pure functions build as a separate exe:

@@ -64,6 +64,17 @@ namespace Win11Privacy
             Timer t = new Timer(); t.Interval = delayMs;
             t.Tick += delegate {
                 t.Stop();
+                // Снимки для README: настоящий движок за время ожидания успевает
+                // перебить часть тестовых данных своими ответами, а строка
+                // состояния — показать «идёт чтение». Перед снимком всё
+                // возвращается к тестовому состоянию.
+                if (mock && Environment.GetEnvironmentVariable("WIN11_TEST_README") == "1")
+                {
+                    f.InjectMocks();
+                    f.SetBusy(false, L.T("Готово."));
+                    f.Refresh();
+                    Application.DoEvents();
+                }
                 if (shot != null) { try { using (Bitmap bmp = new Bitmap(f.Width, f.Height)) { f.DrawToBitmap(bmp, new Rectangle(0, 0, f.Width, f.Height)); bmp.Save(shot); Console.WriteLine("SHOT " + shot); } } catch (Exception ex) { Console.WriteLine("SHOTERR " + ex.Message); } }
                 // сборке важно не только «окно открылось», но и что на странице что-то есть
                 Console.WriteLine("PAGE " + page + " controls=" + CountControls(f.PageOf(page)));
