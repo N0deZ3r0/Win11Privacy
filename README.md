@@ -63,7 +63,7 @@ about you. Watches so that updates do not quietly turn the tracking back on.**
 | **A clear error instead of the .NET dialog** | When the program trips over something, it explains what happened and writes `crash.log` you can attach to a bug report. |
 | **The guard comes right after an update** | A Windows update is what knocks the settings out, and a schedule could wait until Sunday. The guard now has a third alarm — the update installation itself: it checks the system five minutes later. |
 | **One copy of the program** | A second launch brings up the window that is already open. Two windows with administrator rights would apply settings at the same time and overwrite each other's undo journal. |
-| **You can see how far the check has got** | Verifying 282 settings takes up to half a minute and used to stay silent until the very end. Now the engine reports its progress and the window shows "15 / 34" and the name of the current section. |
+| **You can see how far the check has got** | Verifying 283 settings takes up to half a minute and used to stay silent until the very end. Now the engine reports its progress and the window shows "15 / 34" and the name of the current section. |
 | **The run log can be saved to a file** | A button on the Log page: these logs are what "it applied the wrong thing" cases are settled by, and a screenshot is no longer needed. |
 | **Keyboard and screen reader** | Tab walks the sections, Enter and Space open the selected one, and the hand-drawn controls now tell the system their names — the reader used to read emptiness. |
 
@@ -104,7 +104,7 @@ Notepad and Paint policies work on both versions and are applied as usual.
 ## Language
 
 The interface is fully available in Russian and English, including the names of
-all 282 settings and the HTML report. By default the program follows the Windows
+all 283 settings and the HTML report. By default the program follows the Windows
 display language on every start: Russian if Windows is in Russian, English
 otherwise. The button on the "About" page cycles "as in Windows" → Russian →
 English, to pin one language.

@@ -1001,6 +1001,10 @@ Def 'ads' 'reg' $ccu 'DisableSpotlightCollectionOnDesktop' 1 'DWord' 'обои �
 Def 'ads' 'reg' $cc 'DisableCopilotPinScreen' 1 'DWord' 'экран «Закрепите Copilot» при входе — выкл'
 # Реклама приложений в окне «Поделиться» (SharePickerUI.dll)
 Def 'ads' 'reg' 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\ShareSheet' 'DisableShareAppPromotions' 1 'DWord' 'реклама приложений в окне «Поделиться» — выкл'
+# Блок «Справка из интернета» в «Параметрах»: при открытии страницы приложение
+# отправляет POST на www.bing.com/RelatedSearch с тем, какую страницу вы
+# смотрите. Найдено записью Windows 11 с программой на максимуме.
+Def 'ads' 'regpol' 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' 'AllowOnlineTips' 0 'DWord' 'советы из интернета в «Параметрах» (запросы к Bing) — выкл'
 
 $sys = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
 Def 'activity' 'reg' $sys 'EnableActivityFeed' 0 'DWord' 'лента активности — выкл'
@@ -1857,7 +1861,13 @@ $script:HostsDomains = @(
     'us4-v20.events.data.microsoft.com','us5-v20.events.data.microsoft.com',
     'au.vortex-win.data.microsoft.com','uk.vortex-win.data.microsoft.com','web.vortex.data.microsoft.com',
     'settings.data.microsoft.com','evrsettings-win.data.microsoft.com',
-    'activity.windows.com','licensing.mp.microsoft.com')
+    'activity.windows.com','licensing.mp.microsoft.com',
+    # Найдено записью Windows 11 с программой на максимуме: эти адреса всё ещё
+    # получали данные. bat.bing.com — рекламный счётчик Bing в Магазине;
+    # nelreports.net — отчёты Edge и других программ о сетевых ошибках
+    # (Network Error Logging); default.exp-tas.com — раздача экспериментов
+    # приложениям («Фотографии», VS Code). Без них всё работает как прежде.
+    'bat.bing.com','deff.nelreports.net','aefd.nelreports.net','default.exp-tas.com')
 $script:HostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
 
 # Серверы, через которые компьютер регистрируется в каталоге устройств Microsoft

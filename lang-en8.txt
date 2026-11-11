@@ -353,6 +353,7 @@ Windows не отдаёт 	blocked by Windows:
 Язык: английский	Language: English
 Журнал пока пуст	The log is empty
 службы Windows	Windows services
+советы из интернета в «Параметрах» (запросы к Bing) — выкл	online tips in Settings (requests to Bing) — off
 планировщик задач	Task Scheduler
 переменные среды	environment variables
 автоматически	automatic

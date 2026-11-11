@@ -59,7 +59,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(1510, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1511, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -1562,6 +1562,7 @@ namespace Win11Privacy
             _map["Язык: английский"] = "Language: English";
             _map["Журнал пока пуст"] = "The log is empty";
             _map["службы Windows"] = "Windows services";
+            _map["советы из интернета в «Параметрах» (запросы к Bing) — выкл"] = "online tips in Settings (requests to Bing) — off";
             _map["планировщик задач"] = "Task Scheduler";
             _map["переменные среды"] = "environment variables";
             _map["автоматически"] = "automatic";
