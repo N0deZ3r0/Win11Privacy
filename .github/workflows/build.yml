@@ -70,9 +70,12 @@ jobs:
       - name: Проверки поведения движка
         timeout-minutes: 20
         shell: powershell
+        # Сообщения здесь — латиницей: шаг идёт в Windows PowerShell 5.1, а
+        # GitHub сохраняет его текст без BOM, и кириллица в логе превращалась в
+        # кракозябры. Сами тесты лежат в файле с BOM и пишут по-русски нормально.
         run: |
           .\tests\engine-tests.ps1
-          if ($LASTEXITCODE -ne 0) { throw "проверки поведения не прошли" }
+          if ($LASTEXITCODE -ne 0) { throw "engine behaviour checks failed (see [FAIL] lines above)" }
 
       # Единственная проверка, которая по-настоящему отвечает за откат:
       # настройки применяются на живой системе, а потом каждое значение
@@ -84,7 +87,7 @@ jobs:
           WIN11_ROUNDTRIP: '1'
         run: |
           .\tests\roundtrip.ps1
-          if ($LASTEXITCODE -ne 0) { throw "откат не вернул систему в исходное состояние" }
+          if ($LASTEXITCODE -ne 0) { throw "rollback did not return the system to its original state (see [FAIL] lines above)" }
 
       - name: Проверки интерфейса
         timeout-minutes: 10

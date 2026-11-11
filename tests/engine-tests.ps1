@@ -1104,6 +1104,10 @@ foreach ($f in @('a.rbs', 'EventStore.db', 'EventStore.db-wal', 'ETLLogs\b.etl',
 }
 $bufJob = Start-Job -ArgumentList $engine, $bufRoot -ScriptBlock {
     param($EnginePath, $Root)
+    # На машинах сборки GitHub %TEMP% задан коротким именем (RUNNER~1), а
+    # Get-ChildItem отдаёт полный путь, и длина корня не совпадала. Относительные
+    # имена считаем от уникального имени самой папки, а не от длины пути.
+    $leaf = (Split-Path $Root -Leaf) + '\'
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
         if ($fn.Name -in @('Get-BufferFiles', 'Get-BufferInfo', 'Purge-Buffer')) { Invoke-Expression $fn.Extent.Text }
@@ -1120,7 +1124,7 @@ $bufJob = Start-Job -ArgumentList $engine, $bufRoot -ScriptBlock {
     $script:DiagDir = $Root; $DryRun = $false; $script:Changes = 0; $script:Failures = 0
     $before = Get-BufferInfo
     Purge-Buffer
-    $left = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -File | ForEach-Object { $_.FullName.Substring($Root.Length + 1) })
+    $left = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -File | ForEach-Object { $p = $_.FullName; $p.Substring($p.IndexOf($leaf) + $leaf.Length) })
     @{ files = $before.files; left = $left; dirs = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -Directory).Count }
 }
 $bufDone = Wait-Job $bufJob -Timeout 90
