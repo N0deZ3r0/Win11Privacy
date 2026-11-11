@@ -183,8 +183,12 @@ By hand, if you prefer:
 | File | What is inside |
 |---|---|
 | **Win11-Privacy-Engine.ps1** | The engine. All the work with the system: registry, services, scheduled tasks, hosts, firewall, telemetry X-ray, dossier (sensors and digital trace), the guard, state snapshots, cleanup. Embedded in the exe as the `engine.ps1` resource; before a launch it is placed in `C:\ProgramData\Win11Privacy\bin` — a folder nothing writes to without administrator rights. Can also run on its own. |
-| **MainForm.cs** | The window frame: sidebar with groups, pages, launching the engine and parsing its replies, command-line mode. |
-| **PageHome.cs / PageXray.cs / PageDossier.cs** | The "Overview", "X-ray" and "Dossier" pages — the largest of the thirteen. |
+| **MainForm.cs** | The window: building the frame and pages, system detection at start, window state between launches, icon and title bar. |
+| **Navigation.cs** | Sections and tabs, the sidebar (collapse, its animation), moving between pages. |
+| **Page*.cs** | One file per page: Overview, Settings, Apps and Startup, X-ray, Dossier, Network, Timeline, Device ID, Verify, Changes, Auto-protection, About, Log. |
+| **ListPage.cs** | The shared frame of list pages (search, card, buttons) and helpers for them. |
+| **EngineRunner.cs** | Launching the engine: streamed output, `###JSON###` replies, the busy state and the Stop button. |
+| **Program.cs** | The entry point, command-line mode and the interface test runs. |
 | **Actions.cs** | What each button does: applying, verifying, the monitor, the guard. |
 | **Report.cs** | The "before and after" HTML report. |
 | **Engine.cs** | Unpacking the engine: a folder writable by administrators only, and a SHA-256 check against what is embedded in the exe. |
@@ -194,10 +198,12 @@ By hand, if you prefer:
 | **Mocks.cs** | Test data for interface screenshots, entirely under `#if UITEST`. |
 | **SingleInstance.cs** | One copy of the program: a second launch shows the window that is already open. |
 | **SelfTest.cs** | Checks for the pure functions of the interface — version comparison, parsing the engine's replies, "does this command change the system or only read it". A separate build under `#if SELFTEST`. |
-| **Ui.cs** | Theme (colours, fonts), cards, switches, buttons, list rows, the index ring, tiles. |
-| **Ui2.cs** | Window title bar, gradient sidebar, sliding navigation highlight, ring chart, home-screen tiles, value animation. |
-| **Ui3.cs** | Rows of the "Dossier" page: who turned on the camera/microphone (`SpyRow`), the digital trace with erase checkboxes (`WipeRow`), the per-day sensor chart (`SensorChart`). |
-| **Ui4.cs** | Adaptive layout: a tile grid that adjusts to the window width (`TileGrid`), a flicker-free content panel. |
+| **Theme.cs** | The theme (colours, fonts), dark scrollbars, keyboard-only focus frames, value animation, the dark menu. |
+| **Frame.cs** | The window frame: title bar, sidebar, navigation items and the sliding highlight. |
+| **Controls.cs** | Basic controls: cards, buttons, switches, tabs, search, section headers, the empty state. |
+| **Rows.cs** | List rows and the lists themselves: settings, verification, dossier, network, overview. |
+| **Charts.cs** | Charts and tiles: the index ring, ring and sensor charts, the timeline, the tile grid. |
+| **ListDialog.cs** | A window with a checklist — "What will change" and similar questions. |
 | **Lang.cs** | The English translation of the interface. Generated from `lang-en*.txt` by `python tools/gen_lang.py` — edit the dictionaries, not `Lang.cs` itself. `python tools/check_lang.py` lists strings that have no translation yet. |
 | **Json.cs** | JSON parsing without external libraries — the engine replies with `###JSON### {...}` lines. |
 | **app.manifest** | The administrator-rights requirement and display-scaling support. |
