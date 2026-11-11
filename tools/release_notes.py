@@ -28,19 +28,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHANGELOG = os.path.join(ROOT, 'CHANGELOG.md')
 UNRELEASED = ('не выпущено', 'unreleased')
 
+# Каждый абзац — одной строкой: в описании релиза GitHub превращает любой
+# перенос строки в настоящий разрыв, и абзац рвался посреди фразы.
 FOOTER = u"""
 ---
 
-**Как запустить:** скачайте `Win11Privacy.exe`, правый клик → Свойства → галочка
-«Разблокировать» → ОК, затем запустите. Программа запросит права администратора —
-они нужны, потому что она меняет системные настройки. Ничего устанавливать не
-требуется: приложение работает на встроенном в Windows .NET Framework 4.8, движок
-вшит внутрь exe.
+**Как запустить:** скачайте `Win11Privacy.exe`, правый клик → Свойства → галочка «Разблокировать» → ОК, затем запустите. Программа запросит права администратора — они нужны, потому что она меняет системные настройки. Ничего устанавливать не требуется: приложение работает на встроенном в Windows .NET Framework 4.8, движок вшит внутрь exe.
 
-**How to run:** download `Win11Privacy.exe`, right-click → Properties → tick
-"Unblock" → OK, then run it. It asks for administrator rights because it changes
-system settings. Nothing to install: it runs on the .NET Framework 4.8 built into
-Windows, and the engine is embedded in the exe.
+**How to run:** download `Win11Privacy.exe`, right-click → Properties → tick "Unblock" → OK, then run it. It asks for administrator rights because it changes system settings. Nothing to install: it runs on the .NET Framework 4.8 built into Windows, and the engine is embedded in the exe.
 
 | Файл / File | Зачем / What for |
 |---|---|
