@@ -59,7 +59,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(1511, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1520, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -1562,6 +1562,15 @@ namespace Win11Privacy
             _map["Язык: английский"] = "Language: English";
             _map["Журнал пока пуст"] = "The log is empty";
             _map["службы Windows"] = "Windows services";
+            _map["журнал соединений брандмауэра (наблюдение за сетью)"] = "firewall connection log (network watch)";
+            _map["политика аудита"] = "audit policy";
+            _map["успех"] = "success";
+            _map["отказ"] = "failure";
+            _map["успех и отказ"] = "success and failure";
+            _map["выкл"] = "off";
+            _map["Где номер не проверялся"] = "Where the ID was not checked";
+            _map["Профили пользователей, которые сейчас не вошли в Windows: {0}. Их копии номера программа не видит и не стирает."] = "Profiles of users who are not signed in right now: {0}. The program cannot see or wipe their copies of the ID.";
+            _map["Мест без доступа на чтение: {0}."] = "Places it could not read: {0}.";
             _map["советы из интернета в «Параметрах» (запросы к Bing) — выкл"] = "online tips in Settings (requests to Bing) — off";
             _map["планировщик задач"] = "Task Scheduler";
             _map["переменные среды"] = "environment variables";

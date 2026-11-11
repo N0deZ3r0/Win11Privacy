@@ -939,7 +939,8 @@ if ($leak) {
           ("всего {0}: {1}/{2}/{3}/{4}" -f $leak.total, $leak.open, $leak.blocked, $leak.hosts, $leak.none)
     Check 'в проверке утечек и серверы номера устройства' (@($leak.items | Where-Object { "$($_.name)" -eq 'cs.dds.microsoft.com' }).Count -eq 1)
 }
-Check 'монитор пишет и разрешённые соединения' ($engineText -match [regex]::Escape('/success:$flag /failure:$flag'))
+Check 'монитор пишет и разрешённые соединения' (($engineText -match [regex]::Escape('Set-AuditSetting $script:AuditGuid $(if ($On) { 3 } else { 0 })')) -and
+                                              ($engineText -match [regex]::Escape('/success:$s /failure:$f')))
 Check 'слежение за сетью запускается по расписанию' ($engineText -match [regex]::Escape('-NetGuard'' + $script:DataArg'))
 Check 'адреса телеметрии разрешаются в обход hosts' ($engineText -match 'Resolve-DnsName -Name \$n -Type A_AAAA -NoHostsFile')
 Check 'правило адресов помнит дату обновления' ($engineText -match [regex]::Escape("-Description ('Win11Privacy: updated '"))
@@ -951,19 +952,22 @@ Write-Host 'Стирание номера устройства (на своём 
 # Настоящую «личность» устройства стирать в проверке нельзя: номер сменился бы
 # по-настоящему. Поэтому функции берутся из движка, а пути и всё, что
 # касается системы, — службы, хранилище учётных данных, файлы, — подменены.
-$wipeFns = @('Get-RegValue', 'Get-GdidCopies', 'Invoke-GdidWipe')
+$wipeFns = @('Get-RegValue', 'Get-GdidCopies', 'Invoke-GdidWipe', 'Remove-RegStatus', 'Get-CredCheckCmd', 'Get-UncheckedProfiles')
 $wipeFound = @()
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($wipeFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $wipeFound += $fn.Name }
 }
 foreach ($asg in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
     $lt = $asg.Left -as [System.Management.Automation.Language.VariableExpressionAst]
-    if ($null -ne $lt -and $lt.VariablePath.UserPath -in @('script:DevicePuidRegex', 'script:GdidCredUser', 'script:GdidCredSystem')) { Invoke-Expression $asg.Extent.Text }
+    if ($null -ne $lt -and $lt.VariablePath.UserPath -in @('script:DevicePuidRegex', 'script:GdidCredUser', 'script:GdidCredSystem', 'script:GdidUnreadable')) { Invoke-Expression $asg.Extent.Text }
 }
 Check 'функции стирания номера найдены в движке' ($wipeFound.Count -eq $wipeFns.Count) ("найдено: " + ($wipeFound -join ','))
 if ($wipeFound.Count -eq $wipeFns.Count) {
     $gt = 'HKCU:\Software\Win11PrivacyGdidTest'
     $script:IdCrlRoots = @(@{ who = 'user'; path = "$gt\User" }, @{ who = 'system'; path = "$gt\System" })
+    # ВАЖНО: только пробные ветки. Настоящая функция добавила бы кусты других
+    # вошедших пользователей, и проверка стёрла бы их настоящие записи.
+    function Get-IdCrlRoots { return $script:IdCrlRoots }
     $script:IdCrlNegCache = "$gt\NegativeCache"
     $script:wipeCalls = New-Object System.Collections.Generic.List[string]
     function Get-ManagedReason { return '' }
@@ -1011,9 +1015,13 @@ if ($wipeFound.Count -eq $wipeFns.Count) {
                (@($script:wipeCalls | Where-Object { $_ -like 'task *SSO_POP_Device*' }).Count -eq 1)) ($script:wipeCalls -join ' | ')
         Check 'wlidsvc останавливается до стирания' ($script:wipeCalls.IndexOf('stop wlidsvc') -ge 0 -and
                                                    $script:wipeCalls.IndexOf('stop wlidsvc') -lt $script:wipeCalls.IndexOf('clear-cdp'))
+    } catch {
+        # раньше исключение здесь молча обрывало блок — десять проверок просто
+        # не выполнялись, а итог оставался зелёным
+        Check 'стирание номера отработало без исключений' $false "$($_.Exception.Message)"
     } finally {
         Remove-Item -LiteralPath $gt -Recurse -Force -ErrorAction SilentlyContinue
-        foreach ($f in @('Get-ManagedReason', 'Stop-ServiceWait', 'Get-Service', 'Set-Service', 'Start-Service', 'Invoke-OneShotTask', 'cmdkey.exe', 'Clear-FolderContents')) {
+        foreach ($f in @('Get-ManagedReason', 'Stop-ServiceWait', 'Get-Service', 'Set-Service', 'Start-Service', 'Invoke-OneShotTask', 'cmdkey.exe', 'Clear-FolderContents', 'Get-IdCrlRoots')) {
             Remove-Item -Path ("Function:\" + $f) -ErrorAction SilentlyContinue
         }
     }
@@ -1296,6 +1304,126 @@ if ($jr) {
 # ВАЖНО: только rmdir. Remove-Item -Recurse в Windows PowerShell 5.1 проходит
 # внутрь ссылок, а в карантине лежит ссылка на папку Windows.
 foreach ($d in @(Get-ChildItem $env:TEMP -Directory -Filter 'w11p-journal-*' -ErrorAction SilentlyContinue)) { & cmd.exe /c ('rmdir /s /q "' + $d.FullName + '"') 2>$null }
+
+# --------------------------------------------------------------------------- #
+#  Наблюдение за сетью: политика аудита читается числом, а не словами языка
+#  Windows; сбой auditpol не выдаётся за успех; прежнее значение — в журнал.
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Наблюдение за сетью: политика аудита'
+$auJob = Start-Job -ArgumentList $engine -ScriptBlock {
+    param($EnginePath)
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
+    foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+        if ($fn.Name -in @('Get-AuditSetting', 'Get-MonitorEnabled', 'Set-AuditSetting', 'Set-MonitorEnabled', 'Get-AuditName')) { Invoke-Expression $fn.Extent.Text }
+    }
+    foreach ($a in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+        $lt = $a.Left -as [System.Management.Automation.Language.VariableExpressionAst]
+        if ($null -ne $lt -and $lt.VariablePath.UserPath -eq 'script:AuditGuid') { Invoke-Expression $a.Extent.Text }
+    }
+    $script:Log = New-Object System.Collections.Generic.List[string]
+    function Write-Log { param($m) $script:Log.Add("$m") }
+    $script:Failures = 0
+    $script:Seen = New-Object System.Collections.Generic.List[object]
+    function Add-JournalEntry { param($Entry) $script:Seen.Add($Entry) }
+    function Save-JournalEntries { param([switch]$Quiet) }
+    function Get-RegValue { param($Path, $Name) 999999999 }
+    function Set-Reg { }
+    $script:SecurityLogKey = 'x'; $script:SecurityLogMin = 1
+    $script:State = 0; $script:SetFails = $false; $script:Ignore = $false
+    # заглушка auditpol: резервная копия политики — числом, как у настоящего
+    function auditpol.exe {
+        $a = $args -join ' '
+        if ($a -match '/backup /file:(\S+)') {
+            $f = $Matches[1]
+            Set-Content $f $script:Head -Encoding UTF8
+            Add-Content $f ('PC,System,Filtering Platform Connection,' + $script:AuditGuid + ',Erfolg und Fehler,,' + $script:State)
+            $global:LASTEXITCODE = 0; return
+        }
+        if ($a -match '/set') {
+            if ($script:SetFails) { $global:LASTEXITCODE = 5; 'Error 0x00000005 occurred'; return }
+            if (-not $script:Ignore) { $script:State = [int]($a -match '/success:enable') + 2 * [int]($a -match '/failure:enable') }
+            $global:LASTEXITCODE = 0; return
+        }
+        $global:LASTEXITCODE = 0
+    }
+    $r = @{}
+    # на русской Windows заголовки копии переведены — так её отдаёт auditpol
+    $script:Head = 'Имя компьютера,цель политики,подкатегория,GUID подкатегории,параметр включения,параметр исключения,значение параметра'
+    $script:State = 1; $r.readRu = Get-AuditSetting
+    $script:Head = 'Machine Name,Policy Target,Subcategory,Subcategory GUID,Inclusion Setting,Exclusion Setting,Setting Value'
+    $script:State = 2; $r.read2 = Get-AuditSetting; $r.mon2 = Get-MonitorEnabled
+    $script:State = 3; $r.mon3 = Get-MonitorEnabled
+    $script:State = 1; $r.on = Set-MonitorEnabled $true; $r.after = $script:State
+    $r.journalOld = $(if ($script:Seen.Count -gt 0) { "$($script:Seen[0]['old'])" } else { '' })
+    $script:SetFails = $true; $r.failOff = Set-MonitorEnabled $false
+    $r.failLogged = [bool](@($script:Log | Where-Object { $_ -match 'auditpol не изменил' }).Count)
+    $script:SetFails = $false; $script:Ignore = $true; $script:State = 3; $r.ignored = Set-MonitorEnabled $false
+    $r.names = (Get-AuditName '0') + '|' + (Get-AuditName '3')
+    $r
+}
+$auDone = Wait-Job $auJob -Timeout 60
+$au = $(if ($auDone) { Receive-Job $auJob } else { $null })
+Remove-Job $auJob -Force
+Check 'проверки политики аудита не зависают' ($null -ne $au)
+if ($au) {
+    Check 'политика аудита читается числом, а не словами (немецкая Windows)' ($au.read2 -eq 2 -and -not $au.mon2 -and $au.mon3) ("прочитано: " + $au.read2)
+    Check 'переведённые заголовки копии политики не мешают (русская Windows)' ($au.readRu -eq 1) ("прочитано: " + $au.readRu)
+    Check 'монитор включает и успехи, и отказы' ($au.on -and $au.after -eq 3)
+    Check 'прежняя политика аудита записана в журнал' ($au.journalOld -eq '1') ("в журнале: " + $au.journalOld)
+    Check 'сбой auditpol не выдаётся за успех' ((-not $au.failOff) -and $au.failLogged)
+    Check 'неизменившаяся политика не выдаётся за успех' (-not $au.ignored)
+    Check 'политика аудита словами' ($au.names -eq 'выкл|успех и отказ') $au.names
+}
+
+# --------------------------------------------------------------------------- #
+#  Номер устройства: короткая задача успешна только с кодом 0, учётные данные
+#  проверяются после cmdkey, у каждой записи свой статус, номер для плитки —
+#  из любого хранилища.
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Номер устройства: проверка результатов'
+$gdJob = Start-Job -ArgumentList $engine -ScriptBlock {
+    param($EnginePath)
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
+    foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+        if ($fn.Name -in @('Invoke-OneShotTask', 'Get-CredCheckCmd', 'Remove-RegStatus', 'Get-RegValue')) { Invoke-Expression $fn.Extent.Text }
+    }
+    $r = @{}
+    # заглушки планировщика: задача «отработала» с заданным кодом
+    function New-ScheduledTaskAction { param($Execute, $Argument) 'a' }
+    function New-ScheduledTaskPrincipal { param($UserId, $LogonType, $RunLevel) 'p' }
+    function New-ScheduledTaskSettingsSet { param([switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries, $ExecutionTimeLimit) 's' }
+    function Register-ScheduledTask { param($TaskName, $Action, $Principal, $Settings, [switch]$Force, $ErrorAction) }
+    function Start-ScheduledTask { param($TaskName, $ErrorAction) }
+    function Unregister-ScheduledTask { param($TaskName, $Confirm, $ErrorAction) }
+    function Get-ScheduledTaskInfo { param($TaskName, $ErrorAction) [pscustomobject]@{ LastTaskResult = $script:Code } }
+    $script:Code = 1; $r.fail = Invoke-OneShotTask 'w11p-test' 'cmd'
+    $script:Code = 0; $r.ok = Invoke-OneShotTask 'w11p-test' 'cmd'
+    $r.check = Get-CredCheckCmd @('WindowsLive:target=virtualapp/didlogical', 'MicrosoftAccount:target=SSO_POP_Device')
+    # статусы удаления — на своей пробной ветке
+    $k = 'HKCU:\Software\W11PTest-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    New-Item -Path $k -Force | Out-Null
+    New-ItemProperty -LiteralPath $k -Name 'LID' -Value '0018000000000001' -PropertyType String -Force | Out-Null
+    $r.st1 = Remove-RegStatus $k 'LID'; $r.st2 = Remove-RegStatus $k 'LID'
+    $r.st3 = Remove-RegStatus $k; $r.st4 = Remove-RegStatus $k
+    $r
+}
+$gdDone = Wait-Job $gdJob -Timeout 60
+$gd = $(if ($gdDone) { Receive-Job $gdJob } else { $null })
+Remove-Job $gdJob -Force
+Check 'проверки номера устройства не зависают' ($null -ne $gd)
+if ($gd) {
+    Check 'сбой команды в короткой задаче не выдаётся за успех' ((-not $gd.fail) -and $gd.ok)
+    Check 'после cmdkey проверяется, что учётных данных не осталось' ($gd.check -eq '(cmdkey /list | findstr /i /c:"virtualapp/didlogical" /c:"SSO_POP_Device" >nul && exit 1 || exit 0)') $gd.check
+    Check 'у удаления свой статус: убрано / не было' ("$($gd.st1)|$($gd.st2)|$($gd.st3)|$($gd.st4)" -eq 'removed|absent|removed|absent') "$($gd.st1)|$($gd.st2)|$($gd.st3)|$($gd.st4)"
+}
+$wipeText = [regex]::Match($engineText, "(?s)function Invoke-GdidWipe \{.*?\n\}").Value
+Check 'на время стирания номера останавливается и DoSvc' ($wipeText -match "'wlidsvc', 'CDPSvc', 'DoSvc'")
+Check 'недоступные места не выдаются за «стёрто»' ($wipeText -match 'не удалось проверить мест')
+$statusText = [regex]::Match($engineText, "(?s)function Get-GdidStatus \{.*?\n\}").Value
+Check 'номер для плитки берётся из любого хранилища' ($statusText -match 'elseif \(\$ids\.Count -gt 0\) \{ \$ids\[0\]\.gdid \}')
+Check 'о непроверенных профилях сказано' (($statusText -match 'uncheckedProfiles') -and ($wipeText -match 'не вошли в Windows, не проверялись'))
 
 # откат не удаляет чужие политики целыми ветками и не включает всё подряд
 Check 'откат не удаляет ветки политик Chrome/Office/VS целиком' ($engineText -notmatch "Policies\\Google\\Chrome','HKCU")

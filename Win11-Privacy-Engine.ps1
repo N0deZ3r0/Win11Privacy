@@ -677,6 +677,7 @@ function Get-JournalKey {
     if ($k -eq 'svc')  { return ("svc|{0}" -f "$($F['name'])").ToLowerInvariant() }
     if ($k -eq 'task') { return ("task|{0}" -f "$($F['path'])").ToLowerInvariant() }
     if ($k -eq 'env')  { return ("env|{0}" -f "$($F['name'])").ToLowerInvariant() }
+    if ($k -eq 'audit') { return ("audit|{0}" -f "$($F['guid'])").ToLowerInvariant() }
     return ("reg|{0}|{1}" -f "$($F['path'])", "$($F['name'])").ToLowerInvariant()
 }
 
@@ -770,6 +771,13 @@ function Add-TaskJournal {
     Add-JournalEntry @{ kind = 'task'; path = $Path; old = 'Enabled'; newValue = 'Disabled' }
 }
 
+# Политика аудита словами — для страницы «Журнал изменений»
+function Get-AuditName {
+    param([string]$Value)
+    switch ("$Value") { '1' { return 'успех' } '2' { return 'отказ' } '3' { return 'успех и отказ' } }
+    return 'выкл'
+}
+
 # Тип запуска службы словами — для страницы «Журнал изменений»
 function Get-StartName {
     param([string]$Start, [string]$Delayed = '')
@@ -812,6 +820,11 @@ function Restore-JournalEntry {
                 $v = $(if ($e.existed) { "$($e.old)" } else { $null })
                 [Environment]::SetEnvironmentVariable("$($e.name)", $v, 'User')
                 return @{ ok = $true }
+            }
+            'audit' {
+                $r = Set-AuditSetting "$($e.guid)" ([int]"$($e.old)")
+                if ($r.ok) { return @{ ok = $true } }
+                return @{ ok = $false; error = ("auditpol (код {0}): {1}" -f $r.code, $r.out) }
             }
             default {
                 if ($e.existed) {
@@ -2239,6 +2252,52 @@ $script:IdCrlRoots = @(
     @{ who = 'system'; path = 'Registry::HKEY_USERS\.DEFAULT\Software\Microsoft\IdentityCRL' },
     @{ who = 'system'; path = 'Registry::HKEY_USERS\S-1-5-18\Software\Microsoft\IdentityCRL' })
 $script:IdCrlNegCache = 'HKLM:\SOFTWARE\Microsoft\IdentityCRL\NegativeCache'
+# Места, которые не удалось прочитать при последнем поиске копий: без них
+# «копий не осталось» было бы неправдой.
+$script:GdidUnreadable = New-Object System.Collections.Generic.List[string]
+
+# Кроме своего профиля и системного — профили других пользователей, которые
+# сейчас вошли в Windows: их кусты реестра подключены. Профили тех, кто сейчас
+# не вошёл, не подключены — программа их не трогает и честно об этом пишет.
+function Get-IdCrlRoots {
+    $roots = New-Object System.Collections.Generic.List[object]
+    foreach ($r in $script:IdCrlRoots) { $roots.Add($r) }
+    $me = ''
+    try { $me = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value } catch { }
+    foreach ($k in @(Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue)) {
+        $sid = $k.PSChildName
+        if ($sid -notmatch '^S-1-5-21-[\d-]+$' -or $sid -eq $me) { continue }
+        $roots.Add(@{ who = 'other'; path = "Registry::HKEY_USERS\$sid\Software\Microsoft\IdentityCRL" })
+    }
+    return $roots.ToArray()
+}
+
+# Профили пользователей, которые сейчас не вошли в Windows: их копии номера
+# не проверяются (куст не подключён).
+function Get-UncheckedProfiles {
+    $loaded = @(Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue | ForEach-Object { $_.PSChildName })
+    $n = 0
+    foreach ($pk in @(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -ErrorAction SilentlyContinue)) {
+        if ($pk.PSChildName -match '^S-1-5-21-[\d-]+$' -and $loaded -notcontains $pk.PSChildName) { $n++ }
+    }
+    return $n
+}
+
+# Удаление одной записи с ответом: removed — было и убрано, absent — не было,
+# denied — Windows не дала. Раньше всё удалялось молча, и отказ выглядел как успех.
+function Remove-RegStatus {
+    param([string]$Path, [string]$Name = '')
+    try {
+        if ($Name) {
+            if ($null -eq (Get-RegValue $Path $Name)) { return 'absent' }
+            Remove-ItemProperty -LiteralPath $Path -Name $Name -Force -ErrorAction Stop
+        } else {
+            if (-not (Test-Path -LiteralPath $Path)) { return 'absent' }
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        }
+        return 'removed'
+    } catch { return 'denied' }
+}
 $script:DevicePuidRegex = '^0018[0-9A-Fa-f]{12}$'
 # Учётные данные «личности» устройства — у пользователя и у самой системы
 $script:GdidCredUser   = @('WindowsLive:target=virtualapp/didlogical', 'MicrosoftAccount:target=SSO_POP_Device')
@@ -2261,9 +2320,12 @@ function Get-SvcStart {
 # Где лежат копии номера. Только чтение.
 function Get-GdidCopies {
     $found = New-Object System.Collections.Generic.List[object]
+    $script:GdidUnreadable.Clear()
     $seenSystem = $false
-    foreach ($r in $script:IdCrlRoots) {
+    foreach ($r in (Get-IdCrlRoots)) {
         if (-not (Test-Path -LiteralPath $r.path)) { continue }
+        # нет доступа к самому хранилищу — отмечаем, а не считаем пустым
+        try { $null = Get-Item -LiteralPath $r.path -ErrorAction Stop } catch { $script:GdidUnreadable.Add($r.path); continue }
         # .DEFAULT и S-1-5-18 — один и тот же куст SYSTEM: считаем его один раз
         if ($r.who -eq 'system') { if ($seenSystem) { continue }; $seenSystem = $true }
         $lidVal = Get-RegValue "$($r.path)\ExtendedProperties" 'LID'
@@ -2274,18 +2336,22 @@ function Get-GdidCopies {
                 if ($vn -match $script:DevicePuidRegex) { $found.Add(@{ who = $r.who; place = 'property'; puid = $vn }) }
             }
         } catch { }
-        foreach ($tk in @(Get-ChildItem -LiteralPath "$($r.path)\Immersive\production\Token" -ErrorAction SilentlyContinue)) {
+        $ev = $null
+        foreach ($tk in @(Get-ChildItem -LiteralPath "$($r.path)\Immersive\production\Token" -ErrorAction SilentlyContinue -ErrorVariable +ev)) {
             $tn = @($tk.GetValueNames())
             if ($tn -contains 'DeviceId' -or $tn -contains 'DeviceTicket') {
                 $found.Add(@{ who = $r.who; place = 'token'; puid = "$(Get-RegValue $tk.PSPath 'DeviceId')" })
             }
         }
-        foreach ($sk in @(Get-ChildItem -LiteralPath "$($r.path)\DeviceIdentities\production" -ErrorAction SilentlyContinue)) {
+        foreach ($sk in @(Get-ChildItem -LiteralPath "$($r.path)\DeviceIdentities\production" -ErrorAction SilentlyContinue -ErrorVariable +ev)) {
             if ($sk.PSChildName -eq 'Logs') { continue }
             foreach ($ik in @(Get-ChildItem -LiteralPath $sk.PSPath -ErrorAction SilentlyContinue)) {
                 $found.Add(@{ who = $(if ($sk.PSChildName -like 'S-1-5-21-*') { 'user' } else { 'system' })
                               place = 'identity'; puid = "$(Get-RegValue $ik.PSPath 'DeviceId')" })
             }
+        }
+        foreach ($e in @($ev)) {
+            if ("$($e.Exception.GetType().Name)" -match 'Unauthorized|Security') { $script:GdidUnreadable.Add("$($r.path)"); break }
         }
     }
     foreach ($nk in @(Get-ChildItem -LiteralPath $script:IdCrlNegCache -ErrorAction SilentlyContinue)) {
@@ -2332,7 +2398,9 @@ function Stop-ServiceWait {
     $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
     if (-not $svc -or $svc.Status -eq 'Stopped') { return $true }
     for ($i = 1; $i -le 3; $i++) {
-        try { Stop-Service -Name $Name -Force -ErrorAction Stop; $svc.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(10)); return $true }
+        # -WarningAction: иначе в журнал работы сыпалось «WARNING: Waiting for
+        # service ... to stop» по-английски — ждём остановку мы и так сами
+        try { Stop-Service -Name $Name -Force -ErrorAction Stop -WarningAction SilentlyContinue; $svc.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(10)); return $true }
         catch { Start-Sleep -Milliseconds (500 * $i) }
     }
     return $false
@@ -2356,7 +2424,9 @@ function Invoke-OneShotTask {
             Start-Sleep -Milliseconds 400
             $res = (Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue).LastTaskResult
         } while (($res -eq 267009 -or $res -eq 267011) -and (Get-Date) -lt $until)
-        return $true
+        # Успех — только если команда задачи завершилась с кодом 0. Раньше «да»
+        # возвращалось, едва задача запустилась, и сбой команды выглядел успехом.
+        return ($res -eq 0)
     } catch { return $false }
     finally { try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { } }
 }
@@ -2383,6 +2453,13 @@ function Set-TaskEnabled {
     return 'fail'
 }
 
+# Часть команды: код 1, если хоть одна из записей ещё в хранилище, иначе 0
+function Get-CredCheckCmd {
+    param([string[]]$Targets)
+    $finds = @($Targets | ForEach-Object { '/c:"' + ($_ -replace '^.*target=', '') + '"' }) -join ' '
+    return '(cmdkey /list | findstr /i ' + $finds + ' >nul && exit 1 || exit 0)'
+}
+
 # Стирает «личность» устройства и все известные копии номера. Пока сервер
 # выдачи открыт, Windows при следующем обращении получит новый номер — это
 # смена. Под запретом выдачи — номера не станет вовсе.
@@ -2398,8 +2475,9 @@ function Invoke-GdidWipe {
 
     # Службы держат номер в памяти и вернули бы его на место. wlidsvc на время
     # стирания ещё и запрещаем запускать: её поднимает любой запрос Магазина.
+    # DoSvc тоже: именно она сообщает номер, и посреди стирания могла его держать
     $wasRunning = @(Get-Service -ErrorAction SilentlyContinue |
-                    Where-Object { ($_.Name -in @('wlidsvc', 'CDPSvc') -or $_.Name -like 'CDPUserSvc_*') -and $_.Status -eq 'Running' } |
+                    Where-Object { ($_.Name -in @('wlidsvc', 'CDPSvc', 'DoSvc') -or $_.Name -like 'CDPUserSvc_*') -and $_.Status -eq 'Running' } |
                     ForEach-Object { $_.Name })
     $wlidType = $null
     try { $wlidType = (Get-Service wlidsvc -ErrorAction Stop).StartType; Set-Service wlidsvc -StartupType Disabled -ErrorAction Stop } catch { $wlidType = $null }
@@ -2413,31 +2491,43 @@ function Invoke-GdidWipe {
     $fails = 0
     # 1. учётные данные «личности» устройства
     foreach ($t in $script:GdidCredUser) { $null = & cmdkey.exe "/delete:$t" 2>&1 }
-    $userCmd = (@($script:GdidCredUser | ForEach-Object { 'cmdkey /delete:' + $_ }) -join ' & ')
-    $sysCmd  = (@($script:GdidCredSystem | ForEach-Object { 'cmdkey /delete:' + $_ }) -join ' & ')
+    # Код cmdkey сам по себе ничего не говорит: «такой записи нет» — тоже
+    # ошибка. Поэтому в конце команда проверяет, что записей действительно не
+    # осталось, и только тогда завершается с кодом 0.
+    $userCmd = (@($script:GdidCredUser | ForEach-Object { 'cmdkey /delete:' + $_ + ' >nul 2>&1' }) -join ' & ') + ' & ' + (Get-CredCheckCmd $script:GdidCredUser)
+    $sysCmd  = (@($script:GdidCredSystem | ForEach-Object { 'cmdkey /delete:' + $_ + ' >nul 2>&1' }) -join ' & ') + ' & ' + (Get-CredCheckCmd $script:GdidCredSystem)
     if (Invoke-OneShotTask 'Win11Privacy GDID user' $userCmd) { Write-Log '   [+] учётные данные устройства у пользователя убраны' }
     else { Write-Log '   [!] учётные данные устройства у пользователя убрать не удалось'; $fails++ }
     if (Invoke-OneShotTask 'Win11Privacy GDID system' $sysCmd -AsSystem) { Write-Log '   [+] учётные данные устройства у системы убраны' }
     else { Write-Log '   [!] учётные данные устройства у системы убрать не удалось'; $fails++ }
 
-    # 2. копии номера в реестре: сам номер, его метка, билеты приложений, личности
-    foreach ($r in $script:IdCrlRoots) {
+    # 2. копии номера в реестре: сам номер, его метка, билеты приложений, личности.
+    # У каждой записи свой ответ: убрана, не было или Windows не дала.
+    $st = @{ removed = 0; absent = 0; denied = 0 }
+    $deniedAt = New-Object System.Collections.Generic.List[string]
+    $note = { param($res, $where) $st[$res]++; if ($res -eq 'denied') { $deniedAt.Add($where) } }
+    foreach ($r in (Get-IdCrlRoots)) {
         if (-not (Test-Path -LiteralPath $r.path)) { continue }
-        Remove-ItemProperty -LiteralPath "$($r.path)\ExtendedProperties" -Name 'LID' -Force -ErrorAction SilentlyContinue
+        & $note (Remove-RegStatus "$($r.path)\ExtendedProperties" 'LID') "$($r.path)\ExtendedProperties"
         $pk = "$($r.path)\Immersive\production\Property"
         try {
             foreach ($vn in @((Get-Item -LiteralPath $pk -ErrorAction Stop).GetValueNames())) {
-                if ($vn -match $script:DevicePuidRegex) { Remove-ItemProperty -LiteralPath $pk -Name $vn -Force -ErrorAction SilentlyContinue }
+                if ($vn -match $script:DevicePuidRegex) { & $note (Remove-RegStatus $pk $vn) $pk }
             }
-        } catch { }
+        } catch { if (Test-Path -LiteralPath $pk) { & $note 'denied' $pk } }
         foreach ($tk in @(Get-ChildItem -LiteralPath "$($r.path)\Immersive\production\Token" -ErrorAction SilentlyContinue)) {
-            foreach ($vn in @('DeviceId', 'DeviceTicket')) { Remove-ItemProperty -LiteralPath $tk.PSPath -Name $vn -Force -ErrorAction SilentlyContinue }
+            foreach ($vn in @('DeviceId', 'DeviceTicket')) { & $note (Remove-RegStatus $tk.PSPath $vn) "$($tk.PSPath)" }
         }
-        $ids = "$($r.path)\DeviceIdentities\production"
-        if (Test-Path -LiteralPath $ids) { Remove-Item -LiteralPath $ids -Recurse -Force -ErrorAction SilentlyContinue }
+        & $note (Remove-RegStatus "$($r.path)\DeviceIdentities\production") "$($r.path)\DeviceIdentities"
     }
     foreach ($nk in @(Get-ChildItem -LiteralPath $script:IdCrlNegCache -ErrorAction SilentlyContinue)) {
-        if ($nk.PSChildName -match '^0018[0-9A-Fa-f]{12}_') { Remove-Item -LiteralPath $nk.PSPath -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($nk.PSChildName -match '^0018[0-9A-Fa-f]{12}_') { & $note (Remove-RegStatus $nk.PSPath) "$($nk.PSPath)" }
+    }
+    Write-Log ("   [+] записи номера в реестре: убрано {0}, не было {1}" -f $st.removed, $st.absent)
+    if ($st.denied -gt 0) {
+        Write-Log ("   [!] Windows не дала убрать: {0}" -f $st.denied)
+        foreach ($w in @($deniedAt | Select-Object -Unique -First 5)) { Write-Log ("       {0}" -f ($w -replace '^Microsoft\.PowerShell\.Core\\Registry::', '')) }
+        $fails++
     }
     # 3. кэш платформы подключённых устройств: в нём регистрация в каталоге
     $null = Clear-FolderContents (Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform') 'кэш платформы подключённых устройств'
@@ -2450,8 +2540,18 @@ function Invoke-GdidWipe {
     foreach ($n in $wasRunning) { try { Start-Service -Name $n -ErrorAction Stop } catch { } }
 
     $after = @(Get-GdidCopies)
-    if ($after.Count -eq 0) { Write-Log '   [+] номер устройства стёрт отовсюду, где Windows его хранит'; $script:Changes++ }
-    else { Write-Log ("   [!] осталось копий номера: {0} -- Windows их не отдала" -f $after.Count); $script:Failures++ }
+    $unread = @($script:GdidUnreadable | Select-Object -Unique)
+    $unchecked = Get-UncheckedProfiles
+    if ($after.Count -eq 0 -and $unread.Count -eq 0) { Write-Log '   [+] номер устройства стёрт отовсюду, где программа его ищет'; $script:Changes++ }
+    elseif ($after.Count -gt 0) { Write-Log ("   [!] осталось копий номера: {0} -- Windows их не отдала" -f $after.Count); $script:Failures++ }
+    if ($unread.Count -gt 0) {
+        # «не нашли» там, куда не пустили, — не то же самое, что «стёрто»
+        Write-Log ("   [!] не удалось проверить мест: {0} (нет доступа) -- стёрто ли там, неизвестно" -f $unread.Count)
+        $fails++
+    }
+    if ($unchecked -gt 0) {
+        Write-Log ("   [i] профили пользователей, которые сейчас не вошли в Windows, не проверялись: {0}. У тех из них, кто входит через учётную запись Microsoft, может остаться прежний номер." -f $unchecked)
+    }
     return ($after.Count -eq 0 -and $fails -eq 0)
 }
 
@@ -2465,12 +2565,27 @@ function Get-GdidStatus {
         $svcs += @{ name = $n; start = (Get-SvcStart $n); running = $run }
     }
     $nums = @($copies | ForEach-Object { "$($_.puid)" } | Where-Object { $_ -match $script:DevicePuidRegex } | Select-Object -Unique)
+    # Номер для плитки: свой, а если своего нет — из любого найденного хранилища.
+    # Раньше брался только свой, и рядом с «Копий на диске: 3» стояло «нет».
+    # По хранилищам номера отдаются отдельно — они могут различаться.
+    $ids = @()
+    foreach ($who in @('user', 'system', 'other')) {
+        foreach ($n in @($copies | Where-Object { $_.who -eq $who -and "$($_.puid)" -match $script:DevicePuidRegex } | ForEach-Object { "$($_.puid)" } | Select-Object -Unique)) {
+            $ids += @{ who = $who; gdid = (ConvertTo-Gdid $n) }
+        }
+    }
+    $mainGdid = $(if ("$userLid") { ConvertTo-Gdid "$userLid" } elseif ($ids.Count -gt 0) { $ids[0].gdid } else { '' })
     return @{
         time = (Get-Date).ToString('yyyy-MM-dd HH:mm')
-        gdid = (ConvertTo-Gdid "$userLid")
+        gdid = $mainGdid
+        gdidFrom = $(if ("$userLid") { 'user' } elseif ($ids.Count -gt 0) { $ids[0].who } else { '' })
+        ids = $ids
         copies = $copies.Count; numbers = $nums.Count
         userCopies = @($copies | Where-Object { $_.who -eq 'user' }).Count
         systemCopies = @($copies | Where-Object { $_.who -eq 'system' }).Count
+        otherCopies = @($copies | Where-Object { $_.who -eq 'other' }).Count
+        unreadable = @($script:GdidUnreadable | Select-Object -Unique).Count
+        uncheckedProfiles = (Get-UncheckedProfiles)
         transmitOff = ((Get-SvcStart 'CDPSvc') -eq 4 -and (Get-SvcStart 'DoSvc') -eq 4)
         ddsBlocked = (Test-HostsBlock -Kind 'gdid')
         locked = (Test-HostsBlock -Kind 'lock'); wlidBlocked = (Test-FwRule 'svc' 'wlidsvc')
@@ -2484,7 +2599,36 @@ function Get-GdidStatus {
 # Монитор считается включённым, когда журнал пишет и разрешённые соединения
 # (5156), и отклонённые (5157). Раньше включались только отказы, и список «кто
 # отправляет», который строится по разрешённым, в живой системе был пуст.
+# Значение подкатегории аудита числом: 0 — нет, 1 — успех, 2 — отказ, 3 — оба;
+# -1 — прочитать не удалось. Текстовый вывод auditpol переведён на язык
+# Windows («Успех и сбой», «Erfolg und Fehler»), и проверка по словам на
+# немецкой Windows считала бы монитор выключенным всегда. Резервная копия
+# политики (/backup) пишет то же самое числом — по нему и сверяемся.
+function Get-AuditSetting {
+    param([string]$Guid = $script:AuditGuid)
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('w11p-audit-' + [guid]::NewGuid().ToString('N') + '.csv')
+    try {
+        $null = & auditpol.exe /backup /file:$tmp 2>&1
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $tmp)) { return -1 }
+        # Заголовки столбцов в копии тоже бывают переведены («GUID подкатегории»,
+        # «значение параметра» — проверено на русской Windows), поэтому читаем
+        # по положению: порядок столбцов у /backup постоянный. Первая строка —
+        # заголовок, её пропускаем.
+        $rows = @(Import-Csv -LiteralPath $tmp -Header 'pc', 'target', 'sub', 'guid', 'inc', 'exc', 'val' | Select-Object -Skip 1)
+        # ни одного GUID на своём месте — формат не тот, не гадаем
+        if (@($rows | Where-Object { "$($_.guid)" -match '^\{[0-9A-Fa-f-]{36}\}$' }).Count -eq 0) { return -1 }
+        foreach ($row in $rows) {
+            if ("$($row.guid)" -eq $Guid) { return [int]("0" + "$($row.val)".Trim()) }
+        }
+        return 0      # строки нет — подкатегория не настроена, а это «нет аудита»
+    } catch { return -1 }
+    finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+}
+
 function Get-MonitorEnabled {
+    $v = Get-AuditSetting
+    if ($v -ge 0) { return ($v -eq 3) }
+    # запасной путь — по словам, как раньше
     try {
         $out = & auditpol.exe /get /subcategory:$script:AuditGuid /r 2>$null
         $csv = $out | Where-Object { $_ -and $_ -notmatch '^Machine Name' -and $_ -notmatch '^Имя компьютера' } | Select-Object -Last 1
@@ -2493,17 +2637,43 @@ function Get-MonitorEnabled {
     } catch { return $false }
 }
 
+function Set-AuditSetting {
+    param([string]$Guid, [int]$Value)
+    $s = $(if ($Value -band 1) { 'enable' } else { 'disable' })
+    $f = $(if ($Value -band 2) { 'enable' } else { 'disable' })
+    $out = & auditpol.exe /set /subcategory:$Guid /success:$s /failure:$f 2>&1
+    return @{ ok = ($LASTEXITCODE -eq 0); code = $LASTEXITCODE; out = (($out | ForEach-Object { "$_" }) -join ' ').Trim() }
+}
+
 # Журнал безопасности по умолчанию — 20 МБ: с записью всех соединений он
 # переписывал бы себя за часы. Под монитор он растёт до 128 МБ — через журнал
 # изменений, чтобы откат вернул прежний размер.
 $script:SecurityLogKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Security'
 $script:SecurityLogMin = 134217728
 
+# Раньше результат auditpol не проверялся: команда могла не сработать, а
+# функция всё равно говорила «включён». Теперь проверяется и код выхода, и то,
+# что политика действительно стала нужной. Прежнее значение уходит в журнал
+# отката — откат вернёт ровно его, а не «выключено».
 function Set-MonitorEnabled {
     param([bool]$On)
-    $flag = if ($On) { 'enable' } else { 'disable' }
     try {
-        $null = & auditpol.exe /set /subcategory:$script:AuditGuid /success:$flag /failure:$flag 2>&1
+        $before = Get-AuditSetting
+        $r = Set-AuditSetting $script:AuditGuid $(if ($On) { 3 } else { 0 })
+        if (-not $r.ok) {
+            Write-Log ("   [!] auditpol не изменил политику аудита (код {0}): {1}" -f $r.code, $r.out)
+            $script:Failures++
+            return $false
+        }
+        if ((Get-MonitorEnabled) -ne $On) {
+            Write-Log '   [!] auditpol отработал, но политика аудита осталась прежней -- возможно, её задаёт групповая политика организации'
+            $script:Failures++
+            return $false
+        }
+        if ($On -and $before -ge 0 -and $before -ne 3) {
+            Add-JournalEntry @{ kind = 'audit'; guid = $script:AuditGuid; old = "$before"; newValue = '3' }
+            Save-JournalEntries -Quiet
+        }
         Write-Log ("   [+] журнал соединений брандмауэра: {0}" -f $(if ($On) { 'включён' } else { 'выключен' }))
         if ($On) {
             $size = Get-RegValue $script:SecurityLogKey 'MaxSize'
@@ -2802,6 +2972,7 @@ if ($EnableMonitor) {
     Write-Section 'Монитор утечек'
     foreach ($d in $script:Defs) { if ($d.M -eq 'firewall') { Apply-Def $d } }
     $ok = Set-MonitorEnabled $true
+    if (-not $ok) { Write-Log 'Наблюдение за сетью не включилось -- причина выше.'; Write-Log '###DONE###'; exit 1 }
     Write-Log 'Перехваченные попытки отправки теперь считаются. Статистика — на странице «Монитор».'
     Write-Log '###DONE###'
     exit $(if ($ok) { 0 } else { 1 })
@@ -2811,6 +2982,7 @@ if ($DisableMonitor) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Монитор утечек'
     $ok = Set-MonitorEnabled $false
+    if (-not $ok) { Write-Log 'Наблюдение за сетью не выключилось -- причина выше.'; Write-Log '###DONE###'; exit 1 }
     Write-Log 'Правила брандмауэра оставлены (они — часть модуля «Брандмауэр»); удалить их можно через «Откат».'
     Write-Log '###DONE###'
     exit 0
@@ -5082,7 +5254,7 @@ function Restore-Journal {
             continue
         }
         $kind = "$($e.kind)"
-        if ($kind -notin @('reg', 'svc', 'task', 'env')) { continue }
+        if ($kind -notin @('reg', 'svc', 'task', 'env', 'audit')) { continue }
         $key = Get-JournalKey (ConvertTo-Fields $e)
         if ($seen.ContainsKey($key)) { continue }      # только самое раннее состояние
         $seen[$key] = $true
@@ -5135,6 +5307,12 @@ function Get-ChangeGroups {
             $where = ("профиль {0}: {1}" -f "$($e.profile)", "$($e.sub)")
             $was = $(if ($e.existed) { "$($e.old)" } else { 'не было' })
             $now = "$($e.newValue)"
+        } elseif ($kind -eq 'audit') {
+            $key = Get-JournalKey (ConvertTo-Fields $e)
+            $title = 'журнал соединений брандмауэра (наблюдение за сетью)'
+            $where = 'политика аудита'
+            $was = Get-AuditName "$($e.old)"
+            $now = Get-AuditName "$($e.newValue)"
         } elseif ($kind -in @('svc', 'task', 'env')) {
             $key = Get-JournalKey (ConvertTo-Fields $e)
             $target = $(if ($kind -eq 'task') { "$($e.path)" } else { "$($e.name)" })
@@ -5376,7 +5554,11 @@ if ($Revert) {
     $legacyRevert = [bool]$rj.legacy -or -not (Test-Path -LiteralPath (Join-Path $script:DataDir 'changes.json'))
     Write-Section 'Файл hosts'; Remove-HostsBlock
     Write-Section 'Брандмауэр'; Remove-FwRules
-    Write-Section 'Монитор'; if (Get-MonitorEnabled) { Set-MonitorEnabled $false | Out-Null } else { Write-Log '   [-] журнал аудита не включён' }
+    # Политику аудита возвращает журнал — ровно ту, что была до программы.
+    # Журнал прежних версий её не знает: тогда, как раньше, выключаем.
+    Write-Section 'Монитор'
+    if ($legacyRevert) { if (Get-MonitorEnabled) { Set-MonitorEnabled $false | Out-Null } else { Write-Log '   [-] журнал аудита не включён' } }
+    else { Write-Log '   [-] политика аудита возвращена по журналу (если программа её меняла)' }
     Write-Section 'Страж'
     try { Unregister-ScheduledTask -TaskName $script:GuardTask -Confirm:$false -ErrorAction Stop; Write-Log '   [+] задача стража удалена' } catch { Write-Log '   [-] стража нет' }
     try { Unregister-ScheduledTask -TaskName $script:SensorTask -Confirm:$false -ErrorAction Stop; Write-Log '   [+] слежение за датчиками удалено' } catch { Write-Log '   [-] слежения за датчиками нет' }

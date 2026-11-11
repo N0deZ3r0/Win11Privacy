@@ -162,6 +162,19 @@ namespace Win11Privacy
                 : (msa ? L.T("Через учётную запись Microsoft: запретить выдачу номера нельзя — без сервера выдачи она не работает.")
                        : L.T("Локальная учётная запись: доступны все три действия.")),
                 msa ? L.T("учётная запись Microsoft") : L.T("локальная"), GContact, false) { Font = this.Font });
+            // Где номер не искали: профили тех, кто сейчас не вошёл в Windows
+            // (их реестр не подключён), и места без доступа на чтение. Без
+            // этого «копий: 0» звучало бы как «нигде нет».
+            int notSeen = Json.GetInt(d, "uncheckedProfiles");
+            int unread = Json.GetInt(d, "unreadable");
+            if (notSeen > 0 || unread > 0)
+            {
+                string scope = "";
+                if (notSeen > 0) scope = string.Format(L.T("Профили пользователей, которые сейчас не вошли в Windows: {0}. Их копии номера программа не видит и не стирает."), notSeen);
+                if (unread > 0) scope = (scope.Length > 0 ? scope + " " : "") + string.Format(L.T("Мест без доступа на чтение: {0}."), unread);
+                _gdidList.Controls.Add(new WipeRow("scope", L.T("Где номер не проверялся"), scope,
+                    (notSeen + unread).ToString(), GShield, false) { Font = this.Font });
+            }
 
             SectionHeader sh2 = new SectionHeader(L.T("Что можно сделать")); sh2.Font = Font; _gdidList.Controls.Add(sh2);
             _gdidList.Controls.Add(new WipeRow("a1", L.T("Не передавать"),

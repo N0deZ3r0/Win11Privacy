@@ -353,6 +353,15 @@ Windows не отдаёт 	blocked by Windows:
 Язык: английский	Language: English
 Журнал пока пуст	The log is empty
 службы Windows	Windows services
+журнал соединений брандмауэра (наблюдение за сетью)	firewall connection log (network watch)
+политика аудита	audit policy
+успех	success
+отказ	failure
+успех и отказ	success and failure
+выкл	off
+Где номер не проверялся	Where the ID was not checked
+Профили пользователей, которые сейчас не вошли в Windows: {0}. Их копии номера программа не видит и не стирает.	Profiles of users who are not signed in right now: {0}. The program cannot see or wipe their copies of the ID.
+Мест без доступа на чтение: {0}.	Places it could not read: {0}.
 советы из интернета в «Параметрах» (запросы к Bing) — выкл	online tips in Settings (requests to Bing) — off
 планировщик задач	Task Scheduler
 переменные среды	environment variables
