@@ -86,10 +86,14 @@ window size and language in `%LOCALAPPDATA%`. Put a **`portable.txt`** file next
 into a `Win11Privacy-Data` folder beside the program itself: the change log, sensor
 history, snapshots, registry backups and window settings. On someone else's
 computer nothing is left behind except the system changes themselves — which can
-still be rolled back. The one exception is auto-protection: the copy of the engine its
-scheduled tasks run with administrator rights is always kept in
-`C:\ProgramData\Win11Privacy`, because next to the exe any of your programs could
-swap it.
+still be rolled back. A few things always stay in `C:\ProgramData\Win11Privacy`,
+because next to the exe any of your programs could swap them: the folder the engine
+is unpacked into, the key that signs the change log, and the engine copy that
+auto-protection runs. Auto-protection itself (the guard and the monitors, whose
+scheduled tasks start with administrator rights on their own) is available in
+portable mode only when the program sits in a folder ordinary programs cannot write
+to — for example under Program Files on an NTFS drive; its data folder is then
+locked to administrators.
 
 ---
 

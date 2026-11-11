@@ -242,7 +242,9 @@ namespace Win11Privacy
         private static int RunCliAudit()
         {
             // возвращает число несоответствий как код выхода
-            string script = ExtractEngineStatic();
+            string script;
+            try { script = ExtractEngineStatic(); }
+            catch (Exception ex) { Console.Error.WriteLine(ex.Message); return -1; }   // защищённой папки нет — движок не запускаем
             ProcessStartInfo psi = new ProcessStartInfo("powershell.exe",
                 "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" -Audit");
             psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = Encoding.UTF8; psi.CreateNoWindow = true;
@@ -259,7 +261,9 @@ namespace Win11Privacy
 
         private static int RunEngineConsole(string extra)
         {
-            string script = ExtractEngineStatic();
+            string script;
+            try { script = ExtractEngineStatic(); }
+            catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 1; }
             string desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
             ProcessStartInfo psi = new ProcessStartInfo("powershell.exe",
                 "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" " + extra + " -BackupRoot \"" + desktop + "\"");

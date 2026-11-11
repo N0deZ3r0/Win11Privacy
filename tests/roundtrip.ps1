@@ -224,7 +224,7 @@ if ($live.Count -ge 2 -and $null -ne $svcStart0) {
         $cj3 = Get-Content -LiteralPath $changes -Raw -Encoding UTF8 | ConvertFrom-Json
         $kinds = @($cj3.items | ForEach-Object { "$($_.kind)" } | Select-Object -Unique)
         Check 'в журнале есть службы, задачи и переменные среды' (($kinds -contains 'svc') -and ($kinds -contains 'task') -and ($kinds -contains 'env')) ($kinds -join ',')
-        Check 'журнал нового образца' ("$($cj3.schema)" -eq '2' -and -not $cj3.legacy)
+        Check 'журнал нового образца, с подписью' ("$($cj3.schema)" -eq '3' -and -not $cj3.legacy -and "$($cj3.sig)".Length -eq 64) ("schema=$($cj3.schema)")
     } else { Check 'журнал записан' $false }
 
     $out3 = Run-Engine @('-Revert')

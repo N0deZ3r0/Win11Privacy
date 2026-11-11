@@ -156,15 +156,71 @@ namespace Win11Privacy
                 Directory.Move(root, root + ".untrusted-" + stamp);
             if (!Directory.Exists(root)) { Directory.CreateDirectory(root, Rules()); return; }
             if (IsSecure(root)) return;
-            string aside = root + ".untrusted-" + stamp;
-            foreach (string d in Directory.GetDirectories(root))
-                if (!TrustedItem(d, true)) { Directory.CreateDirectory(aside); Directory.Move(d, Path.Combine(aside, Path.GetFileName(d))); }
-            foreach (string f in Directory.GetFiles(root))
-                if (!TrustedItem(f, false)) { Directory.CreateDirectory(aside); File.Move(f, Path.Combine(aside, Path.GetFileName(f))); }
+            // Прежняя папка: права наследовались от ProgramData, и обычный
+            // пользователь мог завести файлы и папки на любой глубине, а не
+            // только прямо в корне. Раньше проверялся только корень — и после
+            // того как окно закрывало его, движок считал папку чистой.
+            Quarantine(root, "", root + ".untrusted-" + stamp);
             Directory.SetAccessControl(root, Rules());
             if (!IsSecure(root)) throw new UnauthorizedAccessException(root);
         }
 
+        // Явное право на запись для чужого (унаследованные заменит новый корень)
+        private static bool OpenToOthers(FileSystemSecurity sec)
+        {
+            const long write = 0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000;
+            foreach (FileSystemAccessRule r in sec.GetAccessRules(true, false, typeof(SecurityIdentifier)))
+            {
+                if (r.AccessControlType != AccessControlType.Allow) continue;
+                if (Array.IndexOf(TrustedOwners, r.IdentityReference.Value) >= 0) continue;
+                if (((long)r.FileSystemRights & write) != 0) return true;
+            }
+            return false;
+        }
+
+        private static bool TrustedDeep(string path, bool dir)
+        {
+            if (!TrustedItem(path, dir)) return false;
+            try
+            {
+                FileSystemSecurity sec = dir ? (FileSystemSecurity)Directory.GetAccessControl(path, AccessControlSections.Access)
+                                             : File.GetAccessControl(path, AccessControlSections.Access);
+                return !OpenToOthers(sec);
+            }
+            catch { return false; }
+        }
+
+        // Путь внутри собирается из имён: у временной папки бывает короткое
+        // имя 8.3, и отрезать начало полного пути нельзя. Внутрь ссылок и
+        // чужих папок не заходим — они уходят в карантин целиком.
+        private static void Quarantine(string dir, string rel, string aside)
+        {
+            foreach (string d in Directory.GetDirectories(dir))
+            {
+                string r = rel.Length > 0 ? Path.Combine(rel, Path.GetFileName(d)) : Path.GetFileName(d);
+                if (!TrustedDeep(d, true)) { MoveAside(d, Path.Combine(aside, r), true); continue; }
+                Quarantine(d, r, aside);
+            }
+            foreach (string f in Directory.GetFiles(dir))
+            {
+                string r = rel.Length > 0 ? Path.Combine(rel, Path.GetFileName(f)) : Path.GetFileName(f);
+                if (!TrustedDeep(f, false)) MoveAside(f, Path.Combine(aside, r), false);
+            }
+        }
+
+        private static void MoveAside(string from, string to, bool dir)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(to));
+            if (dir) Directory.Move(from, to); else File.Move(from, to);
+        }
+
+        // Раньше, если защищённую папку подготовить не удавалось, движок
+        // клался во временную папку пользователя. Сверка по SHA-256 там не
+        // спасала: между сверкой и чтением файла PowerShell'ом любая
+        // программа пользователя без прав могла его подменить, и подмена
+        // выполнилась бы с правами администратора. Программа всегда запущена
+        // с этими правами (так требует манифест), так что неудача здесь — не
+        // «нет прав», а что-то не так с папкой. Тогда движок не запускается.
         private static string Dir()
         {
             string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Win11Privacy");
@@ -176,18 +232,16 @@ namespace Win11Privacy
                 DirectorySecurity sec = Rules();
                 if (!Directory.Exists(safe)) Directory.CreateDirectory(safe, sec);
                 else Directory.SetAccessControl(safe, sec);   // права выставляем каждый раз: папка могла остаться от прошлой версии
-                if (!OwnedByAdmins(safe)) throw new UnauthorizedAccessException(safe);
+                if (!OwnedByAdmins(safe) || !IsSecure(safe)) throw new UnauthorizedAccessException(safe);
                 _guarded = true;
                 return safe;
             }
-            catch { }
-            // Прав не хватило — программа запущена обычным пользователем и
-            // системные настройки всё равно не изменит. Работаем из временной
-            // папки, но сверку по SHA-256 никто не отменял.
-            _guarded = false;
-            string tmp = Path.Combine(Path.GetTempPath(), "Win11Privacy");
-            Directory.CreateDirectory(tmp);
-            return tmp;
+            catch (Exception ex)
+            {
+                _guarded = false;
+                throw new InvalidOperationException(L.T("Не удалось подготовить защищённую папку для движка:\n") + safe + "\n\n" + ex.Message +
+                                                    L.T("\n\nБез неё движок не запускается: из незащищённой папки его могла бы подменить любая программа. Перезапустите компьютер и попробуйте снова; если не поможет — проверьте, не блокирует ли антивирус папку ProgramData\\Win11Privacy."), ex);
+            }
         }
 
         // --- путь к готовому к запуску скрипту ------------------------------ //

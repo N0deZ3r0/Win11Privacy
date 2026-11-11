@@ -215,7 +215,7 @@ if ($devFound.Count -eq 1) {
 
 # Адреса телеметрии спрашиваются у DNS все сразу и не дольше отведённого:
 # по одному шаг тянулся минутами, пока мёртвые имена ждали ответа.
-$ipFns = @('Test-PublicIp', 'Get-TelemetryIpList')
+$ipFns = @('Test-PublicIp', 'Test-PublicIpAddress', 'Get-TelemetryIpList')
 $ipFound = @()
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($ipFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $ipFound += $fn.Name }
@@ -235,6 +235,14 @@ if ($ipFound.Count -eq $ipFns.Count) {
     Check 'частные адреса в правило не попадают' (-not ($ipGot | Where-Object { $_ -like '127.*' }))
     Check 'повторы в списке имён спрашиваются один раз' ($ipRes.asked -eq 3) ("спрошено: $($ipRes.asked)")
     Check 'разбор имён укладывается в отведённое время' ($ipSw.Elapsed.TotalSeconds -lt 6) ("заняло: {0:N1} с" -f $ipSw.Elapsed.TotalSeconds)
+    # публичный адрес — по диапазонам: общие адреса провайдеров, тестовые и
+    # зарезервированные сети, многоадресные IPv6, IPv4 внутри IPv6, не-адреса
+    $ipCases = [ordered]@{ '8.8.8.8' = $true; '100.64.1.1' = $false; '100.128.0.1' = $true; '172.15.0.1' = $true; '172.31.255.1' = $false
+                           '198.18.0.5' = $false; '240.0.0.1' = $false; '255.255.255.255' = $false; '2a01:111:f100::1' = $true; '::' = $false
+                           'fe80::1%12' = $false; 'ff12::1' = $false; '::ffff:10.0.0.1' = $false; '::ffff:8.8.8.8' = $true; '2001:db8::1' = $false
+                           'localhost' = $false; '1.2.3' = $false }
+    $ipWrong = @($ipCases.Keys | Where-Object { (Test-PublicIp $_) -ne $ipCases[$_] })
+    Check 'публичный адрес определяется по диапазонам' ($ipWrong.Count -eq 0) ("ошибается на: " + ($ipWrong -join ', '))
 }
 
 # Блок в hosts: программа обязана узнавать свой блок и убирать его целиком.
@@ -952,7 +960,7 @@ Write-Host 'Стирание номера устройства (на своём 
 # Настоящую «личность» устройства стирать в проверке нельзя: номер сменился бы
 # по-настоящему. Поэтому функции берутся из движка, а пути и всё, что
 # касается системы, — службы, хранилище учётных данных, файлы, — подменены.
-$wipeFns = @('Get-RegValue', 'Get-GdidCopies', 'Invoke-GdidWipe', 'Remove-RegStatus', 'Get-CredCheckCmd', 'Get-UncheckedProfiles')
+$wipeFns = @('Get-RegValue', 'Get-GdidCopies', 'Invoke-GdidWipe', 'Remove-RegStatus', 'Get-CredCheckCmd', 'Get-UncheckedProfiles', 'Restore-GdidServices')
 $wipeFound = @()
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($wipeFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $wipeFound += $fn.Name }
@@ -971,12 +979,20 @@ if ($wipeFound.Count -eq $wipeFns.Count) {
     $script:IdCrlNegCache = "$gt\NegativeCache"
     $script:wipeCalls = New-Object System.Collections.Generic.List[string]
     # службы, которые «работают», и та, что «не останавливается»
-    $script:fakeSvcs = @(); $script:stuckSvc = ''
+    $script:fakeSvcs = @(); $script:stuckSvc = ''; $script:deadSvc = ''
+    function New-FakeSvc { param([string]$Name, [string]$StartType)
+        $o = [pscustomobject]@{ Name = $Name; Status = 'Running'; StartType = $StartType }
+        # «не поднялась»: ожидание запуска кончается ошибкой, как у настоящей службы
+        $o | Add-Member -MemberType ScriptMethod -Name WaitForStatus -Value { param($s, $t) if ($this.Name -eq $script:deadSvc) { throw 'служба не запустилась' } }
+        $o
+    }
     function Get-ManagedReason { return '' }
     function Stop-ServiceWait { param([string]$Name) $script:wipeCalls.Add("stop $Name"); return ($Name -ne $script:stuckSvc) }
     function Get-Service { param([string]$Name, $ErrorAction) if ($Name) { @($script:fakeSvcs | Where-Object { $_.Name -eq $Name }) } else { @($script:fakeSvcs) } }
     function Set-Service { $script:wipeCalls.Add('set-service') }
-    function Start-Service { param([string]$Name, $ErrorAction) $script:wipeCalls.Add("start $Name") }
+    function Start-Service { param([string]$Name, $ErrorAction, $WarningAction) $script:wipeCalls.Add("start $Name") }
+    # кэш платформы подключённых устройств — пробная папка, а не настоящая
+    $script:CdpCache = Join-Path $env:TEMP ('w11p-cdp-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     # Закрыть пробный ключ от чтения самому себе — так Windows отвечает на
     # чужие хранилища. Хозяин ключа всегда может вернуть права обратно.
     function Set-TestKeyLock {
@@ -1034,15 +1050,29 @@ if ($wipeFound.Count -eq $wipeFns.Count) {
 
         # служба не остановилась — не стирается ничего, службы запускаются обратно
         New-ItemProperty -LiteralPath "$gt\User\ExtendedProperties" -Name 'LID' -Value $dev -Force | Out-Null
-        $script:fakeSvcs = @([pscustomobject]@{ Name = 'wlidsvc'; Status = 'Running'; StartType = 'Manual' },
-                             [pscustomobject]@{ Name = 'DoSvc'; Status = 'Running'; StartType = 'Automatic' })
+        $script:fakeSvcs = @((New-FakeSvc 'wlidsvc' 'Manual'), (New-FakeSvc 'DoSvc' 'Automatic'))
         $script:stuckSvc = 'DoSvc'; $script:wipeCalls.Clear(); $failsBefore = $script:Failures
         $ok2 = Invoke-GdidWipe
         Check 'служба не остановилась — номер не стирается' ((-not $ok2) -and ((Get-RegValue "$gt\User\ExtendedProperties" 'LID') -eq $dev) -and
                                                              (@($script:wipeCalls | Where-Object { $_ -like 'task *' -or $_ -eq 'clear-cdp' }).Count -eq 0)) ($script:wipeCalls -join ' | ')
         Check '…и службы возвращаются как были' (($script:wipeCalls -contains 'start wlidsvc') -and ($script:wipeCalls -contains 'start DoSvc') -and
                                                 ($script:wipeCalls -contains 'set-service') -and $script:Failures -eq ($failsBefore + 1)) ($script:wipeCalls -join ' | ')
-        $script:fakeSvcs = @(); $script:stuckSvc = ''
+        $script:stuckSvc = ''
+
+        # служба работала до стирания и не поднялась после — это не успех
+        New-ItemProperty -LiteralPath "$gt\User\ExtendedProperties" -Name 'LID' -Value $dev -Force | Out-Null
+        $script:deadSvc = 'DoSvc'; $script:wipeCalls.Clear()
+        $ok3 = Invoke-GdidWipe
+        Check 'служба, что не вернулась после стирания, — не успех' ((-not $ok3) -and ($null -eq (Get-RegValue "$gt\User\ExtendedProperties" 'LID')) -and
+                                                                    ($script:wipeCalls -contains 'start DoSvc')) ($script:wipeCalls -join ' | ')
+        $script:deadSvc = ''; $script:fakeSvcs = @()
+
+        # в кэше устройств что-то осталось — стирание не выдаётся за полное
+        New-Item -ItemType Directory -Force (Join-Path $script:CdpCache 'L.user') | Out-Null
+        Set-Content (Join-Path $script:CdpCache 'L.user\ActivitiesCache.db') 'x'
+        Check 'остаток в кэше устройств — не успех' (-not (Invoke-GdidWipe))
+        Remove-Item -LiteralPath $script:CdpCache -Recurse -Force -ErrorAction SilentlyContinue
+        Check 'без остатков стирание снова успешно' (Invoke-GdidWipe)
 
         # закрытые ключи внутри хранилища — «не проверено», а не «пусто»
         New-Item -Path "$gt\System\DeviceIdentities\production\S-1-5-18\02lockedidentity" -Force | Out-Null
@@ -1061,6 +1091,7 @@ if ($wipeFound.Count -eq $wipeFns.Count) {
     } finally {
         foreach ($lk in $locks) { try { Set-TestKeyLock $lk $false } catch { } }
         Remove-Item -LiteralPath $gt -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:CdpCache -Recurse -Force -ErrorAction SilentlyContinue
         foreach ($f in @('Get-ManagedReason', 'Stop-ServiceWait', 'Get-Service', 'Set-Service', 'Start-Service', 'Invoke-OneShotTask', 'cmdkey.exe', 'Clear-FolderContents', 'Get-IdCrlRoots', 'Set-TestKeyLock')) {
             Remove-Item -Path ("Function:\" + $f) -ErrorAction SilentlyContinue
         }
@@ -1209,7 +1240,9 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
     $want = @('ConvertTo-Fields', 'Get-JournalKey', 'Compress-Journal', 'Use-JournalLock', 'Read-JournalFile', 'Write-JournalFile',
               'Save-JournalEntries', 'Save-Json', 'Load-Json', 'Ensure-DataDir', 'Test-DataTrusted', 'Assert-SafeRoot', 'Test-DirSecure',
-              'Protect-DataRoot', 'Get-OwnerSid', 'Add-JournalEntry', 'Get-StartName', 'Restore-JournalEntry', 'Test-JournalWritable')
+              'Protect-DataRoot', 'Get-OwnerSid', 'Add-JournalEntry', 'Get-StartName', 'Restore-JournalEntry', 'Test-JournalWritable',
+              'Get-SignKey', 'Get-JournalSig', 'Test-KeyFileSecure', 'Test-JournalEntryKnown', 'Test-PortableTaskTrust', 'Test-AclVolume',
+              'Test-DirChainSecure', 'Test-ItemTrusted', 'Get-UntrustedItems')
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
         if ($fn.Name -in $want) { Invoke-Expression $fn.Extent.Text }
     }
@@ -1226,6 +1259,12 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     $script:DataDir = Join-Path $Root 'data'          # «переносимый» режим: проверка прав не мешает
     $script:RootState = $null; $script:JournalFailed = $false
     $script:JournalLockTries = 1; $script:JournalLockWaitMs = 300
+    # ключ подписи: настоящий лежит в ProgramData и без прав администратора недоступен
+    $testKey = New-Object byte[] 32; (New-Object Random 7).NextBytes($testKey); $script:SignKey = $testKey
+    $script:TaskRun = $false; $script:PortableTaskState = $null; $script:KnownJournal = $null
+    $script:RegTypes = @('reg', 'regif', 'regpol', 'regsvc'); $script:AuditGuid = '{0CCE9226-69AE-11D9-BED3-505054503030}'
+    $script:Defs = @(@{ T = 'reg'; P = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection'; N = 'AllowTelemetry' },
+                     @{ T = 'svc'; P = 'DiagTrack' }, @{ T = 'taskglob'; P = 'Consolidator*' })
     $r = @{}
 
     # ключи журнала: у служб, задач и переменных свои, и первая запись главная
@@ -1239,9 +1278,74 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     Save-JournalEntries -Quiet
     $j = Get-Content (Join-Path $script:DataDir 'changes.json') -Raw | ConvertFrom-Json
     $r.schema = "$($j.schema)"; $r.legacyNew = [bool]$j.legacy; $r.saved = @($j.items).Count; $r.failedOk = $script:JournalFailed
+    $r.sigLen = "$($j.sig)".Length
+    # запись лежит как есть, а не обёрткой {"value": [...], "Count": N}
+    $r.firstKind = "$(@($j.items)[0].kind)"
+    $rj = Read-JournalFile; $r.signedRead = ($rj.signed -and $rj.trusted -and $rj.items.Count -eq 1)
+
+    # подпись: правка журнала чужой рукой видна, такой журнал не читается
+    $jp = Join-Path $script:DataDir 'changes.json'
+    $txt = Get-Content $jp -Raw
+    Set-Content $jp ($txt -replace '"old":\s*"2"', '"old": "9"') -Encoding UTF8
+    $rj = Read-JournalFile
+    $r.tamperUntrusted = (-not $rj.trusted) -and $rj.items.Count -eq 0
+    $r.tamperAside = @(Get-ChildItem $script:DataDir -Filter 'changes.unverified-*.json').Count
+    # дописанная запись тоже
+    $script:Journal.Add(@{ kind = 'svc'; name = 'DiagTrack'; old = '2'; newValue = '4' }); Save-JournalEntries -Quiet
+    $j = Get-Content $jp -Raw | ConvertFrom-Json
+    $j.items += [pscustomobject]@{ kind = 'reg'; path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'; name = 'x'; existed = $true; old = 'C:\evil.exe'; type = 'String' }
+    ($j | ConvertTo-Json -Depth 8) | Set-Content $jp -Encoding UTF8
+    $r.addUntrusted = -not (Read-JournalFile).trusted
+    # ключа нет — журнал не читается, но и не откладывается: он может быть цел
+    $script:Journal.Add(@{ kind = 'svc'; name = 'DiagTrack'; old = '2'; newValue = '4' }); Save-JournalEntries -Quiet
+    if (-not $Admin) {
+        $script:SignKey = $null
+        $rj = Read-JournalFile
+        $r.noKeyUntrusted = (-not $rj.trusted) -and (Test-Path $jp)
+    } else {
+        # с правами администратора ключ заводится сам: только своим, 32 байта,
+        # и при следующем чтении тот же; журнал под прежним ключом не принимается
+        $script:SignKeyFile = Join-Path $script:SafeRoot 'journal.key'
+        $script:SignKey = $null; $script:RootState = $null
+        $k1 = [byte[]](Get-SignKey)
+        $r.keyCreated = (Test-Path $script:SignKeyFile) -and $k1.Length -eq 32 -and (Test-KeyFileSecure $script:SignKeyFile)
+        $script:SignKey = $null
+        $r.keyReread = [Convert]::ToBase64String([byte[]](Get-SignKey)) -eq [Convert]::ToBase64String($k1)
+        $r.noKeyUntrusted = -not (Read-JournalFile).trusted
+    }
+    $script:SignKey = $testKey
+    $r.keyBackOk = (Read-JournalFile).trusted
+    # журнал прежней версии без подписи в переносимой папке: только записи о настройках программы
+    Set-Content $jp ('{"schema":2,"items":[' +
+        '{"kind":"reg","path":"HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection","name":"AllowTelemetry","existed":true,"old":"3","type":"DWord"},' +
+        '{"kind":"reg","path":"HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run","name":"x","existed":true,"old":"C:\\evil.exe","type":"String"},' +
+        '{"kind":"svc","name":"DiagTrack","old":"2"},{"kind":"svc","name":"Evil","old":"2"},' +
+        '{"kind":"task","path":"\\Microsoft\\Windows\\Customer Experience Improvement Program\\Consolidator","old":"Enabled"},' +
+        '{"kind":"startup","id":"run|HKLM|x","old":"On"}]}') -Encoding UTF8
+    $rj = Read-JournalFile
+    $r.legacyKept2 = $rj.items.Count; $r.legacyDropped = $rj.dropped
+    # тот же журнал в защищённой папке — целиком: подменить его там было некому
+    $keepDir = $script:DataDir; $script:DataDir = $script:SafeRoot
+    New-Item -ItemType Directory -Force $script:SafeRoot | Out-Null
+    Copy-Item $jp (Join-Path $script:SafeRoot 'changes.json') -Force
+    $r.safeLegacyAll = (Read-JournalFile).items.Count
+    Remove-Item (Join-Path $script:SafeRoot 'changes.json') -Force
+    $script:DataDir = $keepDir
+    Remove-Item $jp -Force
+    # Задачам планировщика переносимая папка во временной не годится:
+    # её может подменить любая программа пользователя. Окну — годится.
+    $r.winTrusted = Test-DataTrusted
+    $script:TaskRun = $true; $script:PortableTaskState = $null
+    $r.taskTrusted = Test-DataTrusted
+    $r.taskEnsureThrows = $false
+    try { Ensure-DataDir } catch { $r.taskEnsureThrows = $true }
+    $script:TaskRun = $false; $script:PortableTaskState = $null
+    $r.uncAcl = Test-AclVolume '\\server\share\data'
+    $r.chainWindows = Test-DirChainSecure $env:SystemRoot
+    $r.chainTemp = Test-DirChainSecure $env:TEMP
 
     # журнал прежней версии: без schema — помечается навсегда
-    Set-Content (Join-Path $script:DataDir 'changes.json') '{"items":[{"kind":"reg","path":"HKCU:\\X","name":"A","existed":false,"old":""}]}' -Encoding UTF8
+    Set-Content (Join-Path $script:DataDir 'changes.json') '{"items":[{"kind":"reg","path":"HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection","name":"AllowTelemetry","existed":false,"old":""}]}' -Encoding UTF8
     $r.legacyRead = (Read-JournalFile).legacy
     $script:Journal.Add(@{ kind = 'task'; path = '\A\B'; old = 'Enabled'; newValue = 'Disabled' })
     Save-JournalEntries -Quiet
@@ -1304,7 +1408,20 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
         Set-Content (Join-Path $legacy 'changes.json') '{}' -Encoding UTF8
         $acl = Get-Acl (Join-Path $legacy 'changes.json'); $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544'))); Set-Acl (Join-Path $legacy 'changes.json') $acl
         $null = & cmd.exe /c ('mklink /J "' + (Join-Path $legacy 'link') + '" "' + $env:SystemRoot + '"')
+        # подложенное глубже корня: своя папка снимков, а в ней чужой файл
+        $snap = Join-Path $legacy 'snapshots'
+        New-Item -ItemType Directory -Force $snap | Out-Null
+        $acl = Get-Acl $snap; $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544'))); Set-Acl $snap $acl
+        Set-Content (Join-Path $snap 'evil.json') '{}' -Encoding UTF8
+        $acl = Get-Acl (Join-Path $snap 'evil.json'); $acl.SetOwner((New-Object Security.Principal.NTAccount($env:USERDOMAIN, $env:USERNAME)))
+        try { Set-Acl (Join-Path $snap 'evil.json') $acl } catch { }
+        Set-Content (Join-Path $snap 'own.json') '{}' -Encoding UTF8
+        $acl = Get-Acl (Join-Path $snap 'own.json'); $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544'))); Set-Acl (Join-Path $snap 'own.json') $acl
+        $r.deepOwner = Get-OwnerSid (Join-Path $snap 'evil.json')
         $r.legacyFixed = Protect-DataRoot $legacy
+        $r.deepGone = -not (Test-Path (Join-Path $snap 'evil.json'))
+        $r.deepAside = @(Get-ChildItem $Root -Directory -Filter 'legacy.untrusted-*' | Where-Object { Test-Path (Join-Path $_.FullName 'snapshots\evil.json') }).Count
+        $r.deepOwnKept = Test-Path (Join-Path $snap 'own.json')
         $r.linkGone = -not (Test-Path (Join-Path $legacy 'link'))
         $r.dataKept = Test-Path (Join-Path $legacy 'changes.json')
         $r.windowsIntact = Test-Path (Join-Path $env:SystemRoot 'System32\kernel32.dll')
@@ -1318,7 +1435,23 @@ Check 'проверки журнала не зависают' ($null -ne $jr)
 if ($jr) {
     Check 'у служб, задач и переменных свои ключи журнала' ((@($jr.keys) -join ',') -eq 'svc|diagtrack,task|\a\b,env|x') (@($jr.keys) -join ',')
     Check 'у службы в журнале остаётся первое состояние' ($jr.packOld -eq '3' -and $jr.packCount -eq 1) ("old=" + $jr.packOld)
-    Check 'журнал пишется новым образцом (schema 2)' ($jr.schema -eq '2' -and -not $jr.legacyNew -and $jr.saved -eq 1 -and -not $jr.failedOk)
+    Check 'журнал пишется новым образцом с подписью (schema 3)' ($jr.schema -eq '3' -and -not $jr.legacyNew -and $jr.saved -eq 1 -and -not $jr.failedOk -and $jr.sigLen -eq 64) ("schema=$($jr.schema) sig=$($jr.sigLen)")
+    Check 'запись журнала не заворачивается в лишний массив' ($jr.firstKind -eq 'svc') ("kind первой записи: '" + $jr.firstKind + "'")
+    Check 'подписанный журнал читается' ([bool]$jr.signedRead)
+    Check 'изменённая запись в журнале видна: журнал не читается и отложен' ([bool]$jr.tamperUntrusted -and $jr.tamperAside -ge 1)
+    Check 'дописанная в журнал запись видна' ([bool]$jr.addUntrusted)
+    Check 'без ключа журналу не верится' ([bool]$jr.noKeyUntrusted)
+    if ($isAdmin) {
+        Check 'ключ подписи заводится сам и закрыт от всех, кроме системы и администраторов' ([bool]$jr.keyCreated)
+        Check 'ключ подписи при следующем чтении тот же' ([bool]$jr.keyReread)
+    }
+    Check 'с ключом журнал снова читается' ([bool]$jr.keyBackOk)
+    Check 'журнал без подписи в переносимой папке: только записи о настройках программы' ($jr.legacyKept2 -eq 3 -and $jr.legacyDropped -eq 3) ("оставлено $($jr.legacyKept2), пропущено $($jr.legacyDropped)")
+    Check 'журнал без подписи в защищённой папке читается целиком' ($jr.safeLegacyAll -eq 6) ("записей: $($jr.safeLegacyAll)")
+    Check 'окну переносимая папка доверена, как его exe' ([bool]$jr.winTrusted)
+    Check 'задачам переносимая папка, которую можно подменить, не доверена' ((-not $jr.taskTrusted) -and $jr.taskEnsureThrows)
+    Check 'сетевая папка — без прав доступа' (-not $jr.uncAcl)
+    Check 'путь к папке Windows подменить нельзя, к временной — можно' ($jr.chainWindows -and -not $jr.chainTemp) ("windows=$($jr.chainWindows) temp=$($jr.chainTemp)")
     Check 'журнал прежней версии узнаётся' ([bool]$jr.legacyRead)
     Check 'пометка «прежняя версия» не теряется при дописывании' ([bool]$jr.legacyKept -and $jr.legacyItems -eq 2) ("записей: " + $jr.legacyItems)
     Check 'повреждённый журнал откладывается, а не затирается' ($jr.broken -eq 1 -and $jr.afterBroken -eq 1)
@@ -1337,6 +1470,8 @@ if ($jr) {
         Check 'чужая папка данных откладывается целиком' ($jr.foreignFixed -and $jr.foreignAside -eq 1) ("владелец был: " + $jr.foreignOwner)
         Check 'папка прежней версии закрывается на запись' ([bool]$jr.legacyFixed)
         Check 'подложенная ссылка уходит в карантин' ([bool]$jr.linkGone)
+        Check 'чужой файл глубже корня уходит в карантин с тем же путём' ($jr.deepGone -and $jr.deepAside -eq 1) ("владелец был: $($jr.deepOwner); в карантине: $($jr.deepAside)")
+        Check 'свой файл глубже корня остаётся' ([bool]$jr.deepOwnKept)
         Check 'свои данные при этом остаются' ([bool]$jr.dataKept)
         Check 'по ссылке ничего не тронуто' ([bool]$jr.windowsIntact)
     } else { Write-Host '  [--]   защита папки данных: нужны права администратора, пропущено' }
@@ -1427,19 +1562,45 @@ $gdJob = Start-Job -ArgumentList $engine -ScriptBlock {
     param($EnginePath)
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-        if ($fn.Name -in @('Invoke-OneShotTask', 'Get-CredCheckCmd', 'Remove-RegStatus', 'Get-RegValue')) { Invoke-Expression $fn.Extent.Text }
+        if ($fn.Name -in @('Invoke-OneShotTask', 'Test-OneShotTaskMine', 'ConvertTo-SidValue', 'Get-CredCheckCmd', 'Remove-RegStatus', 'Get-RegValue')) { Invoke-Expression $fn.Extent.Text }
     }
     $r = @{}
-    # заглушки планировщика: задача «отработала» с заданным кодом
-    function New-ScheduledTaskAction { param($Execute, $Argument) 'a' }
-    function New-ScheduledTaskPrincipal { param($UserId, $LogonType, $RunLevel) 'p' }
+    # заглушки планировщика: задача «отработала» с заданным кодом; что
+    # зарегистрировано, то и отдаётся обратно — если не подменили
+    $script:Tasks = @{}; $script:Started = New-Object System.Collections.Generic.List[string]; $script:Removed = New-Object System.Collections.Generic.List[string]
+    $script:Swap = $false
+    function New-ScheduledTaskAction { param($Execute, $Argument) [pscustomobject]@{ Execute = $Execute; Arguments = $Argument } }
+    function New-ScheduledTaskPrincipal { param($UserId, $LogonType, $RunLevel) [pscustomobject]@{ UserId = $UserId } }
     function New-ScheduledTaskSettingsSet { param([switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries, $ExecutionTimeLimit) 's' }
-    function Register-ScheduledTask { param($TaskName, $Action, $Principal, $Settings, [switch]$Force, $ErrorAction) }
-    function Start-ScheduledTask { param($TaskName, $ErrorAction) }
-    function Unregister-ScheduledTask { param($TaskName, $Confirm, $ErrorAction) }
-    function Get-ScheduledTaskInfo { param($TaskName, $ErrorAction) [pscustomobject]@{ LastTaskResult = $script:Code } }
+    function Register-ScheduledTask {
+        param($TaskPath, $TaskName, $Action, $Principal, $Settings, [switch]$Force, $ErrorAction)
+        if ($script:Tasks.ContainsKey($TaskName) -and -not $Force) { throw 'задача с таким именем уже есть' }
+        $a = $(if ($script:Swap) { [pscustomobject]@{ Execute = 'C:\evil.exe'; Arguments = '' } } else { $Action })
+        # планировщик отдаёт систему под её местным именем — «СИСТЕМА» на русской Windows
+        $p = $Principal
+        if ("$($Principal.UserId)" -eq 'SYSTEM') {
+            $p = [pscustomobject]@{ UserId = ([Security.Principal.SecurityIdentifier]'S-1-5-18').Translate([Security.Principal.NTAccount]).Value.Split('\')[-1] }
+        }
+        $script:Tasks[$TaskName] = [pscustomobject]@{ Actions = @($a); Principal = $p }
+    }
+    function Get-ScheduledTask { param($TaskPath, $TaskName, $ErrorAction) if ($script:Tasks.ContainsKey($TaskName)) { $script:Tasks[$TaskName] } }
+    function Start-ScheduledTask { param($TaskPath, $TaskName, $ErrorAction) $script:Started.Add($TaskName) }
+    function Unregister-ScheduledTask { param($TaskPath, $TaskName, $Confirm, $ErrorAction) $script:Removed.Add($TaskName); $script:Tasks.Remove($TaskName) }
+    function Get-ScheduledTaskInfo { param($TaskPath, $TaskName, $ErrorAction) [pscustomobject]@{ LastTaskResult = $script:Code } }
     $script:Code = 1; $r.fail = Invoke-OneShotTask 'w11p-test' 'cmd'
-    $script:Code = 0; $r.ok = Invoke-OneShotTask 'w11p-test' 'cmd'
+    $script:Code = 0; $r.ok = Invoke-OneShotTask 'w11p-test' 'cmd' -AsSystem
+    $r.names = @($script:Started)
+    # задачу с заранее известным именем завёл кто-то другой — её не трогаем
+    $script:Tasks['w11p-test'] = [pscustomobject]@{ Actions = @([pscustomobject]@{ Execute = 'C:\other.exe'; Arguments = '' }); Principal = [pscustomobject]@{ UserId = 'SYSTEM' } }
+    $script:Started.Clear(); $script:Removed.Clear()
+    $r.okBesideForeign = Invoke-OneShotTask 'w11p-test' 'cmd' -AsSystem
+    $r.foreignKept = $script:Tasks.ContainsKey('w11p-test')
+    # после регистрации команда оказалась не та — задача не запускается и убирается
+    $script:Swap = $true; $script:Started.Clear(); $script:Removed.Clear()
+    $r.swapped = Invoke-OneShotTask 'w11p-test' 'cmd' -AsSystem
+    $r.swapStarted = $script:Started.Count; $r.swapRemoved = $script:Removed.Count
+    $script:Swap = $false
+    $r.leftover = @($script:Tasks.Keys | Where-Object { $_ -ne 'w11p-test' }).Count
     $r.check = Get-CredCheckCmd @('WindowsLive:target=virtualapp/didlogical', 'MicrosoftAccount:target=SSO_POP_Device')
     # статусы удаления — на своей пробной ветке
     $k = 'HKCU:\Software\W11PTest-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -1455,6 +1616,10 @@ Remove-Job $gdJob -Force
 Check 'проверки номера устройства не зависают' ($null -ne $gd)
 if ($gd) {
     Check 'сбой команды в короткой задаче не выдаётся за успех' ((-not $gd.fail) -and $gd.ok)
+    Check 'у короткой задачи каждый раз своё случайное имя' ((@($gd.names).Count -eq 2) -and (@($gd.names)[0] -ne @($gd.names)[1]) -and (@($gd.names)[0] -like 'w11p-test ????????????')) (@($gd.names) -join ' | ')
+    Check 'чужая задача с тем же именем не запускается и не удаляется' ($gd.okBesideForeign -and $gd.foreignKept)
+    Check 'подменённая команда задачи не запускается, задача убирается' ((-not $gd.swapped) -and $gd.swapStarted -eq 0 -and $gd.swapRemoved -eq 1) ("started=$($gd.swapStarted) removed=$($gd.swapRemoved)")
+    Check 'короткие задачи после себя не остаются' ($gd.leftover -eq 0) ("осталось: $($gd.leftover)")
     Check 'после cmdkey проверяется, что учётных данных не осталось' ($gd.check -eq '(cmdkey /list | findstr /i /c:"virtualapp/didlogical" /c:"SSO_POP_Device" >nul && exit 1 || exit 0)') $gd.check
     Check 'у удаления свой статус: убрано / не было' ("$($gd.st1)|$($gd.st2)|$($gd.st3)|$($gd.st4)" -eq 'removed|absent|removed|absent') "$($gd.st1)|$($gd.st2)|$($gd.st3)|$($gd.st4)"
 }
@@ -1474,6 +1639,14 @@ Check 'отключение службы пишется в журнал' (($svcA
 Check 'отключение задачи пишется в журнал' ($engineText -match "'ok'\s+\{ Add-TaskJournal \`$d\.P")
 Check 'старый откат служб — только для журнала прежней версии' ($engineText -match "if \(\`$legacyRevert\) \{\s+Write-Section 'Службы")
 Check 'применение проверяет журнал заранее' ($engineText -match 'if \(-not \(Test-JournalWritable\)\) \{\s+Write-Log .ПРИМЕНЕНИЕ ОТМЕНЕНО')
+Check 'задача планировщика не работает с папкой, которую можно подменить' ($engineText -match 'if \(\$script:TaskRun -and -not \(Test-DataTrusted\)\) \{ exit 1 \}')
+Check 'страж в переносимом режиме не ставится на папку, которую можно подменить' ([regex]::Match($engineText, "(?s)function Install-TaskEngine \{.*?\n\}").Value -match 'Test-PortableTaskTrust')
+$engineCs = Join-Path (Split-Path $engine) 'Engine.cs'
+if (Test-Path $engineCs) {
+    $ecs = Get-Content $engineCs -Raw -Encoding UTF8
+    Check 'движок не кладётся во временную папку, если защищённую подготовить не вышло' (($ecs -notmatch 'GetTempPath') -and ($ecs -match 'throw new InvalidOperationException\(L\.T\("Не удалось подготовить защищённую папку'))
+    Check 'окно проверяет папку данных на любой глубине' ($ecs -match 'Quarantine\(d, r, aside\)')
+}
 Check 'копия движка для задач — только через защищённую установку' (($engineText -notmatch "Copy-Item -LiteralPath \`$PSCommandPath -Destination \`$engineDst") -and ([regex]::Matches($engineText, '\$engineDst = Install-TaskEngine').Count -eq 4))
 
 # --------------------------------------------------------------------------- #

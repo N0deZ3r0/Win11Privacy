@@ -187,12 +187,20 @@ $script:DataDir        = $(if ($DataRoot) { $DataRoot } else { Join-Path $env:Pr
 # Задачам планировщика путь к данным надо передать явно: они запускаются
 # сами по себе и о переносимом режиме иначе не узнают.
 $script:DataArg        = $(if ($DataRoot) { ' -DataRoot "' + $DataRoot + '"' } else { '' })
+# Запуск из планировщика: страж, наблюдение за датчиками и сетью. Такие запуски
+# идут сами, без человека, и с правами администратора.
+$script:TaskRun        = [bool]($Guard -or $SensorGuard -or $NetGuard -or $WatcherNotify)
+$script:PortableTaskState = $null    # можно ли задачам верить переносимой папке: $null — ещё не проверяли
 # Корень в ProgramData. Здесь копия движка, которую задачи планировщика
 # запускают с правами администратора, — и в переносимом режиме тоже: рядом с
 # exe писать может любая программа пользователя, и подменённый скрипт молча
 # выполнился бы с повышенными правами при следующем входе в систему.
 $script:SafeRoot       = Join-Path $env:ProgramData 'Win11Privacy'
 $script:TaskEngine     = Join-Path $script:SafeRoot 'engine.ps1'
+# Ключ подписи журнала отката: всегда в защищённом корне, читать его могут
+# только система и администраторы
+$script:SignKeyFile    = Join-Path $script:SafeRoot 'journal.key'
+$script:SignKey        = $null
 $script:RootState      = $null        # защищён ли корень: $null — ещё не проверяли
 # Владельцы, которым можно верить: система, администраторы, TrustedInstaller
 $script:TrustedSids    = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
@@ -420,6 +428,38 @@ function Test-DirSecure {
     } catch { return $false }
 }
 
+# Можно ли верить файлу или папке внутри папки данных: не ссылка, владелец —
+# система или администраторы, и никому чужому явным правом не открыт на запись
+# (унаследованные права заменит новый корень).
+function Test-ItemTrusted {
+    param($Item)
+    if ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+    try { $acl = Get-Acl -LiteralPath $Item.FullName -ErrorAction Stop } catch { return $false }
+    if ($script:TrustedSids -notcontains $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value) { return $false }
+    $writeMask = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
+    foreach ($r in $acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier])) {
+        if ("$($r.AccessControlType)" -ne 'Allow') { continue }
+        if ($script:TrustedSids -contains $r.IdentityReference.Value) { continue }
+        if (([int64]$r.FileSystemRights -band $writeMask) -ne 0) { return $false }
+    }
+    return $true
+}
+
+# Всё недоверенное на любой глубине. Внутрь ссылок и чужих папок не заходим:
+# они уходят в карантин целиком.
+# Путь внутри собирается из имён: отрезать начало полного пути нельзя — у
+# временной папки бывает короткое имя 8.3, а у найденного — длинное.
+function Get-UntrustedItems {
+    param([string]$Dir, [string]$Rel = '')
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($c in @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue)) {
+        $r = $(if ($Rel) { Join-Path $Rel $c.Name } else { $c.Name })
+        if (-not (Test-ItemTrusted $c)) { $out.Add([pscustomobject]@{ Item = $c; Rel = $r }); continue }
+        if ($c.PSIsContainer) { foreach ($x in @(Get-UntrustedItems $c.FullName $r)) { $out.Add($x) } }
+    }
+    return $out.ToArray()
+}
+
 function Protect-DataRoot {
     param([string]$Dir)
     if (-not (Test-Admin)) { return (Test-DirSecure $Dir) }
@@ -435,16 +475,18 @@ function Protect-DataRoot {
         }
         if (-not (Test-Path -LiteralPath $Dir)) { New-Item -ItemType Directory -Path $Dir -Force | Out-Null }
         if (Test-DirSecure $Dir) { return $true }
-        # Папка прежних версий: права наследовались от ProgramData. Всё, что в
-        # ней создал не администратор, и любые ссылки уносим в карантин рядом.
+        # Папка прежних версий: права наследовались от ProgramData, и обычный
+        # пользователь мог завести файлы и папки на любой глубине — раньше
+        # проверялось только то, что лежит прямо в корне. Всё, что создал не
+        # администратор, любые ссылки и всё, что чужим явным правом открыто
+        # на запись, уносим в карантин рядом — с тем же путём внутри.
         $aside = "$Dir.untrusted-$stamp"
-        foreach ($c in @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue)) {
-            $bad = ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($script:TrustedSids -notcontains (Get-OwnerSid $c.FullName))
-            if (-not $bad) { continue }
-            if (-not (Test-Path -LiteralPath $aside)) { New-Item -ItemType Directory -Path $aside -Force | Out-Null }
-            $to = Join-Path $aside $c.Name
-            if ($c.PSIsContainer) { [IO.Directory]::Move($c.FullName, $to) } else { [IO.File]::Move($c.FullName, $to) }
-            Write-Log ("   [!] в папке данных лежал чужой файл, он отложен: {0}" -f $c.Name)
+        foreach ($u in @(Get-UntrustedItems $Dir)) {
+            $to = Join-Path $aside $u.Rel
+            $toDir = Split-Path $to -Parent
+            if (-not (Test-Path -LiteralPath $toDir)) { New-Item -ItemType Directory -Path $toDir -Force | Out-Null }
+            if ($u.Item.PSIsContainer) { [IO.Directory]::Move($u.Item.FullName, $to) } else { [IO.File]::Move($u.Item.FullName, $to) }
+            Write-Log ("   [!] в папке данных лежал чужой файл, он отложен: {0}" -f $u.Rel)
         }
         $sec = New-Object System.Security.AccessControl.DirectorySecurity
         $sec.SetAccessRuleProtection($true, $false)
@@ -467,20 +509,83 @@ function Assert-SafeRoot {
     return $script:RootState
 }
 
-# Журнал читается и пишется только из защищённой папки. В переносимом режиме
-# данные лежат рядом с exe и защищены ровно так же, как сам exe.
+# Тома без прав доступа (FAT, exFAT) и сетевые папки: закрыть папку там нечем.
+function Test-AclVolume {
+    param([string]$Dir)
+    try {
+        $root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Dir))
+        if ($root -like '\\*') { return $false }
+        return ((New-Object IO.DriveInfo($root)).DriveFormat -in @('NTFS', 'ReFS'))
+    } catch { return $false }
+}
+
+# Может ли кто-то, кроме системы и администраторов, подменить папку — то
+# есть удалить или переименовать её или любую папку выше, сменить им права
+# или владельца. Закрыть одну папку данных мало: если её родитель открыт на
+# запись, папку можно переименовать и положить на её место свою — между
+# проверкой и чтением.
+function Test-DirChainSecure {
+    param([string]$Dir)
+    try {
+        $self  = 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x10000000 -bor 0x40000000   # удаление, права, владелец, общие
+        $child = 0x40 -bor 0x10000000 -bor 0x40000000                                # удаление вложенного
+        $cur = [IO.Path]::GetFullPath($Dir).TrimEnd('\')
+        while ($cur) {
+            $parent = [IO.Path]::GetDirectoryName($cur)
+            $isRoot = (-not $parent)
+            $node = $(if ($isRoot) { $cur.TrimEnd('\') + '\' } else { $cur })
+            $it = Get-Item -LiteralPath $node -Force -ErrorAction Stop
+            if (-not $isRoot -and ($it.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+            $acl = Get-Acl -LiteralPath $node -ErrorAction Stop
+            if ($script:TrustedSids -notcontains $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value) { return $false }
+            $mask = $(if ($isRoot) { $child } else { $self -bor $child })
+            foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+                if ("$($r.AccessControlType)" -ne 'Allow') { continue }
+                # «создатель-владелец» и прочие шаблоны для вложенного к самой папке не относятся
+                if ($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
+                if ($script:TrustedSids -contains $r.IdentityReference.Value) { continue }
+                if (([int64]$r.FileSystemRights -band $mask) -ne 0) { return $false }
+            }
+            if ($isRoot) { break }
+            $cur = $parent
+        }
+        return $true
+    } catch { return $false }
+}
+
+# Переносимая папка данных лежит рядом с exe, и права ей достаются от папки
+# exe. Окну этого достаточно: кто может писать в эту папку, может подменить и
+# сам exe, который человек запускает. Но страж и наблюдение — задачи
+# планировщика: они сами, без человека, запускают защищённую копию движка с
+# правами администратора и читают эту папку. Раньше она считалась доверенной
+# без проверки — подложенный журнал или ссылка на месте папки сработали бы с
+# правами администратора. Задачам переносимая папка годится, только если
+# подменить её нельзя: том с правами доступа, путь до неё закрыт от записи
+# (как Program Files), а сама она закрыта так же, как ProgramData\Win11Privacy.
+function Test-PortableTaskTrust {
+    if ($null -eq $script:PortableTaskState) {
+        $script:PortableTaskState = [bool]((Test-AclVolume $script:DataDir) -and
+                                           (Test-DirChainSecure (Split-Path $script:DataDir -Parent)) -and
+                                           (Protect-DataRoot $script:DataDir))
+    }
+    return $script:PortableTaskState
+}
+
+# Журнал читается и пишется только из защищённой папки.
 function Test-DataTrusted {
-    if ($script:DataDir -ne $script:SafeRoot) { return $true }
-    return (Assert-SafeRoot)
+    if ($script:DataDir -eq $script:SafeRoot) { return (Assert-SafeRoot) }
+    if ($script:TaskRun) { return (Test-PortableTaskTrust) }
+    return $true
 }
 
 function Ensure-DataDir {
-    if ($script:DataDir -eq $script:SafeRoot) {
-        if (-not (Assert-SafeRoot)) { throw 'папка данных программы не защищена от подмены' }
-        return
-    }
+    if (-not (Test-DataTrusted)) { throw 'папка данных программы не защищена от подмены' }
     if (-not (Test-Path -LiteralPath $script:DataDir)) { New-Item -ItemType Directory -Path $script:DataDir -Force | Out-Null }
 }
+
+# Задача планировщика данным из папки, которую можно подменить, не верит и
+# ничего не делает.
+if ($script:TaskRun -and -not (Test-DataTrusted)) { exit 1 }
 
 # Копия движка для задач планировщика: всегда в защищённом корне, пишется
 # рядом и подменяет прежнюю одним движением, а перед этим сверяется с
@@ -488,16 +593,26 @@ function Ensure-DataDir {
 function Install-TaskEngine {
     if (-not (Assert-SafeRoot)) { throw 'папка ProgramData\Win11Privacy не защищена — копию движка для задач туда класть нельзя' }
     $dst = $script:TaskEngine
-    if ($PSCommandPath -eq $dst) { return $dst }
-    $tmp = $dst + '.new'
-    Copy-Item -LiteralPath $PSCommandPath -Destination $tmp -Force -ErrorAction Stop
-    if ((Get-FileHash -LiteralPath $tmp -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash) {
-        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-        throw 'копия движка для задач не совпала с оригиналом'
+    if ($PSCommandPath -ne $dst) {
+        $tmp = $dst + '.new'
+        Copy-Item -LiteralPath $PSCommandPath -Destination $tmp -Force -ErrorAction Stop
+        if ((Get-FileHash -LiteralPath $tmp -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash) {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+            throw 'копия движка для задач не совпала с оригиналом'
+        }
+        Move-Item -LiteralPath $tmp -Destination $dst -Force -ErrorAction Stop
+        # прежние версии в переносимом режиме клали копию рядом с данными
+        if ($script:DataDir -ne $script:SafeRoot) { Remove-Item -LiteralPath (Join-Path $script:DataDir 'engine.ps1') -Force -ErrorAction SilentlyContinue }
     }
-    Move-Item -LiteralPath $tmp -Destination $dst -Force -ErrorAction Stop
-    # прежние версии в переносимом режиме клали копию рядом с данными
-    if ($script:DataDir -ne $script:SafeRoot) { Remove-Item -LiteralPath (Join-Path $script:DataDir 'engine.ps1') -Force -ErrorAction SilentlyContinue }
+    # Переносимую папку проверяем после того, как копия обновлена: задачи,
+    # поставленные прежними версиями, запускают именно её — и теперь сами
+    # откажутся работать с папкой, которую можно подменить. Новую задачу на
+    # такой папке не ставим: задача, которая потом молча не работает, хуже
+    # честного отказа сейчас.
+    if ($script:DataDir -ne $script:SafeRoot -and -not (Test-PortableTaskTrust)) {
+        throw (('переносимую папку программы ({0}) может подменить любая программа пользователя, а страж и наблюдение работают с правами администратора сами по себе. ' +
+                'В переносимом режиме они ставятся, только если программа лежит в защищённой папке на диске NTFS — например, в Program Files.') -f $script:DataDir)
+    }
     return $dst
 }
 
@@ -605,31 +720,175 @@ function Use-JournalLock {
 # Журнал на диске. Повреждённый файл не затирается молча новыми записями —
 # раньше Load-Json возвращал пустоту, и вся история «как было» терялась при
 # следующей же записи. Теперь он откладывается рядом под своим именем.
+#  Журнал отката — готовая инструкция для администратора: какие значения
+#  записать в реестр, какие службы, задачи и автозагрузку вернуть. В
+#  переносимом режиме он лежит рядом с exe, куда может писать любая программа
+#  пользователя, — и дописанная туда запись (скажем, своя программа в
+#  автозагрузке всех пользователей) выполнилась бы при следующем откате с
+#  правами администратора. Поэтому журнал подписывается HMAC-SHA256. Ключ
+#  лежит в ProgramData\Win11Privacy, и читать его могут только система и
+#  администраторы: без него подпись не подделать.
+function Test-KeyFileSecure {
+    param([string]$Path)
+    try {
+        $it = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if ($it.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        if ($script:TrustedSids -notcontains $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value) { return $false }
+        if (-not $acl.AreAccessRulesProtected) { return $false }
+        # даже читать — только своим
+        foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+            if ("$($r.AccessControlType)" -ne 'Allow') { continue }
+            if ($script:TrustedSids -notcontains $r.IdentityReference.Value) { return $false }
+        }
+        return $true
+    } catch { return $false }
+}
+
+function Get-SignKey {
+    if ($null -ne $script:SignKey) { return $script:SignKey }
+    if (-not (Assert-SafeRoot)) { throw 'папка ProgramData\Win11Privacy не защищена — ключа подписи журнала нет' }
+    $p = $script:SignKeyFile
+    if (Test-Path -LiteralPath $p) {
+        $b = $null
+        if (Test-KeyFileSecure $p) { try { $b = [IO.File]::ReadAllBytes($p) } catch { $b = $null } }
+        if ($null -ne $b -and $b.Length -eq 32) { $script:SignKey = $b; return $b }
+        if (-not (Test-Admin)) { throw 'ключ подписи журнала недоступен' }
+        # ключ мог прочитать кто-то чужой — он больше ничего не доказывает
+        Move-Item -LiteralPath $p -Destination ($p + '.untrusted-' + (Get-Date -Format 'yyyyMMdd-HHmmss')) -Force -ErrorAction Stop
+        Write-Log '   [!] ключ подписи журнала был открыт не только администраторам или повреждён -- он заменён новым'
+    }
+    if (-not (Test-Admin)) { throw 'ключа подписи журнала нет, а создать его можно только с правами администратора' }
+    $b = New-Object byte[] 32
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($b) } finally { $rng.Dispose() }
+    # права — сразу при создании файла: между созданием и сменой прав ключ
+    # успели бы прочитать
+    $sec = New-Object System.Security.AccessControl.FileSecurity
+    $sec.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+        $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'Allow')))
+    }
+    $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+    $fs = [IO.File]::Create($p, 64, [IO.FileOptions]::WriteThrough, $sec)
+    try { $fs.Write($b, 0, $b.Length) } finally { $fs.Dispose() }
+    $script:SignKey = $b
+    return $b
+}
+
+# Подпись — по тексту, который даёт разбор самого файла: у хэш-таблиц и у
+# прочитанных из файла объектов поля идут в разном порядке.
+function Get-JournalSig {
+    param($Items, [bool]$Legacy)
+    $canon = ('w11p-journal|{0}|' -f [int]$Legacy) + (ConvertTo-Json -InputObject @($Items) -Depth 8 -Compress)
+    $h = [System.Security.Cryptography.HMACSHA256]::new([byte[]](Get-SignKey))
+    try { return (($h.ComputeHash([Text.Encoding]::UTF8.GetBytes($canon)) | ForEach-Object { $_.ToString('x2') }) -join '') }
+    finally { $h.Dispose() }
+}
+
+# Запись журнала прежней версии без подписи, которой можно верить и в
+# переносимой папке: она про настройку самой программы — тот же параметр
+# реестра, служба, задача или переменная среды, что в её списке. Запись про
+# что-то другое (автозагрузка, чужие профили, произвольный ключ реестра)
+# могли дописать, и без подписи её не возвращаем.
+function Test-JournalEntryKnown {
+    param($Entry)
+    if ($null -eq $script:KnownJournal) {
+        $k = @{}; $globs = New-Object System.Collections.Generic.List[string]
+        foreach ($d in @($script:Defs)) {
+            if ($null -eq $d) { continue }
+            if ($script:RegTypes -contains $d.T) { $k[(Get-JournalKey @{ kind = 'reg'; path = $d.P; name = $d.N })] = $true }
+            elseif ($d.T -in @('svc', 'svcopt')) { $k[(Get-JournalKey @{ kind = 'svc'; name = $d.P })] = $true }
+            elseif ($d.T -eq 'task') { $k[(Get-JournalKey @{ kind = 'task'; path = $d.P })] = $true }
+            elseif ($d.T -eq 'taskglob') { $globs.Add("$($d.P)") }
+            elseif ($d.T -eq 'env') { $k[(Get-JournalKey @{ kind = 'env'; name = $d.P })] = $true }
+        }
+        $k[(Get-JournalKey @{ kind = 'audit'; guid = $script:AuditGuid })] = $true
+        $script:KnownJournal = $k; $script:KnownTaskGlobs = $globs.ToArray()
+    }
+    $f = ConvertTo-Fields $Entry
+    $kind = "$($f['kind'])"
+    if ($kind -notin @('reg', 'svc', 'task', 'env', 'audit')) { return $false }
+    if ($script:KnownJournal.ContainsKey((Get-JournalKey $f))) { return $true }
+    if ($kind -eq 'task') {
+        $leaf = Split-Path "$($f['path'])" -Leaf
+        foreach ($g in $script:KnownTaskGlobs) { if ($leaf -like $g) { return $true } }
+    }
+    return $false
+}
+
+# -ReadOnly — для показа журнала: ничего не откладывать и не писать.
 function Read-JournalFile {
+    param([switch]$ReadOnly)
     $p = Join-Path $script:DataDir 'changes.json'
-    $res = @{ items = @(); legacy = $false; exists = $false }
+    $res = @{ items = @(); legacy = $false; exists = $false; signed = $false; trusted = $true; updated = ''; dropped = 0 }
     if (-not (Test-Path -LiteralPath $p)) { return $res }
     $res.exists = $true
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     try { $j = Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json }
     catch {
-        $bad = Join-Path $script:DataDir ('changes.broken-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.json')
+        if ($ReadOnly) { $res.trusted = $false; return $res }
+        $bad = Join-Path $script:DataDir ('changes.broken-' + $stamp + '.json')
         Move-Item -LiteralPath $p -Destination $bad -Force -ErrorAction Stop
         Write-Log ("   [!] журнал отката был повреждён и отложен как {0}" -f (Split-Path $bad -Leaf))
         $res.exists = $false
         $res.legacy = $true
         return $res
     }
-    if ($j -and $j.PSObject.Properties['items'] -and $j.items) { $res.items = @($j.items) }
+    $items = @()
+    if ($j -and $j.PSObject.Properties['items'] -and $null -ne $j.items) { $items = @($j.items) }
     # Журнал прежних версий: в нём нет служб, задач и переменных среды. Пометка
     # остаётся с ним навсегда — полный откат для них ведёт себя по-старому.
     $res.legacy = [bool](($j.PSObject.Properties['legacy'] -and $j.legacy) -or
-                         (-not $j.PSObject.Properties['schema'] -and $res.items.Count -gt 0))
+                         (-not $j.PSObject.Properties['schema'] -and $items.Count -gt 0))
+    if ($j.PSObject.Properties['updated']) { $res.updated = "$($j.updated)" }
+
+    if ($j.PSObject.Properties['sig'] -and "$($j.sig)") {
+        $want = $null
+        try { $want = Get-JournalSig $items $res.legacy } catch { $want = $null }
+        if ($null -eq $want) {
+            # проверить нечем — значит, и верить нельзя; но файл не наш, чтобы его трогать
+            $res.trusted = $false
+            if (-not $ReadOnly) { Write-Log '   [!] подпись журнала отката проверить нечем: ключ недоступен. Журналу сейчас верить нельзя.' }
+            return $res
+        }
+        if ($want -ne "$($j.sig)") {
+            $res.trusted = $false
+            if ($ReadOnly) { return $res }
+            $bad = Join-Path $script:DataDir ('changes.unverified-' + $stamp + '.json')
+            Move-Item -LiteralPath $p -Destination $bad -Force -ErrorAction Stop
+            Write-Log ("   [!] подпись журнала отката не сошлась: его правила не эта программа или он с другого компьютера. По нему ничего не возвращается; файл отложен как {0}" -f (Split-Path $bad -Leaf))
+            $res.exists = $false
+            return $res
+        }
+        $res.signed = $true; $res.items = $items
+        return $res
+    }
+    # Без подписи — журнал прежней версии. В защищённой папке подменить его
+    # было некому. В переносимой — могли: из него остаются только записи о
+    # настройках самой программы.
+    if ($script:DataDir -eq $script:SafeRoot) { $res.items = $items; return $res }
+    $keep = @($items | Where-Object { Test-JournalEntryKnown $_ })
+    $res.dropped = $items.Count - $keep.Count
+    $res.items = $keep
+    if ($res.dropped -gt 0 -and -not $ReadOnly) {
+        Write-Log ("   [!] журнал отката прежней версии без подписи лежит в папке, которую может изменить любая программа. Из него взяты только записи о настройках программы: {0} из {1}; остальные (автозагрузка, другие профили, сторонние ключи) пропущены." -f $keep.Count, $items.Count)
+    }
     return $res
 }
 
 function Write-JournalFile {
     param($Items, [bool]$Legacy)
-    Save-Json 'changes.json' @{ schema = 2; legacy = $Legacy; items = @($Items); updated = (Get-Date).ToString('s') }
+    $arr = @($Items)
+    $parsed = @()
+    if ($arr.Count -gt 0) {
+        # ConvertFrom-Json отдаёт массив одним объектом: @(...) вокруг вызова
+        # завернул бы его ещё раз, и журнал стал бы {"value": [...], "Count": N}
+        $back = ConvertFrom-Json (ConvertTo-Json -InputObject $arr -Depth 8 -Compress)
+        $parsed = @($back)
+    }
+    $sig = Get-JournalSig $parsed $Legacy
+    Save-Json 'changes.json' ([ordered]@{ schema = 3; legacy = $Legacy; updated = (Get-Date).ToString('s'); items = $parsed; sig = $sig })
 }
 
 # Перед применением: журнал должен писаться, иначе ни одно изменение не
@@ -2255,6 +2514,8 @@ $script:IdCrlNegCache = 'HKLM:\SOFTWARE\Microsoft\IdentityCRL\NegativeCache'
 # Места, которые не удалось прочитать при последнем поиске копий: без них
 # «копий не осталось» было бы неправдой.
 $script:GdidUnreadable = New-Object System.Collections.Generic.List[string]
+# Кэш платформы подключённых устройств: в нём регистрация в каталоге устройств
+$script:CdpCache = Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform'
 
 # Кроме своего профиля и системного — профили других пользователей, которые
 # сейчас вошли в Windows: их кусты реестра подключены. Профили тех, кто сейчас
@@ -2415,6 +2676,25 @@ function Get-GdidLockRefusal {
     return $script:GdidRefusal
 }
 
+# Вернуть службы как были — и проверить, что вернулись. Раньше ошибка запуска
+# глоталась: служба, работавшая до стирания, могла остаться стоять, а
+# стирание всё равно считалось успешным. Возвращает то, что не вернулось.
+function Restore-GdidServices {
+    param([string[]]$Running, $WlidType)
+    $bad = New-Object System.Collections.Generic.List[string]
+    if ($null -ne $WlidType) {
+        try { Set-Service wlidsvc -StartupType $WlidType -ErrorAction Stop } catch { $bad.Add('wlidsvc (тип запуска)') }
+    }
+    foreach ($n in @($Running)) {
+        if (-not $n) { continue }
+        try {
+            Start-Service -Name $n -ErrorAction Stop -WarningAction SilentlyContinue
+            (Get-Service -Name $n -ErrorAction Stop).WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
+        } catch { $bad.Add($n) }
+    }
+    return $bad.ToArray()
+}
+
 function Stop-ServiceWait {
     param([string]$Name)
     $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
@@ -2431,26 +2711,60 @@ function Stop-ServiceWait {
 # Короткая задача планировщика: команда от имени пользователя без повышения
 # или от имени SYSTEM. Учётные данные устройства лежат в хранилище каждого из
 # них, а у повышенного сеанса своё пространство — отсюда их не видно.
+# Короткая задача планировщика: выполнить команду от имени системы или
+# пользователя и убрать задачу. Имя у каждого запуска своё, случайное: задачу
+# с заранее известным именем мог бы завести кто-то другой, и программа
+# запустила бы — а потом и удалила — чужую. После регистрации задача
+# сверяется (та ли команда и от чьего имени) и без этого не запускается.
+function Test-OneShotTaskMine {
+    param([string]$TaskName, [string]$Exe, [string]$Arguments, [bool]$AsSystem)
+    $t = Get-ScheduledTask -TaskPath '\' -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $t) { return $false }
+    $acts = @($t.Actions)
+    if ($acts.Count -ne 1 -or "$($acts[0].Execute)" -ne $Exe -or "$($acts[0].Arguments)" -ne $Arguments) { return $false }
+    # Сверяем по SID: имя учётной записи системы Windows переводит
+    # («СИСТЕМА» на русской), и по имени своя задача выглядела чужой.
+    $sid = ConvertTo-SidValue "$($t.Principal.UserId)"
+    if ($AsSystem) { return ($sid -eq 'S-1-5-18') }
+    return ($sid -ne '' -and $sid -eq ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value)
+}
+
+function ConvertTo-SidValue {
+    param([string]$Name)
+    if (-not $Name) { return '' }
+    if ($Name -match '^S-1-[\d-]+$') { return $Name }
+    try { return (New-Object Security.Principal.NTAccount($Name)).Translate([Security.Principal.SecurityIdentifier]).Value } catch { return '' }
+}
+
 function Invoke-OneShotTask {
     param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem)
+    $TaskName = '{0} {1}' -f $TaskName, [guid]::NewGuid().ToString('N').Substring(0, 12)
+    $exe = "$env:SystemRoot\System32\cmd.exe"; $arg = '/d /c ' + $CmdLine
+    $registered = $false
     try {
-        $act = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument ('/d /c ' + $CmdLine)
+        $act = New-ScheduledTaskAction -Execute $exe -Argument $arg
         $who = $(if ($AsSystem) { New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest }
                  else { New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited })
         $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
-        Register-ScheduledTask -TaskName $TaskName -Action $act -Principal $who -Settings $set -Force -ErrorAction Stop | Out-Null
-        Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        # имя новое — задачу с ним никто завести не мог, поэтому без -Force
+        Register-ScheduledTask -TaskPath '\' -TaskName $TaskName -Action $act -Principal $who -Settings $set -ErrorAction Stop | Out-Null
+        $registered = $true
+        if (-not (Test-OneShotTaskMine $TaskName $exe $arg ([bool]$AsSystem))) { return $false }
+        Start-ScheduledTask -TaskPath '\' -TaskName $TaskName -ErrorAction Stop
         # 267011 — ещё не запускалась, 267009 — выполняется
         $until = (Get-Date).AddSeconds(30)
         do {
             Start-Sleep -Milliseconds 400
-            $res = (Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue).LastTaskResult
+            $res = (Get-ScheduledTaskInfo -TaskPath '\' -TaskName $TaskName -ErrorAction SilentlyContinue).LastTaskResult
         } while (($res -eq 267009 -or $res -eq 267011) -and (Get-Date) -lt $until)
         # Успех — только если команда задачи завершилась с кодом 0. Раньше «да»
         # возвращалось, едва задача запустилась, и сбой команды выглядел успехом.
         return ($res -eq 0)
     } catch { return $false }
-    finally { try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { } }
+    finally {
+        # имя случайное и заведено нами — удаляем только его
+        if ($registered) { try { Unregister-ScheduledTask -TaskPath '\' -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { } }
+    }
 }
 
 # Часть задач Windows закрыла от администратора: читать их можно, менять —
@@ -2503,18 +2817,20 @@ function Invoke-GdidWipe {
                     ForEach-Object { $_.Name })
     $wlidType = $null
     try { $wlidType = (Get-Service wlidsvc -ErrorAction Stop).StartType; Set-Service wlidsvc -StartupType Disabled -ErrorAction Stop } catch { $wlidType = $null }
+    $notBackMsg = '   [!] службы не вернулись в прежнее состояние: {0}. Перезагрузка компьютера вернёт их.'
     if (-not (Stop-ServiceWait 'wlidsvc')) {
-        if ($null -ne $wlidType) { try { Set-Service wlidsvc -StartupType $wlidType -ErrorAction SilentlyContinue } catch { } }
+        $notBack = @(Restore-GdidServices @() $wlidType)
         Write-Log '   [!] служба учётных записей Microsoft (wlidsvc) занята и не остановилась. Закройте Магазин и Параметры и повторите или перезагрузите компьютер. Ничего не стёрто.'
+        if ($notBack.Count -gt 0) { Write-Log ($notBackMsg -f ($notBack -join ', ')) }
         $script:Failures++; return $false
     }
     # Служба, которая не остановилась, держит номер в памяти и записала бы его
     # обратно посреди стирания. Тогда не стираем ничего и возвращаем всё как было.
     $stuck = @($wasRunning | Where-Object { $_ -ne 'wlidsvc' -and -not (Stop-ServiceWait $_) })
     if ($stuck.Count -gt 0) {
-        if ($null -ne $wlidType) { try { Set-Service wlidsvc -StartupType $wlidType -ErrorAction SilentlyContinue } catch { } }
-        foreach ($n in $wasRunning) { try { Start-Service -Name $n -ErrorAction Stop } catch { } }
+        $notBack = @(Restore-GdidServices $wasRunning $wlidType)
         Write-Log ("   [!] служба не остановилась: {0}. Она держит номер устройства и вернула бы его на место. Ничего не стёрто -- повторите позже или после перезагрузки." -f ($stuck -join ', '))
+        if ($notBack.Count -gt 0) { Write-Log ($notBackMsg -f ($notBack -join ', ')) }
         $script:Failures++; return $false
     }
 
@@ -2565,30 +2881,49 @@ function Invoke-GdidWipe {
         foreach ($w in @($deniedAt | Select-Object -Unique -First 5)) { Write-Log ("       {0}" -f ($w -replace '^Microsoft\.PowerShell\.Core\\Registry::', '')) }
         $fails++
     }
-    # 3. кэш платформы подключённых устройств: в нём регистрация в каталоге
-    $null = Clear-FolderContents (Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform') 'кэш платформы подключённых устройств'
-
-    # 4. службы — как были
-    if ($null -ne $wlidType) {
-        try { Set-Service wlidsvc -StartupType $wlidType -ErrorAction Stop }
-        catch { Write-Log '   [!] тип запуска службы wlidsvc вернуть не удалось'; $fails++ }
+    # 3. кэш платформы подключённых устройств: в нём регистрация в каталоге.
+    # Чистка удаляет «что сможет» и называет освобождённый объём — это ещё не
+    # значит, что кэш пуст. Поэтому после неё проверяется, что в нём осталось.
+    $null = Clear-FolderContents $script:CdpCache 'кэш платформы подключённых устройств'
+    if (Test-Path -LiteralPath $script:CdpCache) {
+        $cev = $null
+        $cdpLeft = @(Get-ChildItem -LiteralPath $script:CdpCache -Force -Recurse -File -ErrorAction SilentlyContinue -ErrorVariable cev)
+        if ($cdpLeft.Count -gt 0) {
+            Write-Log ("   [!] в кэше платформы подключённых устройств осталось файлов: {0} -- Windows их не отдала" -f $cdpLeft.Count)
+            foreach ($f in @($cdpLeft | Select-Object -First 3)) { Write-Log ("       {0}" -f $f.FullName) }
+            $fails++
+        } elseif (@($cev | Where-Object { -not ($_.Exception -is [System.Management.Automation.ItemNotFoundException]) }).Count -gt 0) {
+            Write-Log '   [!] кэш платформы подключённых устройств не удалось проверить (нет доступа) -- очищен ли он, неизвестно'
+            $fails++
+        }
     }
-    foreach ($n in $wasRunning) { try { Start-Service -Name $n -ErrorAction Stop } catch { } }
+
+    # 4. службы — как были, и это проверяется
+    $notBack = @(Restore-GdidServices $wasRunning $wlidType)
+    if ($notBack.Count -gt 0) { Write-Log ($notBackMsg -f ($notBack -join ', ')); $fails++ }
 
     $after = @(Get-GdidCopies)
     $unread = @($script:GdidUnreadable | Select-Object -Unique)
     $unchecked = Get-UncheckedProfiles
-    if ($after.Count -eq 0 -and $unread.Count -eq 0) { Write-Log '   [+] номер устройства стёрт отовсюду, где программа его ищет'; $script:Changes++ }
-    elseif ($after.Count -gt 0) { Write-Log ("   [!] осталось копий номера: {0} -- Windows их не отдала" -f $after.Count); $script:Failures++ }
+    if ($after.Count -gt 0) { Write-Log ("   [!] осталось копий номера: {0} -- Windows их не отдала" -f $after.Count) }
     if ($unread.Count -gt 0) {
         # «не нашли» там, куда не пустили, — не то же самое, что «стёрто»
         Write-Log ("   [!] не удалось проверить мест: {0} (нет доступа) -- стёрто ли там, неизвестно" -f $unread.Count)
         $fails++
     }
+    # Успех — только когда прошло всё: копий нет, учётные данные убраны, кэш
+    # пуст, службы вернулись. Раньше «стёрт отовсюду» писалось и тогда, когда
+    # что-то из этого не вышло, а в итог работы сбой не попадал.
+    $ok = ($after.Count -eq 0 -and $fails -eq 0)
+    if ($ok) { Write-Log '   [+] номер устройства стёрт отовсюду, где программа его ищет'; $script:Changes++ }
+    else {
+        if ($after.Count -eq 0 -and $unread.Count -eq 0) { Write-Log '   [!] копий номера в реестре не осталось, но стирание прошло не полностью -- см. выше' }
+        $script:Failures++
+    }
     if ($unchecked -gt 0) {
         Write-Log ("   [i] профили пользователей, которые сейчас не вошли в Windows, не проверялись: {0}. У тех из них, кто входит через учётную запись Microsoft, может остаться прежний номер." -f $unchecked)
     }
-    return ($after.Count -eq 0 -and $fails -eq 0)
+    return $ok
 }
 
 # Состояние для вкладки «Номер устройства». Только чтение.
@@ -2788,11 +3123,57 @@ function Invoke-NetGuard {
     return $fresh
 }
 
+# Публичный ли адрес — по диапазонам, а не по началу строки. Прежние шаблоны
+# считали публичными общие адреса провайдеров (100.64.0.0/10, за ними сидят
+# целые районы), тестовые и зарезервированные сети (198.18.0.0/15,
+# 240.0.0.0/4), многоадресные IPv6 вне ff0x, адрес IPv4 внутри IPv6
+# (::ffff:10.0.0.1) — и вообще любую строку, даже не адрес. От этого зависят
+# наблюдение за сетью и проверка утечек: частный адрес в отчёте — ложная тревога.
 function Test-PublicIp {
     param([string]$Ip)
     if (-not $Ip) { return $false }
-    if ($Ip -match '^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|22[4-9]\.|23\d\.|255\.|0\.)') { return $false }
-    if ($Ip -match '^(fe80|ff0|::1|fc|fd)') { return $false }
+    $s = $Ip.Trim()
+    # события журнала повторяют одни и те же адреса тысячами
+    if ($null -eq $script:PublicIpSeen) { $script:PublicIpSeen = @{} }
+    if ($script:PublicIpSeen.ContainsKey($s)) { return $script:PublicIpSeen[$s] }
+    $res = $false
+    $parsed = $null
+    # TryParse принимает и «1.2.3», и «0x7f.1» — адрес IPv4 только из четырёх чисел
+    if ([System.Net.IPAddress]::TryParse($s, [ref]$parsed) -and
+        ($parsed.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork -or $s -match '^\d{1,3}(\.\d{1,3}){3}$')) {
+        $res = Test-PublicIpAddress $parsed
+    }
+    if ($script:PublicIpSeen.Count -lt 50000) { $script:PublicIpSeen[$s] = $res }
+    return $res
+}
+
+function Test-PublicIpAddress {
+    param([System.Net.IPAddress]$A)
+    $addr = $A
+    if ($addr.IsIPv4MappedToIPv6) { $addr = $addr.MapToIPv4() }
+    if ($null -eq $script:NonPublicNets) {
+        # особые сети из реестров IANA, которые в интернет не выходят
+        $script:NonPublicNets = @(foreach ($n in @(
+                '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12',
+                '192.0.0.0/24', '192.0.2.0/24', '192.88.99.0/24', '192.168.0.0/16', '198.18.0.0/15',
+                '198.51.100.0/24', '203.0.113.0/24', '224.0.0.0/4', '240.0.0.0/4',
+                '::/128', '::1/128', '64:ff9b:1::/48', '100::/64', '2001:db8::/32',
+                'fc00::/7', 'fe80::/10', 'fec0::/10', 'ff00::/8')) {
+            $p = $n.Split('/')
+            @{ b = [System.Net.IPAddress]::Parse($p[0]).GetAddressBytes(); len = [int]$p[1] }
+        })
+    }
+    $b = $addr.GetAddressBytes()
+    foreach ($net in $script:NonPublicNets) {
+        if ($net.b.Length -ne $b.Length) { continue }
+        $full = [int][math]::Floor($net.len / 8); $rest = $net.len % 8; $in = $true
+        for ($i = 0; $i -lt $full; $i++) { if ($b[$i] -ne $net.b[$i]) { $in = $false; break } }
+        if ($in -and $rest -gt 0) {
+            $mask = (0xFF -shl (8 - $rest)) -band 0xFF
+            if (($b[$full] -band $mask) -ne ($net.b[$full] -band $mask)) { $in = $false }
+        }
+        if ($in) { return $false }
+    }
     return $true
 }
 
@@ -3843,8 +4224,8 @@ function Get-Timeline {
 
     # что меняла сама программа
     $changes = @{}
-    $j = Load-Json 'changes.json'
-    if ($j -and $j.items) {
+    $j = Read-JournalFile -ReadOnly
+    if ($j.items.Count -gt 0) {
         foreach ($e in @($j.items)) {
             $ds = "$($e.time)"
             if ($ds.Length -lt 10) { continue }
@@ -5264,6 +5645,8 @@ function Restore-Journal {
         return @{ restored = 0; failed = 0 }
     }
     $jf = Read-JournalFile
+    # подпись не сошлась или её нечем проверить — почему, уже сказано выше
+    if (-not $jf.trusted) { $script:Failures++; return @{ restored = 0; failed = 0; untrusted = $true } }
     if ($jf.items.Count -eq 0) { Write-Log '   [-] журнал пуст — возвращать нечего'; return @{ restored = 0; failed = 0; legacy = $jf.legacy } }
     # Журнал идёт от старых записей к новым, и про каждый параметр нужна
     # первая: она помнит состояние до нас. Раньше список переворачивался, и у
@@ -5317,8 +5700,9 @@ function Restore-Journal {
 #  описания настройки, чтобы в списке было «уровень телеметрии», а не путь.
 # --------------------------------------------------------------------------- #
 function Get-ChangeGroups {
-    $j = Load-Json 'changes.json'
-    if (-not $j -or -not $j.items) { return @() }
+    # только то, чему можно верить: подписанное или из защищённой папки
+    $j = Read-JournalFile -ReadOnly
+    if ($j.items.Count -eq 0) { return @() }
     $byPath = @{}
     foreach ($d in $script:Defs) {
         if ($script:RegTypes -notcontains $d.T) { continue }
@@ -5401,6 +5785,7 @@ function Restore-ChangeKey {
     param([string]$Key)
     if (-not (Test-DataTrusted)) { return @{ ok = $false; error = 'папка данных программы не защищена от подмены' } }
     $jf = Read-JournalFile
+    if (-not $jf.trusted) { return @{ ok = $false; error = 'журналу отката нельзя верить: подпись не сошлась или её нечем проверить' } }
     if ($jf.items.Count -eq 0) { return @{ ok = $false; error = 'журнал пуст' } }
     $mine = @(); $rest = @()
     foreach ($e in $jf.items) {
@@ -5424,10 +5809,11 @@ function Restore-ChangeKey {
 
 if ($ChangeLog) {
     $chg = @(Get-ChangeGroups)
-    $j = Load-Json 'changes.json'
+    $j = Read-JournalFile -ReadOnly
     Emit-Json @{ items = $chg; count = $chg.Count
-                 raw = $(if ($j -and $j.items) { @($j.items).Count } else { 0 })
-                 updated = $(if ($j) { "$($j.updated)" } else { '' }) }
+                 raw = @($j.items).Count
+                 updated = "$($j.updated)"
+                 trusted = [bool]$j.trusted }
     exit 0
 }
 
@@ -5532,6 +5918,7 @@ function Get-DataFiles {
         foreach ($fi in @(Get-ChildItem -LiteralPath $script:DataDir -File -ErrorAction SilentlyContinue)) {
             if ($seen.ContainsKey($fi.Name)) { continue }
             if ($fi.Name -like 'engine*.ps1') { continue }   # это сам движок для стража, не данные
+            if ($fi.Name -like 'journal.key*') { continue }  # ключ подписи журнала — не данные о человеке
             $out += @{ file = $fi.Name; title = 'Снимок состояния или служебный файл'
                        kb = [math]::Round($fi.Length / 1KB, 1)
                        changed = $fi.LastWriteTime.ToString('yyyy-MM-dd HH:mm') }
