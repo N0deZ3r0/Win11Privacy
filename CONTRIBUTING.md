@@ -23,9 +23,14 @@ Found a **security** problem? Do not open a public issue —
 ## Checks before you push
 
 ```cmd
-check-engine.cmd    :: validate the PowerShell engine
-build.cmd           :: build Win11Privacy.exe
+python tools\build_engine.py   :: after editing engine\ — rebuild Win11-Privacy-Engine.ps1
+check-engine.cmd               :: validate the PowerShell engine
+build.cmd                      :: build Win11Privacy.exe
 ```
+
+The engine sources are the parts in `engine\`; `Win11-Privacy-Engine.ps1` is
+built from them and CI rejects a commit where the two differ. Edit the parts,
+not the built file.
 
 CI builds on `windows-latest` for every push and pull request.
 
@@ -73,9 +78,14 @@ Issues and pull requests in **English or Russian** are equally welcome.
 ## Проверки перед отправкой
 
 ```cmd
-check-engine.cmd    :: проверить движок PowerShell
-build.cmd           :: собрать Win11Privacy.exe
+python tools\build_engine.py   :: после правок в engine\ — пересобрать Win11-Privacy-Engine.ps1
+check-engine.cmd               :: проверить движок PowerShell
+build.cmd                      :: собрать Win11Privacy.exe
 ```
+
+Исходники движка — части в `engine\`; `Win11-Privacy-Engine.ps1` собирается из
+них, и CI не пропустит коммит, где они расходятся. Правьте части, а не
+собранный файл.
 
 CI собирает проект на `windows-latest` при каждом push и pull request.
 

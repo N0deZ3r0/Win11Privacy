@@ -1,4 +1,6 @@
 ﻿#Requires -Version 5.1
+# Файл собран из частей в папке engine/ (python tools/build_engine.py).
+# Правьте части, а не этот файл: CI сверяет его со сборкой.
 <#
     Win11-Privacy-Engine.ps1  (v3)
     Исполнительный модуль для Win11Privacy.exe. Может работать и сам по себе:

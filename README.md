@@ -170,9 +170,11 @@ into Windows, and the engine is embedded inside the exe.
 ## How to build
 
 Double-click **`build.cmd`**. A couple of seconds later `Win11Privacy.exe` appears
-next to it.
+next to it. With Python 3 installed, `build.cmd` first builds the engine from
+the parts in `engine/`; without Python it takes the ready
+`Win11-Privacy-Engine.ps1`, which is always built in the repository.
 
-By hand, if you prefer:
+By hand, if you prefer (after editing `engine/`, run `python tools/build_engine.py` first):
 
 ```
 %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:Win11Privacy.exe ^
@@ -188,7 +190,8 @@ By hand, if you prefer:
 
 | File | What is inside |
 |---|---|
-| **Win11-Privacy-Engine.ps1** | The engine. All the work with the system: registry, services, scheduled tasks, hosts, firewall, telemetry X-ray, dossier (sensors and digital trace), the guard, state snapshots, cleanup. Embedded in the exe as the `engine.ps1` resource; before a launch it is placed in `C:\ProgramData\Win11Privacy\bin` — a folder nothing writes to without administrator rights. Can also run on its own. |
+| **Win11-Privacy-Engine.ps1** | The engine. All the work with the system: registry, services, scheduled tasks, hosts, firewall, telemetry X-ray, dossier (sensors and digital trace), the guard, state snapshots, cleanup. Embedded in the exe as the `engine.ps1` resource; before a launch it is placed in `C:\ProgramData\Win11Privacy\bin` — a folder nothing writes to without administrator rights. Can also run on its own. Built from the parts in `engine/` — edit those, not this file. |
+| **engine/NN-section.ps1** | The engine sources by section: parameters, shared functions, the data folder, the undo journal, setting definitions, applying and verifying, the device ID, X-ray, dossier, the guard, revert and so on. `python tools/build_engine.py` joins them in number order into one `Win11-Privacy-Engine.ps1`; `--check` compares the built file with the parts (the GitHub build does this); `--where N` tells which part holds line N from a PowerShell error message. A function must be defined in a part with a lower number than the place that calls it at start-up: the engine runs top to bottom. Each part is complete on its own: a function cannot start in one part and end in another (the GitHub build parses every part separately). |
 | **MainForm.cs** | The window: building the frame and pages, system detection at start, window state between launches, icon and title bar. |
 | **Navigation.cs** | Sections and tabs, the sidebar (collapse, its animation), moving between pages. |
 | **Page*.cs** | One file per page: Overview, Settings, Apps and Startup, Data collection, Traces on this PC, Network, Timeline, Device ID, Verify, Changes, Auto-protection, About, Log. |
@@ -218,6 +221,7 @@ By hand, if you prefer:
 | **tests/engine-tests.ps1** | Behaviour checks for the engine; the GitHub build runs the same ones. Read-only. |
 | **tests/roundtrip.ps1** | Apply, verify and revert for real, then compare every value with the original one. It changes the system, so it needs the `-Confirmed` switch; the build runs it on a disposable machine. |
 | **CHANGELOG.md** | What changed in every version. The release text on GitHub is taken from here. |
+| **tools/build_engine.py** | Builds `Win11-Privacy-Engine.ps1` from the parts in `engine/`. `--check` compares them, and the build insists on it; `--where N` finds a line of the built file in its part. It stops instead of overwriting the built file if that file was edited by hand (`--force` overwrites anyway). |
 | **tools/release_notes.py** | Builds the release text: the version's section from `CHANGELOG.md`, how to run, and the attached files. |
 | **tools/make_winget.py** | Builds the winget catalogue manifest from the version and the release checksum. |
 | **tools/set_version.py** | Writes the program version into `app.res` — the one Windows shows in the file properties. `--check` compares them, and the build insists on it. |
@@ -288,7 +292,8 @@ to look and how much to take).
 
 ### How to add a new setting
 
-One line in the engine, next to the others:
+One line in the engine — in `engine/08-definitions.ps1`, next to the others —
+then `python tools/build_engine.py`:
 
 ```powershell
 Def 'telemetry' 'reg' 'HKLM:\SOFTWARE\Policies\...' 'ParameterName' 0 'DWord' 'human-readable description'
@@ -389,8 +394,8 @@ Locally: double-click **build.cmd** — `Win11Privacy.exe` appears next to it.
 
 The repository has automated builds (GitHub Actions):
 
-- on every commit to `main` and every pull request — the engine's syntax is
-  checked, the engine, interface and resource versions are compared, its behaviour
+- on every commit to `main` and every pull request — the engine is compared with
+  the build from its parts in `engine/`, its syntax is checked, the engine, interface and resource versions are compared, its behaviour
   tests and the interface's own checks are run, the translation is verified, **the settings are applied and reverted on a
   live disposable machine and every value is compared with what it was before**,
   every page of the interface and the first-run window are opened with test data in
@@ -427,8 +432,13 @@ created automatically.
 To cut a new version:
 
 1. Raise the number in two places — `AppInfo.cs` (`Version`) and the engine
-   (`$script:EngineVersion`) — then write it into the version resource, the one
-   Windows shows in the file properties:
+   (`$script:EngineVersion` in `engine/01-constants.ps1`) — then rebuild the
+   engine and write the version into the version resource, the one Windows
+   shows in the file properties:
+
+   ```bash
+   python tools/build_engine.py
+   ```
 
    ```bash
    python tools/set_version.py

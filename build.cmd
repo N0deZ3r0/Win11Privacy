@@ -12,6 +12,21 @@ if not exist "%CSC%" (
   exit /b 1
 )
 
+rem Dvizhok sobiraetsya iz chastey v papke engine\ (tools\build_engine.py, nuzhen Python 3).
+rem Net Python - beryom gotovyy Win11-Privacy-Engine.ps1: v repozitorii on vsegda sobran.
+python --version >nul 2>nul
+if errorlevel 1 (
+  echo Python ne nayden - dvizhok ne peresobiraetsya, beryotsya gotovyy Win11-Privacy-Engine.ps1.
+) else (
+  python tools\build_engine.py
+  if errorlevel 1 (
+    echo.
+    echo SBORKA DVIZHKA NE UDALAS - smotrite oshibki vyshe.
+    pause
+    exit /b 1
+  )
+)
+
 echo Sborka Win11Privacy.exe ...
 "%CSC%" /nologo /target:winexe /optimize+ /out:Win11Privacy.exe ^
   /reference:System.dll ^

@@ -21,6 +21,15 @@ jobs:
       - name: Получить исходники
         uses: actions/checkout@v7
 
+      - name: Сверить движок со сборкой из частей
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          # исходники движка — части в engine/, а в exe и в релиз идёт собранный файл
+          python tools/build_engine.py --check
+          if ($LASTEXITCODE -ne 0) { throw "Win11-Privacy-Engine.ps1 разошёлся с engine/ — соберите: python tools/build_engine.py" }
+
       - name: Проверить синтаксис движка
         shell: pwsh
         run: |
@@ -31,7 +40,19 @@ jobs:
               $errors | ForEach-Object { Write-Host "::error file=Win11-Privacy-Engine.ps1,line=$($_.Extent.StartLineNumber)::$($_.Message)" }
               exit 1
           }
-          Write-Host "Движок: синтаксис в порядке"
+          # каждая часть — законченный кусок: функция или блок не начинаются
+          # в одной части, чтобы закончиться в другой
+          $bad = 0
+          foreach ($part in Get-ChildItem .\engine\*.ps1) {
+              $errors = $null
+              $null = [System.Management.Automation.Language.Parser]::ParseFile($part.FullName, [ref]$null, [ref]$errors)
+              foreach ($e in $errors) {
+                  Write-Host "::error file=engine/$($part.Name),line=$($e.Extent.StartLineNumber)::$($e.Message)"
+                  $bad++
+              }
+          }
+          if ($bad -gt 0) { exit 1 }
+          Write-Host "Движок: синтаксис в порядке, каждая часть в engine/ разбирается сама по себе"
 
       - name: Проверить перевод
         shell: pwsh
