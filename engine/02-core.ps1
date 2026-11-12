@@ -18,6 +18,55 @@ function Get-RegValue {
     try { $p = Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop; return $p.$Name } catch { return $null }
 }
 
+# Удаляет свою задачу планировщика (страж, слежение, уведомления). «Задачи
+# нет» и «задача не удалилась» — разное: раньше любая ошибка удаления
+# называлась «задачи нет», и оставшийся страж потом снова выключал то, что
+# человек только что вернул. Ответ: removed, absent или failed (посчитано).
+function Remove-OwnTask {
+    param([string]$Name, [string]$What)
+    $t = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+    if (-not $t) { Write-Log ("   [-] {0}: нет" -f $What); return 'absent' }
+    # работающую сейчас — сначала остановить, чтобы она не доделала своё
+    if ("$($t.State)" -eq 'Running') { Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue }
+    try { Unregister-ScheduledTask -TaskName $Name -Confirm:$false -ErrorAction Stop }
+    catch { Write-Log ("   [!] {0}: не удалилось -- {1}" -f $What, $_.Exception.Message); $script:Failures++; return 'failed' }
+    Write-Log ("   [+] {0}: удалено" -f $What)
+    return 'removed'
+}
+
+# Виды значений реестра, которые программа умеет записать и вернуть.
+function Test-RegKind {
+    param([string]$Kind)
+    return ($Kind -in @('String', 'ExpandString', 'DWord', 'QWord', 'Binary', 'MultiString'))
+}
+
+# Значение реестра как оно лежит: вид (String, DWord, ...) и данные без
+# раскрытия %переменных%. Get-ItemProperty раскрывает REG_EXPAND_SZ и вида не
+# называет, а откату нужно и то и другое: «%SystemRoot%\x», возвращённое
+# раскрытым, или строка, возвращённая числом, — уже не то, что было.
+# ok = $false — прочитать не удалось (это не «параметра нет»).
+function Get-RegRaw {
+    param([string]$Path, [string]$Name)
+    if (-not (Test-Path -LiteralPath $Path)) { return @{ ok = $true; exists = $false; kind = ''; value = $null } }
+    $key = $null
+    try {
+        $key = Get-Item -LiteralPath $Path -ErrorAction Stop
+        if (@($key.GetValueNames()) -notcontains $Name) { return @{ ok = $true; exists = $false; kind = ''; value = $null } }
+        return @{ ok = $true; exists = $true; kind = "$($key.GetValueKind($Name))"
+                  value = $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
+    } catch {
+        # denied — Windows не даёт даже прочитать (это её решение, а не сбой)
+        $ex = $_.Exception
+        $denied = ($ex -is [System.UnauthorizedAccessException] -or $ex -is [System.Security.SecurityException] -or
+                   $ex.InnerException -is [System.UnauthorizedAccessException] -or $ex.InnerException -is [System.Security.SecurityException])
+        return @{ ok = $false; exists = $false; kind = ''; value = $null; denied = $denied
+                  error = ("{0}: {1}" -f $ex.GetType().Name, $ex.Message) }
+    } finally {
+        # открытый ключ держит куст чужого профиля: его потом не отключить
+        if ($null -ne $key) { try { $key.Close() } catch { } }
+    }
+}
+
 # Запасная запись мимо провайдера PowerShell: обычный API реестра просит
 # ровно те права, которые нужны, и иногда справляется там, где New-ItemProperty
 # уже получил отказ. Заодно рассказывает, чем именно кончилась попытка.
@@ -88,11 +137,38 @@ function Set-Reg {
     # прямых вызовах (монитор, чистка), а не только из применения модулей.
     if (-not (Test-CanModify $label)) { return }
     Ensure-Backup          # копию делаем перед первым изменением, а не «всегда»
-    $existed = [bool]($null -ne $cur)
-    $oldValue = $(if ($existed) { $cur } else { '' })
+    # Откату нужен прежний вид значения и данные как есть: раньше в журнал шёл
+    # вид нового значения, и строка «1» возвращалась числом. Есть ли значение
+    # вообще — тоже отсюда: пустое двоичное или многострочное Get-RegValue
+    # отдаёт как «нет», и откат удалил бы его вместо возврата.
+    $raw = Get-RegRaw $Path $Name
+    if (-not $raw.ok -and $raw.denied -and $Policy) {
+        # как и отказ в записи ниже: политику держит сама Windows
+        Write-Log "   [-] $label -- Windows этой редакции не разрешает менять этот параметр"
+        $script:Blocked++
+        if ($DefId) { $script:BlockedIds[$DefId] = $true }
+        return
+    }
+    if (-not $raw.ok -or ($null -ne $cur -and -not $raw.exists)) {
+        # не прочиталось — «как было» записать нечем, а без него менять нельзя
+        Write-Log ("   [!] {0} -- не меняется: прежнее значение не прочиталось ({1}), вернуть его было бы нечем" -f $label, $(if ($raw.error) { $raw.error } else { 'значение есть, но не читается' }))
+        $script:Failures++; return
+    }
+    $existed = [bool]$raw.exists
+    $oldValue = ''
+    $oldType = $Type
+    if ($existed) {
+        if (-not (Test-RegKind $raw.kind)) {
+            Write-Log ("   [!] {0} -- не меняется: прежнее значение вида {1}, такое откат вернуть не сумеет" -f $label, $raw.kind)
+            $script:Failures++; return
+        }
+        $oldType = $raw.kind
+        $oldValue = $raw.value
+    }
     # «Как было» — на диск раньше изменения (см. Write-AheadEntry). Если
     # изменение не пройдёт, запись отзывается: изменения ведь не было.
-    $entry = @{ kind = 'reg'; path = $Path; name = $Name; type = $Type; existed = $existed; old = $oldValue; newValue = "$Value" }
+    # type — вид прежнего значения (им его и вернёт откат).
+    $entry = @{ kind = 'reg'; path = $Path; name = $Name; type = $oldType; existed = $existed; old = $oldValue; newValue = "$Value" }
     if (-not (Write-AheadEntry $entry)) {
         Write-Log "   [!] $label -- не меняется: «как было» не легло в журнал отката"
         $script:Failures++; return

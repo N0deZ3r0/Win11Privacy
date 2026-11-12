@@ -246,14 +246,14 @@ function Set-StartupState {
 }
 
 function Run-Guard {
-    param([bool]$Verbose)
-    $profile = Load-Json 'profile.json'
-    if (-not $profile -or -not $profile.modules) { Write-Log 'Профиль стража не найден.'; return @{ error='нет профиля' } }
-    $mods = @($profile.modules)
+    # ($profile — встроенная переменная PowerShell, поэтому имя другое)
+    $gp = Load-Json 'profile.json'
+    if (-not $gp -or -not $gp.modules) { Write-Log 'Профиль стража не найден.'; return @{ error='нет профиля' } }
+    $mods = @($gp.modules)
     # Запрет выдачи номера ставится со своей вкладки, а не со страницы
     # настроек: пока он стоит, страж следит и за ним.
     if ($mods -notcontains 'gdidlock' -and (Test-HostsBlock -Kind 'lock')) { $mods += 'gdidlock' }
-    $skipped = @($(if ($profile.PSObject.Properties['skip']) { @($profile.skip) } else { @() }) | ForEach-Object { "$_" })
+    $skipped = @($(if ($gp.PSObject.Properties['skip']) { @($gp.skip) } else { @() }) | ForEach-Object { "$_" })
     $last = Load-Json 'guard-last.json'
     $lastTime = if ($last -and $last.time) { [datetime]$last.time } else { (Get-Date).AddDays(-30) }
 
@@ -267,7 +267,9 @@ function Run-Guard {
         if (-not $r.ok) { $drifted += $r }
     }
     $driftModules = @($drifted | ForEach-Object { $_.module } | Select-Object -Unique)
-    $fixed = 0
+    # «исправлено» — сколько изменений действительно прошло, а не сколько
+    # настроек перебрано: раньше считалась каждая попытка
+    $changesBefore = [int]$script:Changes
     # чинить, не имея куда записать «как было», страж не берётся
     if ($driftModules.Count -gt 0 -and -not (Test-JournalWritable)) {
         Write-Log '   [!] страж ничего не чинит: журнал отката не записывается'
@@ -279,9 +281,10 @@ function Run-Guard {
             if ($m -in @('cleanup','startup','buffer','oem')) { continue }
             if ($m -eq 'gdidlock' -and (Get-GdidLockRefusal)) { continue }
             Write-Section ($script:ModuleTitles[$m])
-            foreach ($d in $script:Defs) { if ($d.M -eq $m -and $skipped -notcontains $d.Id) { Apply-Def $d; $fixed++ } }
+            foreach ($d in $script:Defs) { if ($d.M -eq $m -and $skipped -notcontains $d.Id) { Apply-Def $d } }
         }
     }
+    $fixed = [int]$script:Changes - $changesBefore
     $kbs = Get-RecentHotfixes -Since $lastTime
     $newStartup = @(Find-NewStartup)
     # Номер устройства: страж замечает, что Windows его сменила, и что номер
@@ -398,8 +401,9 @@ if ($InstallGuard) {
 if ($RemoveGuard) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Страж приватности'
-    try { Unregister-ScheduledTask -TaskName $script:GuardTask -Confirm:$false -ErrorAction Stop; Write-Log '   [+] задача стража удалена' } catch { Write-Log '   [-] задача стража не найдена' }
+    $rt = Remove-OwnTask $script:GuardTask 'задача стража'
     Write-Log '###DONE###'
+    if ($rt -eq 'failed') { exit 1 }
     exit 0
 }
 

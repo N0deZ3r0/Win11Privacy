@@ -448,8 +448,9 @@ function Apply-Hosts {
             # копия нужна та, что была до программы, а не после первого блока
             if (-not (Test-Path -LiteralPath $copy)) { Copy-Item -LiteralPath $script:HostsPath -Destination $copy -Force -ErrorAction SilentlyContinue }
         }
-        # устаревший блок переписывается целиком: так он не обрастает повторами
-        if ($present) { Remove-HostsBlock -Kind $Kind -Quiet }
+        # устаревший блок переписывается целиком: так он не обрастает повторами.
+        # Не убрался — новый не дописывается: иначе в hosts стало бы два блока.
+        if ($present -and -not (Remove-HostsBlock -Kind $Kind -Quiet)) { return }
         $block = @('') + $(switch ($Kind) { 'gdid' { $script:HostsMarkGdidStart } 'lock' { $script:HostsMarkLockStart } default { $script:HostsMarkStart } })
         $block += $wanted
         $block += $(switch ($Kind) { 'gdid' { $script:HostsMarkGdidEnd } 'lock' { $script:HostsMarkLockEnd } default { $script:HostsMarkEnd } })
@@ -468,8 +469,13 @@ function Apply-Hosts {
 
 # Kind = all убирает все блоки программы (общий откат); telemetry, gdid и
 # lock — только блок своего вида, остальные остаются на месте.
+# $true — блока больше нет (убран или не было), $false — hosts не переписался
+# (посчитано ошибкой). Файл пишется рядом и подменяет прежний одним действием
+# системы: раньше hosts переписывался на месте, и обрыв посередине оставлял
+# его недописанным — вместе со строками, которые человек вписал сам.
 function Remove-HostsBlock {
     param([string]$Kind = 'all', [switch]$Quiet)
+    $tmp = $script:HostsPath + '.w11p-new'
     try {
         $lines = @(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop)
         $keep = New-Object System.Collections.Generic.List[string]
@@ -490,13 +496,25 @@ function Remove-HostsBlock {
             if ($inside -and $l -notmatch '^\s*((0\.0\.0\.0|::)\s+\S+)?\s*$') { $inside = $false }
             if (-not $inside) { $keep.Add($l) }
         }
-        if ($found -gt 0) {
-            # Default, а не ASCII: чужие строки с нелатинскими буквами остаются как были
-            Set-Content -LiteralPath $script:HostsPath -Value $keep.ToArray() -Encoding Default -Force -ErrorAction Stop
-            ipconfig /flushdns | Out-Null
-            if (-not $Quiet) { Write-Log '   [+] блок блокировки доменов удалён' }
-        } elseif (-not $Quiet) { Write-Log '   [-] блока в hosts нет' }
-    } catch { Write-Log "   [!] hosts: $($_.Exception.Message)" }
+        if ($found -eq 0) { if (-not $Quiet) { Write-Log '   [-] блока в hosts нет' }; return $true }
+        # Default, а не ASCII: чужие строки с нелатинскими буквами остаются как были
+        [IO.File]::WriteAllLines($tmp, [string[]]$keep.ToArray(), [Text.Encoding]::Default)
+        # ReplaceFile сохраняет права и атрибуты прежнего файла. Сразу после
+        # записи антивирус ненадолго держит hosts открытым — пробуем ещё раз.
+        for ($try = 1; ; $try++) {
+            try { [IO.File]::Replace($tmp, $script:HostsPath, [NullString]::Value); break }
+            catch [System.IO.IOException] { if ($try -ge 5) { throw }; Start-Sleep -Milliseconds (400 * $try) }
+        }
+        ipconfig /flushdns | Out-Null
+        if (-not $Quiet) { Write-Log '   [+] блок блокировки доменов удалён' }
+        return $true
+    } catch {
+        # недописанная копия рядом с hosts не остаётся; сам hosts — прежний
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+        Write-Log ("   [!] hosts не переписался ({0}) -- блок остался на месте" -f $_.Exception.Message)
+        $script:Failures++
+        return $false
+    }
 }
 
 # --- брандмауэр ------------------------------------------------------------- #
@@ -602,9 +620,30 @@ function Apply-FwIpBlock {
         $ips = @($found.ips)
         Write-Log ("   ответили DNS имён: {0} из {1}" -f $found.answered, $found.asked)
         if ($ips.Count -eq 0) { Write-Log '   [-] адреса не определились'; return }
-        Get-NetFirewallRule -DisplayName $script:FwIpRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
-        New-NetFirewallRule -DisplayName $script:FwIpRuleName -Group $script:FwGroup -Direction Outbound -Action Block `
+        # Новое правило ставится рядом со старым, проверяется, и только потом
+        # старое убирается. Раньше старое удалялось первым: не создалось
+        # новое — не оставалось никакого, и адреса сбора открывались.
+        $old = @(Get-NetFirewallRule -DisplayName $script:FwIpRuleName -ErrorAction SilentlyContinue)
+        $id = 'Win11Privacy-TelemetryIp-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+        New-NetFirewallRule -Name $id -DisplayName $script:FwIpRuleName -Group $script:FwGroup -Direction Outbound -Action Block `
             -RemoteAddress $ips -Profile Any -Enabled True -Description ('Win11Privacy: updated ' + (Get-Date).ToString('yyyy-MM-dd')) -ErrorAction Stop | Out-Null
+        $why = ''
+        $new = Get-NetFirewallRule -Name $id -ErrorAction SilentlyContinue
+        if (-not $new) { $why = 'правило не появилось' }
+        elseif ("$($new.Enabled)" -ne 'True' -or "$($new.Action)" -ne 'Block' -or "$($new.Direction)" -ne 'Outbound') { $why = 'правило создалось не таким, как задумано' }
+        else {
+            $got = @((Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $new -ErrorAction Stop).RemoteAddress)
+            if ($got.Count -ne $ips.Count) { $why = ("в правиле адресов {0} вместо {1}" -f $got.Count, $ips.Count) }
+        }
+        if ($why) {
+            Remove-NetFirewallRule -Name $id -ErrorAction SilentlyContinue
+            Write-Log ("   [!] новое правило не прошло проверку ({0}) -- {1}" -f $why, $(if ($old.Count) { 'оставлено прежнее' } else { 'адреса не заблокированы' }))
+            $script:Failures++; return
+        }
+        foreach ($o in $old) {
+            try { Remove-NetFirewallRule -Name $o.Name -ErrorAction Stop }
+            catch { Write-Log ("   [!] прежнее правило адресов не убралось: {0}" -f $_.Exception.Message); $script:Failures++ }
+        }
         Write-Log ("   [+] заблокировано адресов: {0}" -f $ips.Count)
         Write-Log '   [-] если что-то перестанет работать — снимите этот пункт и нажмите «Откат»'
         $script:Changes++

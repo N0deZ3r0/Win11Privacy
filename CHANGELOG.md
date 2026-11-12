@@ -39,6 +39,13 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - Если защищённую папку для движка подготовить не удалось, движок больше не запускается из временной папки пользователя: там его могла бы подменить любая программа.
 - Папка данных прежних версий проверяется на любой глубине, а не только в корне: чужие файлы, ссылки и то, что открыто на запись чужим явным правом, уходят в карантин.
 - Короткие задачи планировщика (номер устройства, закрытые задачи) получают случайное имя и перед запуском сверяются: та ли команда и от чьего имени.
+- Откат возвращает значения реестра того же вида и с теми же данными. В журнал теперь пишется вид прежнего значения (раньше — нового, и строка «1» возвращалась числом), а раскрываемые строки — с нераскрытыми %переменными%. Значение вида, который откат не вернул бы, не меняется вовсе.
+- Каждый возврат сверяется: параметр реестра читается обратно (вид и данные), переменная среды — тоже. Запись считается вернувшейся только после сверки; раньше успехом считался сам вызов команды.
+- Откат убирает из журнала только то, с чем закончил: записи, которые за это время дописал страж или второе окно, остаются. Задачи стража и слежения удаляются до возврата настроек, а работающая — сначала останавливается: страж, сработавший посреди отката, раньше ставил настройки обратно.
+- Журнал раньше изменения — теперь у всех изменений, в том числе у политики аудита для монитора (раньше она записывалась после auditpol).
+- Профили других пользователей: в журнал идёт вид прежнего значения, записанное сверяется, куст подключается один раз на профиль, а куст, оставшийся подключённым после оборванного запуска, отключается при следующем — иначе Windows выдала бы этому человеку временный профиль.
+- Файлы данных (profile.json и другие) читаются только из папки, которой можно верить, — так же, как пишутся.
+- Описание модели безопасности и гарантий отката — docs/security-model.md.
 
 **Исправления**
 - Номер устройства: стирание честнее говорит о результате. Учётные данные «личности» устройства считаются убранными, только если после `cmdkey` их действительно нет в хранилище (раньше успехом считался сам запуск задачи). У каждой записи в реестре свой итог — убрана, не было или Windows не дала; запись, закрытая от чтения, больше не засчитывается как «не было». Места, которые не удалось прочитать, — хранилище целиком или закрытый ключ внутри него — не выдаются за «стёрто». На время стирания останавливается и служба DoSvc; если хоть одна из служб не остановилась, стирание не начинается и службы возвращаются как были. Успехом стирание считается, только если службы, работавшие до него, снова запущены, а кэш платформы подключённых устройств действительно пуст. Копии номера ищутся и в профилях пользователей, которые сейчас вошли в Windows; про профили остальных программа прямо пишет, что их не проверяла. Плитка «Номер» берёт номер из любого найденного хранилища, а не только из профиля текущего пользователя.
@@ -63,6 +70,13 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - Очистка неотправленной телеметрии удаляет только очередь и трассировки. Раньше она цепляла и настройки диагностики, а на папке могла зависнуть.
 - «Обзор» при первом запуске показывал пустые разделы до ручной проверки.
 - После сворачивания и разворачивания боковой панели в списке настроек оставалась горизонтальная прокрутка; пункты панели дёргались во время анимации; вокруг кнопки меню оставалась рамка после щелчка.
+- Резервная копия реестра засчитывает ветку, только если reg.exe закончил без ошибки и файл начинается с заголовка выгрузки. Недописанный файл удаляется, у каждой невыгруженной ветки названа причина. Раньше хватало того, что файл появился.
+- Правило брандмауэра с адресами телеметрии заменяется по шагам: новое создаётся рядом со старым и проверяется, старое убирается только потом. Раньше старое удалялось первым, и при неудаче не оставалось никакого.
+- hosts переписывается через копию рядом и подменяется одним действием: обрыв посередине больше не оставляет его недописанным вместе со строками, вписанными вручную. Неудача — ошибка, и устаревший блок не дополняется вторым.
+- Удаление стража, слежения и уведомлений отличает «задачи нет» от «задача не удалилась». Короткая задача от имени системы, которая не удалилась, называется.
+- Включение и отключение задачи планировщика сверяется по её состоянию.
+- Страж пишет «исправлено» по числу изменений, которые действительно прошли, а не по числу перебранных настроек.
+- Откат прямо говорит, если вернулось не всё, и показывает число ошибок. Компоненты производителя, которые не вернулись по списку прежней версии, остаются в нём для второй попытки.
 
 ### What's new
 
@@ -93,6 +107,13 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - If the protected folder for the engine cannot be prepared, the engine no longer runs from the user's temp folder, where any program could swap it.
 - Data folders of older versions are checked at any depth, not only at the top: foreign files, links and anything open to writing by someone else's explicit right go to quarantine.
 - Short-lived scheduled tasks (device ID, closed tasks) get a random name and are checked before they start: the right command, under the right account.
+- The rollback restores registry values with the same kind and the same data. The journal now records the kind of the previous value (before, the kind of the new one, so the string "1" came back as a number), and expandable strings keep their unexpanded %variables%. A value of a kind the rollback could not restore is not changed at all.
+- Every restore is verified: a registry value is read back (kind and data), and so is an environment variable. An entry counts as restored only after the check; before, a successful command was taken as success.
+- The rollback removes from the journal only what it finished with: entries written meanwhile by the guard or a second window stay. The guard and watch tasks are removed before settings are restored, and a running one is stopped first: a guard run in the middle of a rollback used to put settings back.
+- Write-ahead journaling now covers every change, including the audit policy for the monitor (before, it was recorded after auditpol).
+- Other users' profiles: the journal records the kind of the previous value, writes are verified, a hive is mounted once per profile, and a hive left mounted by an interrupted run is unloaded by the next one — otherwise Windows would give that user a temporary profile.
+- Data files (profile.json and others) are read only from a folder that can be trusted, just as they are written.
+- The security model and rollback guarantees are described in docs/security-model.md.
 
 **Fixes**
 - Device ID: wiping reports its result honestly. The device identity credentials count as removed only if they are really gone from the vault after `cmdkey` (before, merely starting the task counted as success). Every registry entry gets its own outcome — removed, not there, or refused by Windows; an entry closed to reading no longer counts as "not there". Places that could not be read — a whole store or a closed key inside one — are no longer reported as wiped. The DoSvc service is stopped during the wipe too; if any of the services does not stop, nothing is wiped and the services are put back as they were. The wipe counts as a success only if the services that were running before are running again and the Connected Devices Platform cache is really empty. Copies of the ID are also searched for in the profiles of other users who are signed in right now; for everyone else the program says plainly that it did not check them. The ID tile takes the number from any store found, not only from the current user's profile.
@@ -117,6 +138,13 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - Clearing the unsent telemetry removes only the queue and the traces. Before, it also took the diagnostics settings and could hang on a folder.
 - On first start the Overview showed empty sections until a manual check.
 - After collapsing and expanding the sidebar the settings list kept a horizontal scrollbar; sidebar items jerked during the animation; a focus frame stayed around the menu button after a click.
+- The registry backup counts a branch only if reg.exe exits without an error and the file starts with the export header. A partial file is deleted, and every branch that was not exported is named with the reason. Before, it was enough for the file to appear.
+- The firewall rule with telemetry addresses is replaced in stages: the new rule is created next to the old one and checked, and only then is the old one removed. Before, the old rule went first, and a failure left none.
+- hosts is rewritten through a copy next to it and swapped in one operation: an interruption no longer leaves it half-written along with lines added by hand. A failure is an error, and a stale block is not topped up with a second one.
+- Removing the guard, watches and notifications tells "there is no task" from "the task was not removed". A short-lived SYSTEM task that could not be removed is named.
+- Enabling and disabling a scheduled task is verified by its state.
+- The guard reports "fixed" by the number of changes that really went through, not by the number of settings it went over.
+- The rollback says plainly when not everything came back and shows the number of errors. Vendor components that did not come back from an older version's list stay in it for a retry.
 
 ## 1.10.2 — 2026-10-30
 

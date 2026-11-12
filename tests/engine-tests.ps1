@@ -278,7 +278,7 @@ if ($hostsFound.Count -eq $hostsFns.Count) {
         Apply-Hosts
         $marks = @(Get-Content -LiteralPath $script:HostsPath | Where-Object { $_ -match $script:HostsMarkRegex })
         Check 'повторное применение не дописывает второй блок' ($marks.Count -eq 2) ("строк-меток: " + $marks.Count)
-        Remove-HostsBlock
+        $null = Remove-HostsBlock
         $left = @(Get-Content -LiteralPath $script:HostsPath)
         Check 'откат убирает блок целиком' (-not (Test-HostsBlock) -and -not ($left -match 'telemetry\.example'))
         Check 'чужие строки остаются как были' (($left -join '|') -eq ($own -join '|')) ("получено: " + ($left -join '|'))
@@ -288,14 +288,14 @@ if ($hostsFound.Count -eq $hostsFns.Count) {
                  '# --- Win11Privacy: ?????????? ?????????? (?????) ---')
         Set-Content -LiteralPath $script:HostsPath -Value ($own + $old + $old) -Encoding Default
         Check 'блок прежних версий узнаётся' (Test-HostsBlock)
-        Remove-HostsBlock
+        $null = Remove-HostsBlock
         $left = @(Get-Content -LiteralPath $script:HostsPath)
         Check 'блоки прежних версий убираются все' (($left -join '|') -eq ($own -join '|')) ("получено: " + ($left -join '|'))
 
         # закрывающую метку стёрли руками: чужое после блока трогать нельзя
         Set-Content -LiteralPath $script:HostsPath -Encoding Default -Value @(
             $script:HostsMarkStart, '0.0.0.0 telemetry.example', '10.0.0.5 nas.local')
-        Remove-HostsBlock
+        $null = Remove-HostsBlock
         $left = @(Get-Content -LiteralPath $script:HostsPath)
         Check 'без закрывающей метки чужие строки не теряются' (($left -join '|') -eq '10.0.0.5 nas.local') ("получено: " + ($left -join '|'))
 
@@ -313,7 +313,7 @@ if ($hostsFound.Count -eq $hostsFns.Count) {
         Apply-Hosts
         $gm = @(Get-Content -LiteralPath $script:HostsPath | Where-Object { $_ -match $script:HostsMarkRegex })
         Check 'повторное применение не дописывает ни один из блоков' ($gm.Count -eq 4) ("строк-меток: " + $gm.Count)
-        Remove-HostsBlock
+        $null = Remove-HostsBlock
         $left = @(Get-Content -LiteralPath $script:HostsPath)
         Check 'откат убирает оба блока' (($left -join '|') -eq ($own -join '|')) ("получено: " + ($left -join '|'))
 
@@ -324,11 +324,11 @@ if ($hostsFound.Count -eq $hostsFns.Count) {
         $v6 = @(Get-Content -LiteralPath $script:HostsPath | Where-Object { $_ -match '^::\s' })
         Check 'все блоки закрывают и IPv6' ($v6.Count -eq 5) ("строк «::»: " + $v6.Count)
         Check 'запрет выдачи узнаётся отдельно' ((Test-HostsBlock -Kind 'lock') -and (Test-HostsBlock -Kind 'gdid') -and (Test-HostsBlock))
-        Remove-HostsBlock -Kind 'lock'
+        $null = Remove-HostsBlock -Kind 'lock'
         Check 'снятие запрета выдачи не трогает другие блоки' ((-not (Test-HostsBlock -Kind 'lock')) -and (Test-HostsBlock -Kind 'gdid') -and (Test-HostsBlock))
-        Remove-HostsBlock -Kind 'gdid'
+        $null = Remove-HostsBlock -Kind 'gdid'
         Check 'снятие блока номера оставляет блок телеметрии' ((-not (Test-HostsBlock -Kind 'gdid')) -and (Test-HostsBlock))
-        Remove-HostsBlock
+        $null = Remove-HostsBlock
         $left = @(Get-Content -LiteralPath $script:HostsPath)
         Check 'после всех снятий файл как был' (($left -join '|') -eq ($own -join '|')) ("получено: " + ($left -join '|'))
 
@@ -341,7 +341,24 @@ if ($hostsFound.Count -eq $hostsFns.Count) {
         Check 'старый блок дополнен новыми доменами' ((Test-HostsBlockCurrent) -and ($now -contains '0.0.0.0 vortex.example') -and ($now -contains ':: telemetry.example'))
         Check 'после обновления блок один' (@($now | Where-Object { $_ -match $script:HostsMarkRegex }).Count -eq 2)
         Check 'чужие строки при обновлении на месте' (($now -contains '10.0.0.5 nas.local') -and (($now[0..($own.Count - 1)] -join '|') -eq ($own -join '|')))
+        Check 'hosts переписывается через копию рядом, и она не остаётся' (-not (Test-Path -LiteralPath ($script:HostsPath + '.w11p-new')))
+
+        # hosts не переписывается (закрыт) — блок остаётся, файл прежний, это ошибка;
+        # устаревший блок тогда не дополняется вторым
+        Set-Content -LiteralPath $script:HostsPath -Encoding Default -Value ($own + @('', $script:HostsMarkStart, '0.0.0.0 telemetry.example', $script:HostsMarkEnd))
+        $lockedBefore = [IO.File]::ReadAllBytes($script:HostsPath)
+        (Get-Item -LiteralPath $script:HostsPath).IsReadOnly = $true
+        $script:Failures = 0
+        $okRemove = Remove-HostsBlock
+        Apply-Hosts
+        (Get-Item -LiteralPath $script:HostsPath).IsReadOnly = $false
+        $lockedAfter = [IO.File]::ReadAllBytes($script:HostsPath)
+        Check 'hosts не переписался — это ошибка, а файл прежний' ((-not $okRemove) -and $script:Failures -ge 1 -and
+            ([Convert]::ToBase64String($lockedBefore) -eq [Convert]::ToBase64String($lockedAfter))) ("ошибок: $($script:Failures)")
+        Check '…и копия рядом с hosts не осталась' (-not (Test-Path -LiteralPath ($script:HostsPath + '.w11p-new')))
     } finally {
+        if (Test-Path -LiteralPath $script:HostsPath) { (Get-Item -LiteralPath $script:HostsPath).IsReadOnly = $false }
+        Remove-Item -LiteralPath ($script:HostsPath + '.w11p-new') -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $script:HostsPath -Force -ErrorAction SilentlyContinue
         Remove-Item -Path Function:\ipconfig -ErrorAction SilentlyContinue
     }
@@ -439,7 +456,7 @@ Check 'возврат без выбора ничего не делает' ($null
 Write-Host ''
 Write-Host 'Запись в реестр: журнал заранее, неудача отзывает запись'
 $regFns = @('Get-RegValue', 'Set-RegDirect', 'Set-Reg', 'Test-Admin', 'Test-RegKeyWritable', 'Get-FolderSizeMB', 'ConvertTo-RegComparable',
-            'Write-AheadEntry', 'Undo-AheadEntry', 'Test-CanModify', 'Get-JournalKey', 'ConvertTo-Fields')
+            'Write-AheadEntry', 'Undo-AheadEntry', 'Test-CanModify', 'Get-JournalKey', 'ConvertTo-Fields', 'Get-RegRaw', 'Test-RegKind')
 $regFound = @()
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($regFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $regFound += $fn.Name }
@@ -547,8 +564,7 @@ if (Get-Command Apply-Def -ErrorAction SilentlyContinue) {
     function Ensure-Backup { }
     # журнал отката проверяется своим разделом; здесь — запоминаем, что пришло
     $script:JournalSeen = New-Object System.Collections.Generic.List[object]
-    function Add-JournalEntry { param($Entry) $script:JournalSeen.Add($Entry) }
-    # журнал заранее (write-ahead): здесь тоже только запоминаем, что пришло
+    # журнал заранее (write-ahead): здесь только запоминаем, что пришло
     function Write-AheadEntry { param($Entry) $script:JournalSeen.Add($Entry); return $true }
     function Undo-AheadEntry { param($Entry) $null = $script:JournalSeen.Remove($Entry) }
     function Test-CanModify { param([string]$Label) return $true }
@@ -571,7 +587,7 @@ if (Get-Command Apply-Def -ErrorAction SilentlyContinue) {
           ("записей: " + $jn)
     [Environment]::SetEnvironmentVariable($envName, $null, 'User')
     Check 'проба убрана' ($null -eq [Environment]::GetEnvironmentVariable($envName, 'User'))
-    Remove-Item -Path 'Function:\Ensure-Backup', 'Function:\Add-JournalEntry', 'Function:\Write-AheadEntry', 'Function:\Undo-AheadEntry', 'Function:\Test-CanModify' -ErrorAction SilentlyContinue
+    Remove-Item -Path 'Function:\Ensure-Backup', 'Function:\Write-AheadEntry', 'Function:\Undo-AheadEntry', 'Function:\Test-CanModify' -ErrorAction SilentlyContinue
 } else {
     Check 'Apply-Def найдена в движке' $false
 }
@@ -580,7 +596,7 @@ if (Get-Command Apply-Def -ErrorAction SilentlyContinue) {
 Write-Host ''
 Write-Host 'Резервная копия: только при ручном применении и только по факту'
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-    if ($fn.Name -in @('Ensure-Backup', 'Write-Section')) { Invoke-Expression $fn.Extent.Text }
+    if ($fn.Name -in @('Ensure-Backup', 'Write-Section', 'Export-RegKey')) { Invoke-Expression $fn.Extent.Text }
     if ($fn.Name -in @('Compress-Journal', 'ConvertTo-Fields', 'Get-JournalKey')) { Invoke-Expression $fn.Extent.Text }
 }
 # заглушка: проверяем резервную копию, а не запись журнала
@@ -619,7 +635,16 @@ if (Get-Command Ensure-Backup -ErrorAction SilentlyContinue) {
         Check 'недоступная ветка не засчитана' (@($bkLines | Where-Object { $_ -match 'сохранено веток: 1' }).Count -ge 1) `
               (($bkLines -join ' | '))
         Check 'о невыгруженной ветке сказано' (@($bkLines | Where-Object { $_ -match 'не выгрузились ветки' }).Count -ge 1)
+        # причина бывает разной: reg.exe с кодом ошибки или (под администратором)
+        # Защитник, не давший запустить выгрузку SECURITY, — но она названа
+        Check '…и сказано почему, а не только имя ветки' (@($bkLines | Where-Object { $_ -match 'SECURITY -- \S' }).Count -ge 1) (($bkLines -join ' | '))
+        $okFile = @($files | Where-Object { $_.Name -like '*Software*' }) | Select-Object -First 1
+        Check 'выгруженная ветка начинается с заголовка выгрузки реестра' ($okFile -and ((Get-Content -LiteralPath $okFile.FullName -TotalCount 1) -eq 'Windows Registry Editor Version 5.00'))
     }
+    # выгрузка не по коду выхода и не по появлению файла: ветки нет — ошибка, файла не остаётся
+    $bogus = Join-Path $BackupRoot 'bogus.reg'
+    $bw = Export-RegKey 'HKCU\Software\W11P-No-Such-Key-' $bogus
+    Check 'несуществующая ветка — ошибка выгрузки, а не копия' ($bw -match 'reg\.exe, код') $bw
 
     Ensure-Backup
     Check 'повторный вызов не плодит папки' (@(Get-ChildItem $BackupRoot -Directory).Count -eq 1)
@@ -793,8 +818,17 @@ Write-Host 'Журнал отката пишется по ходу работы'
 # оставлял изменения в системе, а вернуть их было нечем.
 $engineText = Get-Content -Raw -LiteralPath $engine
 Check 'каждая секция сбрасывает журнал на диск' ($engineText -match "function Write-Section[^`n]*Save-JournalEntries -Quiet")
-Check 'внутри модуля журнал пишется не реже, чем раз в десять записей' `
-      ($engineText -match 'Journal\.Count -ge 10\s*\)\s*\{\s*Save-JournalEntries -Quiet')
+# Журнал раньше изменения — единственный способ записи: в очередь журнала
+# пишут только Write-AheadEntry (сразу на диск) и Apply-ProfilesHives (пачка
+# на диск до изменений). Прежняя запись «после изменения, пачкой по десять»
+# (Add-JournalEntry) убрана.
+$journalAdds = @($engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
+    $n.Expression.Extent.Text -eq '$script:Journal' -and $n.Member.Extent.Text -eq 'Add' }, $true) | ForEach-Object {
+    $p = $_.Parent; while ($p -and -not ($p -is [System.Management.Automation.Language.FunctionDefinitionAst])) { $p = $p.Parent }
+    $(if ($p) { $p.Name } else { '(вне функции)' }) })
+Check 'в журнал пишут только Write-AheadEntry и Apply-ProfilesHives (журнал раньше изменения)' `
+      ((@($journalAdds | Where-Object { $_ -notin @('Write-AheadEntry', 'Apply-ProfilesHives') }).Count -eq 0) -and ($engineText -notmatch 'function Add-JournalEntry')) `
+      ("пишут: " + (($journalAdds | Select-Object -Unique) -join ', '))
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
@@ -1345,7 +1379,8 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
     $want = @('ConvertTo-Fields', 'Get-JournalKey', 'Compress-Journal', 'Use-JournalLock', 'Read-JournalFile', 'Write-JournalFile',
               'Save-JournalEntries', 'Save-Json', 'Load-Json', 'Ensure-DataDir', 'Test-DataTrusted', 'Assert-SafeRoot', 'Test-DirSecure',
-              'Protect-DataRoot', 'Get-OwnerSid', 'Add-JournalEntry', 'Get-StartName', 'Restore-JournalEntry', 'Test-JournalWritable',
+              'Protect-DataRoot', 'Get-OwnerSid', 'Get-StartName', 'Restore-JournalEntry', 'Test-JournalWritable',
+              'Get-RegRaw', 'Test-RegKind', 'Restore-RegValue', 'Get-JournalEntryId', 'Remove-JournalEntries',
               'Get-SignKey', 'Get-JournalSig', 'Test-KeyFileSecure', 'Test-JournalEntryKnown', 'Test-PortableTaskTrust', 'Test-AclVolume',
               'Test-DirChainSecure', 'Test-ItemTrusted', 'Get-UntrustedItems', 'Test-TaskGlobPath', 'Get-TaskGlobFolders', 'Split-TaskPath',
               'Set-Reg', 'Get-RegValue', 'ConvertTo-RegComparable', 'Set-RegDirect', 'Test-RegKeyWritable', 'Write-AheadEntry', 'Undo-AheadEntry',
@@ -1522,6 +1557,71 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     $r.walBlocked = ($null -eq (Get-RegValue $probe 'WalBlocked'))
     $script:JournalFailed = $false
     Remove-Item -LiteralPath $probe -Recurse -Force -ErrorAction SilentlyContinue
+    # отзыв записи ложится на диск сразу: команда может закончиться, не записав журнал ещё раз
+    $ae = @{ kind = 'env'; name = 'W11PUndoNow'; existed = $false; old = ''; newValue = '1' }
+    $null = Write-AheadEntry $ae
+    $undoBefore = [bool]((Get-Content $jpath -Raw) -match 'W11PUndoNow')
+    Undo-AheadEntry $ae
+    $r.undoNow = $undoBefore -and -not ((Get-Content $jpath -Raw) -match 'W11PUndoNow')
+
+    # Прежний вид значения — в журнал, а откат возвращает вид и данные как
+    # есть и сверяет. Раньше в журнал шёл вид нового значения: строка «1»
+    # возвращалась числом, «%SystemRoot%\x» — раскрытой.
+    $kp = 'HKCU:\Software\W11PKind-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
+    New-Item -Path $kp -Force | Out-Null
+    New-ItemProperty -LiteralPath $kp -Name 'S' -Value '1' -PropertyType String -Force | Out-Null
+    New-ItemProperty -LiteralPath $kp -Name 'E' -Value '%SystemRoot%\w11p' -PropertyType ExpandString -Force | Out-Null
+    Set-Reg -Path $kp -Name 'S' -Value 0 -Type 'DWord' -Comment 'вид прежнего значения'
+    Set-Reg -Path $kp -Name 'E' -Value 'x' -Type 'String' -Comment 'раскрываемая строка'
+    $jk = @((Read-JournalFile).items)
+    $es = @($jk | Where-Object { "$($_.path)" -eq $kp -and "$($_.name)" -eq 'S' }) | Select-Object -First 1
+    $ee = @($jk | Where-Object { "$($_.path)" -eq $kp -and "$($_.name)" -eq 'E' }) | Select-Object -First 1
+    $r.kindKept = ($es -and "$($es.type)" -eq 'String' -and "$($es.old)" -eq '1' -and $ee -and "$($ee.type)" -eq 'ExpandString' -and "$($ee.old)" -eq '%SystemRoot%\w11p')
+    $r.kindBackOk = ($es -and (Restore-JournalEntry $es).ok -and $ee -and (Restore-JournalEntry $ee).ok)
+    $rawS = Get-RegRaw $kp 'S'; $rawE = Get-RegRaw $kp 'E'
+    $r.kindBack = ($rawS.kind -eq 'String' -and "$($rawS.value)" -eq '1' -and $rawE.kind -eq 'ExpandString' -and "$($rawE.value)" -eq '%SystemRoot%\w11p')
+    # двоичное и многострочное — через JSON, как из файла журнала
+    $bin = ([pscustomobject]@{ kind = 'reg'; path = $kp; name = 'B'; existed = $true; type = 'Binary'; old = @(1, 2, 255) } | ConvertTo-Json -Compress) | ConvertFrom-Json
+    $multi = ([pscustomobject]@{ kind = 'reg'; path = $kp; name = 'M'; existed = $true; type = 'MultiString'; old = @('a', 'b') } | ConvertTo-Json -Compress) | ConvertFrom-Json
+    $r.binBack = (Restore-JournalEntry $bin).ok -and ((Get-RegRaw $kp 'B').kind -eq 'Binary') -and ((@((Get-RegRaw $kp 'B').value) -join ',') -eq '1,2,255')
+    $r.multiBack = (Restore-JournalEntry $multi).ok -and ((Get-RegRaw $kp 'M').kind -eq 'MultiString') -and ((@((Get-RegRaw $kp 'M').value) -join '|') -eq 'a|b')
+    # «не было» — параметр убирается; уже убран — тоже успех: повтор ничего не портит
+    $gone = [pscustomobject]@{ kind = 'reg'; path = $kp; name = 'S'; existed = $false; old = ''; type = 'DWord' }
+    $r.goneBack = (Restore-JournalEntry $gone).ok -and -not (Get-RegRaw $kp 'S').exists
+    $r.goneAgain = (Restore-JournalEntry $gone).ok
+    # «команда прошла» — ещё не «вернулось»: запись, которая не легла, не засчитывается
+    function New-ItemProperty { param($LiteralPath, $Name, $Value, $PropertyType, [switch]$Force, $ErrorAction) }
+    $r.fakeNotOk = -not (Restore-JournalEntry ([pscustomobject]@{ kind = 'reg'; path = $kp; name = 'Z'; existed = $true; type = 'DWord'; old = 5 })).ok
+    Remove-Item Function:\New-ItemProperty
+    # прежнее значение вида, который откат не вернёт (REG_NONE), — менять нельзя
+    $hk = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(($kp -replace '^HKCU:\\', ''), $true)
+    $hk.SetValue('N', [byte[]]@(7), [Microsoft.Win32.RegistryValueKind]::None); $hk.Close()
+    $script:Failures = 0
+    Set-Reg -Path $kp -Name 'N' -Value 1 -Type 'DWord' -Comment 'неизвестный вид'
+    $r.noneRefused = ($script:Failures -eq 1) -and ((Get-RegRaw $kp 'N').kind -eq 'None')
+    # пустое двоичное значение — «было», а не «не было»: откат не должен его удалять
+    New-ItemProperty -LiteralPath $kp -Name 'EB' -Value ([byte[]]@()) -PropertyType Binary -Force | Out-Null
+    Set-Reg -Path $kp -Name 'EB' -Value 1 -Type 'DWord' -Comment 'пустое двоичное'
+    $eb = @(@((Read-JournalFile).items) | Where-Object { "$($_.path)" -eq $kp -and "$($_.name)" -eq 'EB' }) | Select-Object -First 1
+    $r.emptyBinKept = ($eb -and [bool]$eb.existed -and "$($eb.type)" -eq 'Binary')
+    $r.emptyBinBack = ($eb -and (Restore-JournalEntry $eb).ok -and (Get-RegRaw $kp 'EB').exists -and (Get-RegRaw $kp 'EB').kind -eq 'Binary')
+    Remove-Item -LiteralPath $kp -Recurse -Force -ErrorAction SilentlyContinue
+
+    # Откат убирает из журнала только то, с чем закончил: что дописал другой
+    # запуск, пока шёл откат, остаётся (в том числе повтор уже обработанного).
+    Remove-Item $jpath -Force -ErrorAction SilentlyContinue
+    $script:Journal.Clear(); $script:JournalRetract.Clear()
+    $script:Journal.Add(@{ kind = 'env'; name = 'A1'; existed = $false; old = ''; newValue = '1'; time = '2026-01-01T00:00:00'; run = 'r1' })
+    $script:Journal.Add(@{ kind = 'env'; name = 'A2'; existed = $false; old = ''; newValue = '1'; time = '2026-01-01T00:00:01'; run = 'r1' })
+    Save-JournalEntries -Quiet
+    $handled = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($x in @((Read-JournalFile).items)) { $null = $handled.Add((Get-JournalEntryId $x)) }
+    $script:Journal.Add(@{ kind = 'env'; name = 'A3'; existed = $false; old = ''; newValue = '1'; time = '2026-01-01T00:00:02'; run = 'r2' })
+    $script:Journal.Add(@{ kind = 'env'; name = 'A2'; existed = $true; old = '1'; newValue = '2'; time = '2026-01-01T00:00:03'; run = 'r2' })
+    Save-JournalEntries -Quiet
+    Remove-JournalEntries $handled
+    $r.concurrentLeft = (@((Read-JournalFile).items | ForEach-Object { "$($_.name)" }) | Sort-Object) -join ','
+    Remove-Item $jpath -Force -ErrorAction SilentlyContinue
     # форма записей журнала: подпись не заменяет проверку допустимости
     $shapes = @(
         @{ e = @{ kind = 'reg'; path = 'HKLM:\SOFTWARE\X'; name = 'A'; existed = $true; type = 'DWord'; old = 1 }; ok = $true },
@@ -1625,6 +1725,15 @@ if ($jr) {
     Check 'в момент изменения реестра «как было» уже на диске' ($jr.walBeforeChange -and $jr.walValue)
     Check 'неудавшееся изменение отзывает свою запись, удачное — остаётся' ($jr.walRetracted -and $jr.walKept)
     Check 'после отказа журнала реестр не меняется' ([bool]$jr.walBlocked)
+    Check 'отзыв записи журнала ложится на диск сразу' ([bool]$jr.undoNow)
+    Check 'в журнал идёт вид и данные прежнего значения (строка, раскрываемая строка)' ([bool]$jr.kindKept)
+    Check 'откат возвращает прежний вид значения и данные как есть' ($jr.kindBackOk -and $jr.kindBack)
+    Check 'двоичное и многострочное значения возвращаются из JSON журнала' ($jr.binBack -and $jr.multiBack) ("bin=$($jr.binBack) multi=$($jr.multiBack)")
+    Check 'не было — значит параметр убирается; повторный откат тоже успех' ($jr.goneBack -and $jr.goneAgain)
+    Check 'откат без сверки не засчитывается: значение, которое не легло, — не успех' ([bool]$jr.fakeNotOk)
+    Check 'прежнее значение вида, который откат не вернёт, не меняется' ([bool]$jr.noneRefused)
+    Check 'пустое двоичное значение записано как «было» и возвращается, а не удаляется' ($jr.emptyBinKept -and $jr.emptyBinBack) ("в журнале: $($jr.emptyBinKept), вернулось: $($jr.emptyBinBack)")
+    Check 'откат не стирает записи, дописанные другим запуском' ($jr.concurrentLeft -eq 'A2,A3') ("осталось: " + $jr.concurrentLeft)
     Check 'форма записей журнала проверяется' (@($jr.shapeWrong).Count -eq 0) (@($jr.shapeWrong) -join ', ')
     Check 'журнал прежней версии узнаётся' ([bool]$jr.legacyRead)
     Check 'пометка «прежняя версия» не теряется при дописывании' ([bool]$jr.legacyKept -and $jr.legacyItems -eq 2) ("записей: " + $jr.legacyItems)
@@ -1664,7 +1773,7 @@ $auJob = Start-Job -ArgumentList $engine -ScriptBlock {
     param($EnginePath)
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-        if ($fn.Name -in @('Get-AuditSetting', 'Get-MonitorEnabled', 'Set-AuditSetting', 'Set-MonitorEnabled', 'Get-AuditName', 'Get-JournalKey', 'ConvertTo-Fields', 'Read-SecurityEvents', 'Invoke-NetGuard', 'Test-JournalEntryShape')) { Invoke-Expression $fn.Extent.Text }
+        if ($fn.Name -in @('Get-AuditSetting', 'Get-MonitorEnabled', 'Set-AuditSetting', 'Set-MonitorEnabled', 'Get-AuditName', 'Get-JournalKey', 'ConvertTo-Fields', 'Read-SecurityEvents', 'Invoke-NetGuard', 'Test-JournalEntryShape', 'Test-RegKind')) { Invoke-Expression $fn.Extent.Text }
     }
     foreach ($a in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
         $lt = $a.Left -as [System.Management.Automation.Language.VariableExpressionAst]
@@ -1674,8 +1783,10 @@ $auJob = Start-Job -ArgumentList $engine -ScriptBlock {
     function Write-Log { param($m) $script:Log.Add("$m") }
     $script:Failures = 0
     $script:Seen = New-Object System.Collections.Generic.List[object]
-    function Add-JournalEntry { param($Entry) $script:Seen.Add($Entry) }
-    $script:FailJournal = $false; $script:JournalFailed = $false; $script:BackupFails = $false; $script:SetCalls = 0
+    # журнал заранее: запись «как было» обязана лечь до вызова auditpol /set
+    function Write-AheadEntry { param($Entry) if ($script:FailJournal) { $script:JournalFailed = $true; return $false }; $script:Seen.Add($Entry); return $true }
+    function Undo-AheadEntry { param($Entry) $null = $script:Seen.Remove($Entry) }
+    $script:FailJournal = $false; $script:JournalFailed = $false; $script:BackupFails = $false; $script:SetCalls = 0; $script:AheadAtSet = -1
     function Save-JournalEntries { param([switch]$Quiet) if ($script:FailJournal) { $script:JournalFailed = $true } }
     function Get-RegValue { param($Path, $Name) 999999999 }
     function Set-Reg { }
@@ -1698,6 +1809,7 @@ $auJob = Start-Job -ArgumentList $engine -ScriptBlock {
         }
         if ($a -match '/set') {
             $script:SetCalls++
+            $script:AheadAtSet = $script:Seen.Count
             if ($script:SetFails) { $global:LASTEXITCODE = 5; 'Error 0x00000005 occurred'; return }
             if (-not $script:Ignore) { $script:State = [int]($a -match '/success:enable') + 2 * [int]($a -match '/failure:enable') }
             $global:LASTEXITCODE = 0; return
@@ -1713,6 +1825,11 @@ $auJob = Start-Job -ArgumentList $engine -ScriptBlock {
     $script:State = 3; $r.mon3 = Get-MonitorEnabled
     $script:State = 1; $r.on = Set-MonitorEnabled $true; $r.after = $script:State
     $r.journalOld = $(if ($script:Seen.Count -gt 0) { "$($script:Seen[0]['old'])" } else { '' })
+    $r.aheadAtSet = $script:AheadAtSet
+    # политика не изменилась — запись «как было» отзывается
+    $script:Seen.Clear(); $script:Ignore = $true; $script:State = 1
+    $r.ignoredOn = Set-MonitorEnabled $true; $r.ignoredSeen = $script:Seen.Count
+    $script:Ignore = $false; $script:Seen.Clear()
     $script:SetFails = $true; $r.failOff = Set-MonitorEnabled $false
     $r.failLogged = [bool](@($script:Log | Where-Object { $_ -match 'auditpol не изменил' }).Count)
     $script:SetFails = $false; $script:Ignore = $true; $script:State = 3; $r.ignored = Set-MonitorEnabled $false
@@ -1736,10 +1853,10 @@ $auJob = Start-Job -ArgumentList $engine -ScriptBlock {
     $script:BackupFails = $true; $script:SetCalls = 0; $script:Failures = 0
     $r.unknownOn = Set-MonitorEnabled $true; $r.unknownSets = $script:SetCalls; $r.unknownFails = $script:Failures
     $script:BackupFails = $false
-    # журнал не записался — включённый аудит возвращается как был
-    $script:FailJournal = $true; $script:JournalFailed = $false; $script:State = 1
-    $r.jfOn = Set-MonitorEnabled $true; $r.jfState = $script:State
-    $r.jfLogged = [bool](@($script:Log | Where-Object { $_ -match 'возвращена как была' }).Count)
+    # журнал не записался — политика аудита не трогается вовсе
+    $script:FailJournal = $true; $script:JournalFailed = $false; $script:State = 1; $script:SetCalls = 0
+    $r.jfOn = Set-MonitorEnabled $true; $r.jfState = $script:State; $r.jfSets = $script:SetCalls
+    $r.jfLogged = [bool](@($script:Log | Where-Object { $_ -match 'политику аудита не меняем' }).Count)
     $script:FailJournal = $false; $script:JournalFailed = $false
     # слежение за сетью: журнал не прочитался при первом же запуске — окно не теряется
     $script:Saved = $null; $script:Prev = $null
@@ -1776,10 +1893,65 @@ if ($au) {
     Check '«событий нет» в журнале — не ошибка' ([bool]$au.evNone)
     Check 'журнал, который не читается, — ошибка, а не пустой список' ([bool]$au.evError)
     Check 'исходная политика аудита не читается — аудит не включается' ((-not $au.unknownOn) -and $au.unknownSets -eq 0 -and $au.unknownFails -eq 1) ("вызовов /set: $($au.unknownSets)")
-    Check 'журнал отката не записался — аудит возвращается как был' ((-not $au.jfOn) -and $au.jfState -eq 1 -and $au.jfLogged) ("состояние: $($au.jfState)")
+    Check 'журнал отката не записался — политика аудита не трогается' ((-not $au.jfOn) -and $au.jfState -eq 1 -and $au.jfSets -eq 0 -and $au.jfLogged) ("состояние: $($au.jfState), вызовов /set: $($au.jfSets)")
+    Check '«как было» лежит в журнале раньше вызова auditpol /set' ($au.aheadAtSet -eq 1) ("записей к моменту /set: $($au.aheadAtSet)")
+    Check 'политика не изменилась — запись «как было» отозвана' ((-not $au.ignoredOn) -and $au.ignoredSeen -eq 0) ("записей: $($au.ignoredSeen)")
     Check 'первый сбой чтения журнала не съедает окно слежения' (($au.ngFirstLast -lt (Get-Date).AddMinutes(-15)) -and $au.ngFirstErr) ("last=$($au.ngFirstLast)")
     Check 'при сбое отметка «проверено до» не двигается' ($au.ngKeptLast -eq '2026-01-02T03:04:05') $au.ngKeptLast
     Check 'без сбоя отметка — сейчас, ошибка стёрта' (($au.ngOkLast -gt (Get-Date).AddMinutes(-5)) -and -not $au.ngOkErr)
+}
+
+# --------------------------------------------------------------------------- #
+#  Правило адресов телеметрии: новое ставится рядом и проверяется, старое
+#  убирается только потом. Брандмауэр здесь — заглушки, настоящий не трогается.
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Брандмауэр: замена правила адресов'
+$fwJob = Start-Job -ArgumentList $engine -ScriptBlock {
+    param($EnginePath)
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
+    foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Apply-FwIpBlock' }, $true)) { Invoke-Expression $fn.Extent.Text }
+    $script:FwIpRuleName = 'Win11Privacy: test'; $script:FwGroup = 'Win11Privacy'; $DryRun = $false
+    $script:Log = New-Object System.Collections.Generic.List[string]
+    function Write-Log { param($m) $script:Log.Add("$m") }
+    function Get-TelemetryIpList { @{ ips = @('192.0.2.1', '192.0.2.2', '2001:db8::1'); answered = 3; asked = 3 } }
+    $script:Rules = New-Object System.Collections.Generic.List[object]
+    $script:FailNew = $false; $script:ShortFilter = $false
+    function Get-NetFirewallRule { param($DisplayName, $Name, $ErrorAction)
+        if ($Name) { return @($script:Rules | Where-Object { $_.Name -eq $Name }) }
+        return @($script:Rules | Where-Object { $_.DisplayName -eq $DisplayName }) }
+    function New-NetFirewallRule { param($Name, $DisplayName, $Group, $Direction, $Action, $RemoteAddress, [Alias('Profile')]$FwProfile, $Enabled, $Description, $ErrorAction)
+        if ($script:FailNew) { throw 'нет места в хранилище правил' }
+        $script:Rules.Add([pscustomobject]@{ Name = $Name; DisplayName = $DisplayName; Enabled = 'True'; Action = $Action; Direction = $Direction; Addr = @($RemoteAddress) }) }
+    function Get-NetFirewallAddressFilter { param($AssociatedNetFirewallRule, $ErrorAction)
+        $a = @($AssociatedNetFirewallRule.Addr); if ($script:ShortFilter) { $a = @($a[0]) }; [pscustomobject]@{ RemoteAddress = $a } }
+    function Remove-NetFirewallRule { param($Name, $ErrorAction) $x = @($script:Rules | Where-Object { $_.Name -eq $Name }); foreach ($i in $x) { $null = $script:Rules.Remove($i) } }
+    $r = @{}
+    $script:Rules.Add([pscustomobject]@{ Name = 'old-rule'; DisplayName = $script:FwIpRuleName; Enabled = 'True'; Action = 'Block'; Direction = 'Outbound'; Addr = @('192.0.2.9') })
+    # не создалось новое — старое на месте
+    $script:Failures = 0; $script:FailNew = $true
+    Apply-FwIpBlock
+    $r.failNewKept = (@($script:Rules | ForEach-Object Name) -join ',') -eq 'old-rule' -and $script:Failures -eq 1
+    # создалось не таким (адресов меньше) — новое убрано, старое на месте
+    $script:Failures = 0; $script:FailNew = $false; $script:ShortFilter = $true
+    Apply-FwIpBlock
+    $r.shortKept = (@($script:Rules | ForEach-Object Name) -join ',') -eq 'old-rule' -and $script:Failures -eq 1
+    # всё хорошо — осталось одно новое правило со всеми адресами
+    $script:Failures = 0; $script:ShortFilter = $false
+    Apply-FwIpBlock
+    $r.okNames = @($script:Rules | ForEach-Object Name) -join ','
+    $r.okAddr = @($script:Rules | ForEach-Object { $_.Addr.Count })[0]
+    $r.okFails = $script:Failures
+    $r
+}
+$fwDone = Wait-Job $fwJob -Timeout 60
+$fw = $(if ($fwDone) { Receive-Job $fwJob } else { $null })
+Remove-Job $fwJob -Force
+Check 'проверки замены правила брандмауэра не зависают' ($null -ne $fw)
+if ($fw) {
+    Check 'новое правило не создалось — старое остаётся' ([bool]$fw.failNewKept)
+    Check 'новое правило не такое, как задумано, — убрано, старое остаётся' ([bool]$fw.shortKept)
+    Check 'после удачной замены остаётся одно новое правило со всеми адресами' ($fw.okNames -match '^Win11Privacy-TelemetryIp-[0-9a-f]{8}$' -and $fw.okAddr -eq 3 -and $fw.okFails -eq 0) ("правила: $($fw.okNames), адресов: $($fw.okAddr)")
 }
 
 # --------------------------------------------------------------------------- #
@@ -1848,14 +2020,27 @@ $gdJob = Start-Job -ArgumentList $engine -ScriptBlock {
     $script:Started.Clear(); $before = $script:Tasks.Count
     $r.pctRejected = (-not (Invoke-OneShotTask 'w11p-test' 'echo %PATH%' -AsSystem)) -and $script:Started.Count -eq 0 -and $script:Tasks.Count -eq $before
     # куст профиля не отключился — об этом сказано и это ошибка
-    foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Use-ProfileHive' }, $true)) { Invoke-Expression $fn.Extent.Text }
+    foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Use-ProfileHive', 'Clear-StaleHiveMounts') }, $true)) { Invoke-Expression $fn.Extent.Text }
     $script:HiveLog = New-Object System.Collections.Generic.List[string]
     function Write-Log { param([string]$Message = '') $script:HiveLog.Add($Message) }
-    function reg.exe { if ("$args" -match '^load') { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 } }
+    function Get-HiveMountNames { @() }
+    $script:Mounted = New-Object System.Collections.Generic.List[string]
+    function reg.exe { if ("$args" -match '^load (\S+)') { $script:Mounted.Add($Matches[1]); $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 } }
     $script:Failures = 0
     $null = Use-ProfileHive @{ sid = 'S-1-5-21-0-0-0-4242'; name = 'test'; file = 'C:\nope\NTUSER.DAT' } { param($root) }
     $r.hiveFails = $script:Failures
     $r.hiveLogged = [bool](@($script:HiveLog | Where-Object { $_ -match 'NTUSER\.DAT остался подключённым' }).Count)
+    # в имени подключения — номер процесса движка
+    $r.mountName = "$(@($script:Mounted)[0])"
+    # куст, оставшийся от оборванного запуска (процесса нет), отключается;
+    # подключение живого запуска и чужие имена не трогаются
+    $script:StaleHivesChecked = $false; $script:Failures = 0
+    function Get-HiveMountNames { @('S-1-5-18', "W11P_$($PID)_abcdef", 'W11P_9999999_abcdef', 'W11P_12345678', 'W11PTEST') }
+    $script:Unloaded = New-Object System.Collections.Generic.List[string]
+    function reg.exe { if ("$args" -match '^unload HKU\\(\S+)') { $script:Unloaded.Add($Matches[1]) }; $global:LASTEXITCODE = 0 }
+    Clear-StaleHiveMounts
+    Clear-StaleHiveMounts          # второй раз за запуск — уже не проверяет
+    $r.staleUnloaded = @($script:Unloaded) -join ','
     $r.check = Get-CredCheckCmd @('WindowsLive:target=virtualapp/didlogical', 'MicrosoftAccount:target=SSO_POP_Device')
     # статусы удаления — на своей пробной ветке
     $k = 'HKCU:\Software\W11PTest-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -1879,6 +2064,8 @@ if ($gd) {
     Check 'в команду через cmd не пропускаются % и переводы строк' ([bool]$gd.pctRejected)
     Check 'недождавшаяся задача останавливается и убирается' ((-not $gd.slow) -and $gd.slowStopped -eq 1 -and $gd.slowRemoved -eq 1) ("остановлено $($gd.slowStopped), убрано $($gd.slowRemoved)")
     Check 'неотключившийся куст профиля назван и посчитан ошибкой' ($gd.hiveFails -eq 1 -and $gd.hiveLogged)
+    Check 'в имени подключения куста — номер процесса движка' ($gd.mountName -match '^HKU\\W11P_\d+_[0-9a-f]{6}$') $gd.mountName
+    Check 'куст от оборванного запуска отключается, живой и чужие — нет' ($gd.staleUnloaded -eq 'W11P_9999999_abcdef') ("отключены: " + $gd.staleUnloaded)
     Check 'после cmdkey проверяется, что учётных данных не осталось' ($gd.check -eq '(cmdkey /list | findstr /i /c:"virtualapp/didlogical" /c:"SSO_POP_Device" >nul && exit 1 || exit 0)') $gd.check
     Check 'у удаления свой статус: убрано / не было' ("$($gd.st1)|$($gd.st2)|$($gd.st3)|$($gd.st4)" -eq 'removed|absent|removed|absent') "$($gd.st1)|$($gd.st2)|$($gd.st3)|$($gd.st4)"
 }

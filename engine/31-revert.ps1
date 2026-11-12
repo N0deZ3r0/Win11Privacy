@@ -6,6 +6,15 @@ if ($Revert) {
     Write-Log 'ОТКАТ ИЗМЕНЕНИЙ'
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
 
+    # Страж и слежение — первыми. Раньше их задачи удалялись после возврата
+    # журнала, и страж, сработавший посреди отката, снова ставил то, что откат
+    # только что вернул.
+    Write-Section 'Страж'
+    $null = Remove-OwnTask $script:GuardTask 'задача стража'
+    $null = Remove-OwnTask $script:SensorTask 'слежение за датчиками'
+    $null = Remove-OwnTask $script:NetTask 'слежение за сетью'
+    $null = Remove-OwnTask 'Win11Privacy Watcher' 'живые уведомления'
+
     Write-Section 'Настройки реестра, службы, задачи'; $rj = Restore-Journal
     # Журнал прежних версий не знает, какими были службы, задачи и переменные
     # среды до программы. Только для него — прежний откат «по умолчанию», и
@@ -16,27 +25,22 @@ if ($Revert) {
     $legacyRevert = ("$($rj.state)" -eq 'legacy')
     if ("$($rj.state)" -eq 'untrusted') { Write-Log '   [!] журналу отката нельзя верить -- службы, задачи и политика аудита «по умолчанию» тоже не возвращаются' }
     elseif ("$($rj.state)" -eq 'none') { Write-Log '   [-] журнала нет -- службы, задачи и переменные среды возвращать не по чему' }
-    Write-Section 'Файл hosts'; Remove-HostsBlock
+    Write-Section 'Файл hosts'; $null = Remove-HostsBlock
     Write-Section 'Брандмауэр'; Remove-FwRules
     # Политику аудита возвращает журнал — ровно ту, что была до программы.
     # Журнал прежних версий её не знает: тогда, как раньше, выключаем.
     Write-Section 'Монитор'
     if ($legacyRevert) { if (Get-MonitorEnabled) { Set-MonitorEnabled $false | Out-Null } else { Write-Log '   [-] журнал аудита не включён' } }
     else { Write-Log '   [-] политика аудита возвращена по журналу (если программа её меняла)' }
-    Write-Section 'Страж'
-    try { Unregister-ScheduledTask -TaskName $script:GuardTask -Confirm:$false -ErrorAction Stop; Write-Log '   [+] задача стража удалена' } catch { Write-Log '   [-] стража нет' }
-    try { Unregister-ScheduledTask -TaskName $script:SensorTask -Confirm:$false -ErrorAction Stop; Write-Log '   [+] слежение за датчиками удалено' } catch { Write-Log '   [-] слежения за датчиками нет' }
-    try { Unregister-ScheduledTask -TaskName $script:NetTask -Confirm:$false -ErrorAction Stop; Write-Log '   [+] слежение за сетью удалено' } catch { Write-Log '   [-] слежения за сетью нет' }
-    try { Unregister-ScheduledTask -TaskName 'Win11Privacy Watcher' -Confirm:$false -ErrorAction Stop; Write-Log '   [+] живые уведомления удалены' } catch { Write-Log '   [-] живых уведомлений нет' }
 
     if ($legacyRevert) {
         Write-Section 'Службы (журнал прежней версии)'
         foreach ($svc in @(@{N='DiagTrack';S='Automatic'}, @{N='dmwappushservice';S='Manual'}, @{N='NvTelemetryContainer';S='Automatic'}, @{N='InventorySvc';S='Automatic'})) {
-            try {
-                $s = Get-Service -Name $svc.N -ErrorAction Stop
-                if ($s.StartType -ne 'Disabled') { continue }       # не выключена — не трогаем
-                Set-Service -Name $svc.N -StartupType $svc.S -ErrorAction Stop; Write-Log "   [+] $($svc.N) -> $($svc.S)"
-            } catch { Write-Log "   [-] $($svc.N) -- пропущено" }
+            $s = Get-Service -Name $svc.N -ErrorAction SilentlyContinue
+            if (-not $s) { continue }                               # службы нет на этом компьютере
+            if ($s.StartType -ne 'Disabled') { continue }           # не выключена — не трогаем
+            try { Set-Service -Name $svc.N -StartupType $svc.S -ErrorAction Stop; Write-Log "   [+] $($svc.N) -> $($svc.S)" }
+            catch { Write-Log ("   [!] {0} -- не вернулась: {1}" -f $svc.N, $_.Exception.Message); $script:Failures++ }
         }
         Write-Section 'Задачи планировщика (журнал прежней версии)'
         foreach ($d in $script:Defs) {
@@ -61,6 +65,7 @@ if ($Revert) {
     # дописанное в файл, не включается.
     $oemSaved = Load-Json 'oem-disabled.json'
     if ($oemSaved) {
+        $oemLeft = 0
         $known = @{}
         foreach ($k in @((Detect-Oem).items)) { $known[("{0}|{1}" -f $k.type, $k.name).ToLowerInvariant()] = $true }
         foreach ($it in @($oemSaved)) {
@@ -71,9 +76,10 @@ if ($Revert) {
             try {
                 if ($type -eq 'svc') { Set-Service -Name $name -StartupType $(if ("$($it.state)" -match 'Auto') { 'Automatic' } else { 'Manual' }) -ErrorAction Stop; Write-Log "   [+] служба $name -> $($it.state)" }
                 else { $pp = Split-TaskPath $name; Enable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null; Write-Log "   [+] задача $($pp[1]) включена" }
-            } catch { Write-Log "   [-] $name -- пропущено" }
+            } catch { Write-Log ("   [!] {0} -- не вернулось: {1}" -f $name, $_.Exception.Message); $script:Failures++; $oemLeft++ }
         }
-        Remove-Item -LiteralPath (Join-Path $script:DataDir 'oem-disabled.json') -Force -ErrorAction SilentlyContinue
+        # не всё вернулось — список остаётся для второй попытки
+        if ($oemLeft -eq 0) { Remove-Item -LiteralPath (Join-Path $script:DataDir 'oem-disabled.json') -Force -ErrorAction SilentlyContinue }
     } else { Write-Log '   [-] список прежней версии не найден -- если программа их отключала, они вернулись по журналу' }
 
     Write-Section 'Сторонние программы'
@@ -117,29 +123,38 @@ if ($Revert) {
     Write-Section 'Данные программы'
     $left = @(Get-DataFiles)
     # копия движка для стража больше не нужна — задача уже удалена
-    try { Remove-Item -LiteralPath $script:TaskEngine -Force -ErrorAction SilentlyContinue } catch { }
-    try { Remove-Item -LiteralPath (Join-Path $script:DataDir 'engine.ps1') -Force -ErrorAction SilentlyContinue } catch { }
+    foreach ($f in @($script:TaskEngine, (Join-Path $script:DataDir 'engine.ps1'))) {
+        if (-not (Test-Path -LiteralPath $f)) { continue }
+        try { Remove-Item -LiteralPath $f -Force -ErrorAction Stop }
+        catch { Write-Log ("   [!] копия движка не удалилась: {0} -- {1}" -f $f, $_.Exception.Message); $script:Failures++ }
+    }
+    # в журнале что-то осталось: то, что вернуть не удалось, или то, что
+    # успел дописать другой запуск, — он остаётся для второй попытки
+    $journalLeft = @((Read-JournalFile -ReadOnly).items).Count
     if ($left.Count -eq 0) { Write-Log '   [-] программа ничего о вас не хранит' }
     else {
         foreach ($d in $left) {
-            # что вернуть не удалось, остаётся в журнале для второй попытки
-            if ($d.file -eq 'changes.json' -and [int]$rj.failed -gt 0) { Write-Log '   [-] журнал отката оставлен: в нём то, что вернуть не удалось'; continue }
+            if ($d.file -eq 'changes.json' -and $journalLeft -gt 0) { Write-Log ("   [-] журнал отката оставлен: в нём записей {0}, вернуть их пока не удалось" -f $journalLeft); continue }
             # Отложенный журнал (повреждён, подпись не сошлась, проверить
             # нечем) — след подмены, а при потерянном ключе и единственная
             # копия журнала. Раньше откат стирал его вместе с остальными
             # данными сразу после того, как отложил.
             if ($d.file -like 'changes.*-*.json') { Write-Log ("   [-] отложенный журнал оставлен: {0}" -f $d.file); continue }
             try { Remove-Item -LiteralPath (Join-Path $script:DataDir $d.file) -Force -ErrorAction Stop; Write-Log ("   [+] удалён: {0}" -f $d.file) }
-            catch { Write-Log ("   [!] не удалось удалить {0}" -f $d.file) }
+            catch { Write-Log ("   [!] не удалось удалить {0} -- {1}" -f $d.file, $_.Exception.Message); $script:Failures++ }
         }
     }
 
     Write-Log ''
+    Write-Log ("Ошибок              : {0}" -f $script:Failures)
     if ("$($rj.state)" -eq 'untrusted') {
         Write-Log '[!] Настройки по журналу изменений не возвращены: журналу нельзя верить (почему — сказано выше).'
         Write-Log 'Запасной вариант — резервная копия реестра на рабочем столе или точка восстановления Windows.'
+    } elseif ([int]$rj.failed -gt 0) {
+        Write-Log ("[!] Вернулось не всё: записей журнала, которые вернуть не удалось, -- {0} (какие и почему — выше). Они остались в журнале: повторите откат после перезагрузки." -f $rj.failed)
+        Write-Log 'Запасной вариант — резервная копия реестра на рабочем столе или точка восстановления Windows.'
     } else {
-        Write-Log 'Настройки реестра возвращены по журналу изменений — ручной импорт .reg больше не нужен.'
+        Write-Log 'Настройки реестра возвращены по журналу изменений и сверены — ручной импорт .reg больше не нужен.'
         Write-Log 'Папка резервной копии на рабочем столе остаётся как запасной вариант.'
     }
     Write-Log 'Готово. Перезагрузите компьютер.'

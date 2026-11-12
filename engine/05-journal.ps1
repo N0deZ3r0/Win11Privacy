@@ -341,5 +341,39 @@ function Remove-JournalKey {
         Write-JournalFile $rest $jf.legacy
     }
 }
-function Load-Json { param([string]$Name) $p = Join-Path $script:DataDir $Name; if (Test-Path -LiteralPath $p) { try { return (Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null } } return $null }
+
+# Опознавательный знак записи журнала: ключ плюс когда и сколько раз её
+# меняли. Запись, которую другой запуск успел дополнить (Compress-Journal
+# прибавил count или lastTime), — уже другая и не считается обработанной.
+function Get-JournalEntryId {
+    param($Entry)
+    $f = ConvertTo-Fields $Entry
+    return ('{0}|{1}|{2}|{3}|{4}' -f (Get-JournalKey $f), "$($f['time'])", "$($f['lastTime'])", "$($f['count'])", "$($f['run'])")
+}
+
+# Убрать из журнала записи, с которыми откат закончил. Журнал перечитывается
+# под замком: что за это время дописал другой запуск (страж, второе окно),
+# остаётся. Раньше откат переписывал журнал тем, что прочитал в начале, и
+# такие записи пропадали.
+function Remove-JournalEntries {
+    param($Handled)
+    Use-JournalLock {
+        $jf = Read-JournalFile
+        if (-not $jf.trusted) { throw 'журналу отката нельзя верить' }
+        $rest = @($jf.items | Where-Object { -not $Handled.Contains((Get-JournalEntryId $_)) })
+        Write-JournalFile $rest $jf.legacy
+    }
+}
+# Файлы данных читаются только из папки, которой можно верить, — так же, как
+# пишутся (Save-Json). Раньше чтение не проверяло папку: подложенный файл
+# (например, profile.json — какие модули страж держит включёнными) прочитался
+# бы с правами администратора.
+function Load-Json {
+    param([string]$Name)
+    if (-not (Test-DataTrusted)) { return $null }
+    $p = Join-Path $script:DataDir $Name
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    try { return (Get-Content -LiteralPath $p -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json) }
+    catch { Write-Log ("   [!] файл данных {0} не читается: {1}" -f $Name, $_.Exception.Message); return $null }
+}
 

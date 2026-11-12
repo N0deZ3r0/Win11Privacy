@@ -70,11 +70,10 @@ if ($InstallNetGuard) {
 if ($RemoveNetGuard) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Слежение за сетью'
-    try { Unregister-ScheduledTask -TaskName $script:NetTask -Confirm:$false -ErrorAction Stop; Write-Log '   [+] слежение отключено' }
-    catch { Write-Log '   [-] задача слежения не найдена' }
+    $rt = Remove-OwnTask $script:NetTask 'слежение за сетью'
     Write-Log '   [i] журнал соединений остаётся — он нужен монитору; выключается кнопкой монитора.'
     Write-Log '###DONE###'
-    exit 0
+    exit $(if ($rt -eq 'failed') { 1 } else { 0 })
 }
 
 # периодический запуск из планировщика: тихо, без вывода
@@ -83,10 +82,9 @@ if ($NetGuard) { $null = Invoke-NetGuard; exit 0 }
 if ($RemoveSensorGuard) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Слежение за датчиками'
-    try { Unregister-ScheduledTask -TaskName $script:SensorTask -Confirm:$false -ErrorAction Stop; Write-Log '   [+] слежение отключено' }
-    catch { Write-Log '   [-] задача слежения не найдена' }
+    $rt = Remove-OwnTask $script:SensorTask 'слежение за датчиками'
     Write-Log '###DONE###'
-    exit 0
+    exit $(if ($rt -eq 'failed') { 1 } else { 0 })
 }
 
 if ($SensorGuard) {
@@ -108,7 +106,9 @@ if ($SensorGuard) {
             if (-not $first) { $newApps += @{ cap = $c.id; app = $it.app; last = $it.last } }
         }
     }
-    try { Save-Json 'sensor-apps.json' @{ pairs = @($known.Keys); updated = (Get-Date).ToString('s') } } catch { }
+    # не сохранилось — в следующий раз о тех же программах сообщим снова; это видно в журнале задачи
+    try { Save-Json 'sensor-apps.json' @{ pairs = @($known.Keys); updated = (Get-Date).ToString('s') } }
+    catch { Write-Log ("   [-] список известных программ не сохранился: {0}" -f $_.Exception.Message) }
 
     if ($newApps.Count -gt 0) {
         $parts = @()

@@ -9,6 +9,42 @@ $script:BackupTried = $false
 # столе и тратить минуту на точку отката при каждой мелкой правке.
 $script:BackupEnabled = $false
 
+# Выгружает ветку реестра в .reg и проверяет, что выгрузилась: reg.exe
+# закончил с кодом 0, а файл начинается с заголовка, который понимает импорт.
+# Раньше успехом считалось само появление файла — а reg.exe, упавший на
+# середине, оставляет недописанный. reg.exe запускается напрямую, по полному
+# пути, без cmd.exe; вывод читается, но не превращается в ошибки PowerShell.
+# Пустая строка — выгрузилось, иначе — почему нет.
+function Export-RegKey {
+    param([string]$Key, [string]$File)
+    $p = $null
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = Join-Path $env:SystemRoot 'System32\reg.exe'
+        # в пути ветки и файла кавычек не бывает; обратная косая в конце
+        # экранировала бы закрывающую кавычку — её убираем
+        $psi.Arguments = ('export "{0}" "{1}" /y' -f $Key.TrimEnd('\'), $File)
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $p = [System.Diagnostics.Process]::Start($psi)
+        $errText = $p.StandardError.ReadToEndAsync()
+        $null = $p.StandardOutput.ReadToEnd()
+        if (-not $p.WaitForExit(300000)) { try { $p.Kill() } catch { }; return 'reg.exe не закончил выгрузку за пять минут' }
+        if ($p.ExitCode -ne 0) { return ("reg.exe, код {0}: {1}" -f $p.ExitCode, ("$($errText.Result)" -replace '\s+', ' ').Trim()) }
+    } catch { return $_.Exception.Message }
+    finally { if ($null -ne $p) { $p.Dispose() } }
+    if (-not (Test-Path -LiteralPath $File)) { return 'reg.exe закончил без ошибки, но файла нет' }
+    $head = ''
+    try {
+        $sr = New-Object System.IO.StreamReader($File, $true)
+        try { $head = $sr.ReadLine() } finally { $sr.Close() }
+    } catch { return ("файл не читается: {0}" -f $_.Exception.Message) }
+    if ("$head" -ne 'Windows Registry Editor Version 5.00') { return 'в файле нет заголовка выгрузки реестра' }
+    return ''
+}
+
 function Ensure-Backup {
     if (-not $script:BackupEnabled -or $script:BackupTried -or $DryRun) { return }
     $script:BackupTried = $true
@@ -26,15 +62,15 @@ function Ensure-Backup {
                 if (-not (Test-Path -LiteralPath $k)) { continue }
                 $native = $k -replace '^HKLM:\\','HKLM\' -replace '^HKCU:\\','HKCU\'
                 $file = Join-Path $dir ((($k -replace '[:\\ ]','_')) + '.reg')
-                # ВАЖНО: reg.exe зовём через cmd, а не с «2>&1». В PowerShell 5.1
-                # поток ошибок родной программы превращается в терминирующую
-                # ошибку, и одна нечитаемая ветка обрывала всю копию целиком.
-                # итог считается ниже по файлу на диске, а не по этому вызову
-                try { $null = & cmd.exe /c "reg export `"$native`" `"$file`" /y >nul 2>&1" } catch { }
-                # считаем только то, что действительно легло на диск: раньше
-                # счётчик прибавлял на каждую попытку, и в журнале стояло
-                # «сохранено веток: 35», даже если часть выгрузить не удалось
-                if (Test-Path -LiteralPath $file) { $saved++ } else { $missed += $k }
+                # Считаем только то, что выгрузилось целиком (см. Export-RegKey).
+                # Недописанный файл удаляется: восстановить из него нельзя, а
+                # лежащий рядом с целыми он выглядел бы такой же копией.
+                $why = Export-RegKey $native $file
+                if (-not $why) { $saved++ }
+                else {
+                    Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+                    $missed += ("{0} -- {1}" -f $k, $why)
+                }
             }
             if ($saved -gt 0) {
                 $script:BackupDir = $dir
@@ -44,7 +80,7 @@ function Ensure-Backup {
                 Write-Log '   [-] сохранять нечего: ни одна ветка не выгрузилась'
             }
             if ($missed.Count -gt 0) {
-                Write-Log ("   [-] не выгрузились ветки: {0} (Windows не отдаёт их даже на чтение)" -f $missed.Count)
+                Write-Log ("   [-] не выгрузились ветки: {0} (обычно Windows не отдаёт их даже на чтение; почему -- в каждой строке)" -f $missed.Count)
                 foreach ($k in $missed) { Write-Log ("       {0}" -f $k) }
             }
         } catch { Write-Log "   [!] не удалось создать резервную копию: $($_.Exception.Message)" }

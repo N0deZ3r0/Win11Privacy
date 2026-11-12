@@ -19,7 +19,7 @@ function Save-XrayDay {
         $days[$today] = @{ date = $today; perDay = [int]$Scan.perDay; mbPerDay = "$($Scan.mbPerDay)" }
         $list = @($days.Values | Sort-Object { "$($_.date)" } | Select-Object -Last 400)
         Save-Json 'xray-history.json' @{ days = $list; updated = (Get-Date).ToString('s') }
-    } catch { }
+    } catch { Write-Log ("   [-] день рентгена в хронологию не записался: {0}" -f $_.Exception.Message) }
 }
 
 function Get-GuardDays {
@@ -142,7 +142,8 @@ if ($Timeline) {
 if ($XrayScan) {
     $r = Invoke-XrayScan -Hours $XrayHours -Max $XrayMax
     if (-not $r.error) {
-        try { Save-Json 'xray-last.json' @{ time = $r.time; perDay = $r.perDay; mbPerDay = $r.mbPerDay } } catch { }
+        try { Save-Json 'xray-last.json' @{ time = $r.time; perDay = $r.perDay; mbPerDay = $r.mbPerDay } }
+    catch { Write-Log ("   [-] итог рентгена не сохранился: {0}" -f $_.Exception.Message) }
         Save-XrayDay $r      # дневной замер для хронологии
     }
     if ($XrayBaseline -and -not $r.error) {
@@ -181,14 +182,14 @@ if ($XrayWipe) {
 # --- Страж запускается после объявления рентгена: он делает дневной замер --- #
 if ($Guard) {
     if (-not (Test-Admin)) { exit 1 }
-    $null = Run-Guard -Verbose $false
+    $null = Run-Guard
     exit 0
 }
 
 if ($GuardNow) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Страж: проверка сейчас'
-    $s = Run-Guard -Verbose $true
+    $s = Run-Guard
     Emit-Json $s
     Write-Log '###DONE###'
     exit 0

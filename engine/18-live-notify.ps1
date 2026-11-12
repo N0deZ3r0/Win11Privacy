@@ -32,10 +32,9 @@ if ($InstallWatcher) {
 if ($RemoveWatcher) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Живые уведомления'
-    try { Unregister-ScheduledTask -TaskName $script:WatcherTask -Confirm:$false -ErrorAction Stop; Write-Log '   [+] уведомления выключены' }
-    catch { Write-Log '   [-] задача уведомлений не найдена' }
+    $rt = Remove-OwnTask $script:WatcherTask 'живые уведомления'
     Write-Log '###DONE###'
-    exit 0
+    exit $(if ($rt -eq 'failed') { 1 } else { 0 })
 }
 
 if ($WatcherNotify) {
@@ -48,7 +47,6 @@ if ($WatcherNotify) {
             if ((Get-Date) -lt $last.AddMinutes(10)) { exit 0 }
         } catch { }
     }
-    $since = (Get-Date).AddMinutes(-11)
     $stats = Get-MonitorStats -Hours 1
     $tele = @($stats.byDest | Where-Object { $_.domain -match $script:TelemetryDnsRegex })
     if ($tele.Count -eq 0) { exit 0 }

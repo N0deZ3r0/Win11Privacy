@@ -276,16 +276,25 @@ function Invoke-OneShotTask {
         # Успех — только если команда задачи завершилась с кодом 0. Раньше «да»
         # возвращалось, едва задача запустилась, и сбой команды выглядел успехом.
         return ($res -eq 0)
-    } catch { return $false }
+    } catch {
+        Write-Log ("   [!] короткая задача не отработала: {0}" -f $_.Exception.Message)
+        return $false
+    }
     finally {
         # имя случайное и заведено нами — удаляем только его. Не дождались —
         # задачу сначала останавливаем: иначе она доработала бы уже без нас и,
         # например, дописала бы итог, который никто не прочтёт.
         if ($registered) {
             if ((Get-ScheduledTaskInfo -TaskPath '\' -TaskName $TaskName -ErrorAction SilentlyContinue).LastTaskResult -eq 267009) {
-                try { Stop-ScheduledTask -TaskPath '\' -TaskName $TaskName -ErrorAction SilentlyContinue } catch { }
+                Stop-ScheduledTask -TaskPath '\' -TaskName $TaskName -ErrorAction SilentlyContinue
             }
-            try { Unregister-ScheduledTask -TaskPath '\' -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+            Unregister-ScheduledTask -TaskPath '\' -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+            # не удалилась — так и сказано: задача от имени системы не должна
+            # оставаться в планировщике незамеченной
+            if (Get-ScheduledTask -TaskPath '\' -TaskName $TaskName -ErrorAction SilentlyContinue) {
+                Write-Log ("   [!] короткая задача «{0}» не удалилась из планировщика -- удалите её вручную" -f $TaskName)
+                $script:Failures++
+            }
         }
     }
 }
@@ -300,11 +309,17 @@ function Set-TaskEnabled {
     $pp = Split-TaskPath $Full
     $t = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
     if (-not $t) { return 'missing' }
+    # отказ администратору — не ошибка: дальше то же сделает задача от SYSTEM
+    $denied = $false
     try {
         if ($Enabled) { Enable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null }
         else { Disable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null }
-        return 'ok'
-    } catch { }
+    } catch { $denied = $true }
+    if (-not $denied) {
+        # «команда прошла» — ещё не «задача такая»: состояние сверяется
+        $t = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
+        if ($t -and (($t.State -eq 'Disabled') -ne $Enabled)) { return 'ok' }
+    }
     $flag = $(if ($Enabled) { '/enable' } else { '/disable' })
     # schtasks запускается напрямую, а не через cmd; кавычка в имени задачи
     # разорвала бы аргумент — такого имени у задачи Windows быть не может
@@ -588,32 +603,28 @@ function Set-MonitorEnabled {
             Write-Log '   [!] не удалось прочитать нынешнюю политику аудита -- включать не будем: потом её нечем было бы вернуть'
             $script:Failures++; return $false
         }
-        if ($On -and $before -ne 3 -and $script:JournalFailed) {
-            Write-Log '   [!] журнал отката сейчас не пишется -- политику аудита не меняем'
-            $script:Failures++; return $false
+        # «Как было» — в журнал раньше изменения, как у всех остальных
+        # изменений (Write-AheadEntry). Раньше запись шла после auditpol, и
+        # обрыв между ними оставлял политику изменённой без пути назад.
+        $ahead = $null
+        if ($On -and $before -ne 3) {
+            $ahead = @{ kind = 'audit'; guid = $script:AuditGuid; old = "$before"; newValue = '3' }
+            if (-not (Write-AheadEntry $ahead)) {
+                Write-Log '   [!] журнал отката сейчас не пишется -- политику аудита не меняем'
+                $script:Failures++; return $false
+            }
         }
         $r = Set-AuditSetting $script:AuditGuid $(if ($On) { 3 } else { 0 })
-        if (-not $r.ok) {
-            Write-Log ("   [!] auditpol не изменил политику аудита (код {0}): {1}" -f $r.code, $r.out)
+        $why = ''
+        if (-not $r.ok) { $why = ("   [!] auditpol не изменил политику аудита (код {0}): {1}" -f $r.code, $r.out) }
+        elseif ((Get-MonitorEnabled) -ne $On) { $why = '   [!] auditpol отработал, но политика аудита осталась прежней -- возможно, её задаёт групповая политика организации' }
+        if ($why) {
+            # политика осталась прежней — изменения не было, запись отзывается;
+            # не прочиталась или стала другой — запись остаётся для отката
+            if ($ahead -and (Get-AuditSetting) -eq $before) { Undo-AheadEntry $ahead }
+            Write-Log $why
             $script:Failures++
             return $false
-        }
-        if ((Get-MonitorEnabled) -ne $On) {
-            Write-Log '   [!] auditpol отработал, но политика аудита осталась прежней -- возможно, её задаёт групповая политика организации'
-            $script:Failures++
-            return $false
-        }
-        if ($On -and $before -ne 3) {
-            Add-JournalEntry @{ kind = 'audit'; guid = $script:AuditGuid; old = "$before"; newValue = '3' }
-            Save-JournalEntries -Quiet
-            # Журнал не записался — изменение без возможности отката не
-            # оставляем: возвращаем политику как была и говорим об этом.
-            if ($script:JournalFailed) {
-                $rb = Set-AuditSetting $script:AuditGuid $before
-                if ($rb.ok -and (Get-AuditSetting) -eq $before) { Write-Log ("   [!] журнал отката не записался -- политика аудита возвращена как была ({0})" -f (Get-AuditName "$before")) }
-                else { Write-Log '   [!] журнал отката не записался, и вернуть прежнюю политику аудита не удалось -- проверьте её вручную (auditpol /get /subcategory:"Filtering Platform Connection")' }
-                return $false      # ошибку журнала Save-JournalEntries уже посчитала
-            }
         }
         Write-Log ("   [+] журнал соединений брандмауэра: {0}" -f $(if ($On) { 'включён' } else { 'выключен' }))
         if ($On) {

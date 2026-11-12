@@ -15,7 +15,8 @@ if ($edInfo.kind -ne 'enterprise' -and (Use-Module 'telemetry')) {
 
 # --- Снимок «до» для доказательства результата -------------------------- #
 if (-not $DryRun -and -not (Load-Json 'proof-before.json')) {
-    try { Save-Json 'proof-before.json' (Get-ProofSnapshot); Write-Log 'Состояние «до» запомнено — потом покажем разницу.' } catch { }
+    try { Save-Json 'proof-before.json' (Get-ProofSnapshot); Write-Log 'Состояние «до» запомнено — потом покажем разницу.' }
+    catch { Write-Log ("   [-] состояние «до» не запомнилось ({0}) -- разницу «до и после» показать будет не с чем" -f $_.Exception.Message) }
 }
 
 $script:BackupEnabled = $true    # дальше идёт ручное применение
@@ -195,7 +196,7 @@ if (-not $DryRun -and ($script:BlockedIds.Count -gt 0 -or $script:UnblockedIds.C
         foreach ($i in $script:BlockedIds.Keys) { $setB[$i] = $true }
         foreach ($i in $script:UnblockedIds.Keys) { $setB.Remove($i) }
         Save-Json 'blocked.json' @{ ids = @($setB.Keys); updated = (Get-Date).ToString('s') }
-    } catch { }
+    } catch { Write-Log ("   [-] список настроек, которые Windows не отдала, не сохранился: {0}" -f $_.Exception.Message) }
 }
 
 Write-Log ("Изменений применено : {0}" -f $script:Changes)

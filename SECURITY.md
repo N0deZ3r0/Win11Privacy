@@ -42,6 +42,10 @@ and ETW trace sessions, and it runs elevated. In scope:
 Out of scope: telemetry that Windows collects and this tool does not claim to
 disable, and vulnerabilities in Windows itself.
 
+How the tool protects its data, journal and rollback — trust boundaries,
+write-ahead logging, what survives a crash, known limits — is described in
+[docs/security-model.md](docs/security-model.md).
+
 ---
 
 # Политика безопасности
@@ -74,3 +78,7 @@ disable, and vulnerabilities in Windows itself.
 
 Вне области: телеметрия Windows, которую программа не заявляет отключаемой, и
 уязвимости самой Windows.
+
+Как программа защищает свои данные, журнал и откат — границы доверия, журнал
+раньше изменения, что переживает обрыв, известные пределы, — описано в
+[docs/security-model.md](docs/security-model.md#модель-безопасности-и-гарантии-отката).

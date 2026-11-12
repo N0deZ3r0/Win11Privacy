@@ -91,11 +91,7 @@ function Restore-ChangeKey {
     $jf = Read-JournalFile
     if (-not $jf.trusted) { return @{ ok = $false; error = 'журналу отката нельзя верить: подпись не сошлась или её нечем проверить' } }
     if ($jf.items.Count -eq 0) { return @{ ok = $false; error = 'журнал пуст' } }
-    $mine = @(); $rest = @()
-    foreach ($e in $jf.items) {
-        $k = Get-JournalKey (ConvertTo-Fields $e)
-        if ($k -eq $Key) { $mine += $e } else { $rest += $e }
-    }
+    $mine = @($jf.items | Where-Object { (Get-JournalKey (ConvertTo-Fields $_)) -eq $Key })
     if ($mine.Count -eq 0) { return @{ ok = $false; error = 'запись не найдена' } }
     $first = $mine[0]              # самое раннее состояние
     $why = Test-JournalEntryShape $first
@@ -103,12 +99,13 @@ function Restore-ChangeKey {
     if ("$($first.kind)" -eq 'startup') {
         $r = Set-StartupState ([string]$first.id) ("$($first.old)" -eq 'On')
     } elseif ("$($first.kind)" -eq 'hive') {
-        $r = Restore-HiveEntry $first
+        $r = (Restore-HiveEntries @($first))[0]
     } else {
         $r = Restore-JournalEntry $first
     }
     if (-not $r.ok) { return @{ ok = $false; error = "$($r.error)" } }
-    try { Use-JournalLock { Write-JournalFile $rest $jf.legacy } }
+    # журнал перечитывается под замком: дописанное другим запуском остаётся
+    try { Remove-JournalKey $Key }
     catch { return @{ ok = $false; error = ('возвращено, но журнал не переписался: ' + $_.Exception.Message) } }
     return @{ ok = $true }
 }

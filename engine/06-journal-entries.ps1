@@ -3,20 +3,14 @@
 #  «по умолчанию»: DiagTrack — автоматически, все задачи из списка — включить.
 #  Задача, которую человек выключил сам задолго до программы, после отката
 #  включалась. Теперь у каждой записано, какой она была до нас.
-function Add-JournalEntry {
-    param($Entry)
-    if ($DryRun) { return }
-    $Entry['time'] = (Get-Date).ToString('s')
-    $script:Journal.Add($Entry)
-    if ($script:Journal.Count -ge 10) { Save-JournalEntries -Quiet }
-}
-
-# Журнал раньше изменения (write-ahead). Прежде запись о том, «как было»,
-# добавлялась после изменения и ложилась на диск пачками по десять: обрыв
-# процесса между изменением и записью оставлял изменение без пути назад.
-# Теперь «как было» сначала ложится на диск, и только потом меняется
-# система. Не легло — менять нельзя ($false). Изменение не прошло — запись
-# отзывается (Undo-AheadEntry): «было» в ней верное, просто изменения не было.
+#
+# Журнал раньше изменения (write-ahead) — единственный способ записи в журнал.
+# Прежде запись о том, «как было», добавлялась после изменения и ложилась на
+# диск пачками по десять: обрыв процесса между изменением и записью оставлял
+# изменение без пути назад. Теперь «как было» сначала ложится на диск, и
+# только потом меняется система. Не легло — менять нельзя ($false). Изменение
+# не прошло — запись отзывается (Undo-AheadEntry): «было» в ней верное, просто
+# изменения не было.
 function Write-AheadEntry {
     param($Entry)
     if ($DryRun) { return $true }
@@ -31,9 +25,11 @@ function Write-AheadEntry {
 function Undo-AheadEntry {
     param($Entry)
     if ($DryRun) { return }
-    # ещё не на диске — просто убрать из очереди; уже на диске — отозвать при следующей записи
+    # ещё не на диске — просто убрать из очереди; уже на диске — отозвать
+    # сразу же: команда может закончиться, не записав журнал ещё раз
     if ($script:Journal.Remove($Entry)) { return }
     $null = $script:JournalRetract.Add((Get-JournalKey (ConvertTo-Fields $Entry)))
+    Save-JournalEntries -Quiet
 }
 
 # Менять систему можно, только пока журнал отката пишется. Раньше это
@@ -55,12 +51,6 @@ function Get-SvcJournalState {
               delayed = $(if ($null -ne $delayed) { "$delayed" } else { '' })
               running = [bool]($Svc -and $Svc.Status -eq 'Running')
               newValue = '4' }
-}
-
-# Задачу программа гасит, только если она была включена, — это и запоминаем
-function Add-TaskJournal {
-    param([string]$Path)
-    Add-JournalEntry @{ kind = 'task'; path = $Path; old = 'Enabled'; newValue = 'Disabled' }
 }
 
 # Политика аудита словами — для страницы «Журнал изменений»
@@ -92,13 +82,12 @@ function Test-JournalEntryShape {
     param($Entry)
     $f = ConvertTo-Fields $Entry
     $kind = "$($f['kind'])"
-    $types = @('String', 'ExpandString', 'DWord', 'QWord', 'Binary', 'MultiString')
     $regPath = '^(HKLM|HKCU):\\[^\x00-\x1f]+$|^Registry::HKEY_(LOCAL_MACHINE|CURRENT_USER|USERS)\\[^\x00-\x1f]+$'
     switch ($kind) {
         'reg' {
             if ("$($f['path'])" -notmatch $regPath) { return 'путь не в ветке реестра' }
             if (-not "$($f['name'])") { return 'пустое имя параметра' }
-            if ($f['existed'] -and "$($f['type'])" -notin $types) { return 'неизвестный тип значения' }
+            if ($f['existed'] -and -not (Test-RegKind "$($f['type'])")) { return 'неизвестный тип значения' }
             return ''
         }
         'svc' {
@@ -127,14 +116,50 @@ function Test-JournalEntryShape {
             return ''
         }
         'hive' {
-            if ("$($f['file'])" -notmatch '^[A-Za-z]:\\[^\x00-\x1f]*\\NTUSER\.DAT$') { return 'недопустимый файл куста' }
+            # кавычка в пути разорвала бы аргумент reg.exe load; в путях Windows её не бывает
+            if ("$($f['file'])" -notmatch '^[A-Za-z]:\\[^\x00-\x1f"]*\\NTUSER\.DAT$') { return 'недопустимый файл куста' }
             if ("$($f['sub'])" -match '^\\|\.\.|[\x00-\x1f]' -or -not "$($f['sub'])") { return 'недопустимый путь в кусте' }
             if (-not "$($f['name'])") { return 'пустое имя параметра' }
-            if ($f['existed'] -and "$($f['type'])" -notin $types) { return 'неизвестный тип значения' }
+            if ($f['existed'] -and -not (Test-RegKind "$($f['type'])")) { return 'неизвестный тип значения' }
             return ''
         }
     }
     return 'неизвестный вид записи'
+}
+
+# Возвращает параметр реестра к тому, что было, и сверяет: «команда прошла» —
+# ещё не «вернулось». Раньше успехом считался сам вызов New-ItemProperty.
+# Было — значит, параметр есть, того же вида и с теми же данными; не было —
+# параметра нет (ключ, в котором его нет, при этом не трогается). Повторный
+# вызов ничего не портит: вернувшееся просто ещё раз сверяется.
+function Restore-RegValue {
+    param([string]$Path, [string]$Name, [bool]$Existed, $Old, [string]$Type)
+    try {
+        if ($Existed) {
+            if (-not (Test-Path -LiteralPath $Path)) { New-Item -Path $Path -Force -ErrorAction Stop | Out-Null }
+            # из JSON двоичное и многострочное приходят массивами чисел и строк
+            $v = $Old
+            if ($Type -eq 'Binary') { $v = [byte[]]@(@($Old) | Where-Object { $null -ne $_ }) }
+            elseif ($Type -eq 'MultiString') { $v = [string[]]@(@($Old) | Where-Object { $null -ne $_ }) }
+            New-ItemProperty -LiteralPath $Path -Name $Name -Value $v -PropertyType $Type -Force -ErrorAction Stop | Out-Null
+        } else {
+            $was = Get-RegRaw $Path $Name
+            if (-not $was.ok) { return @{ ok = $false; error = ("параметр не прочитался: {0}" -f $was.error) } }
+            if ($was.exists) { Remove-ItemProperty -LiteralPath $Path -Name $Name -Force -ErrorAction Stop }
+        }
+    } catch { return @{ ok = $false; error = $_.Exception.Message } }
+    $now = Get-RegRaw $Path $Name
+    if (-not $now.ok) { return @{ ok = $false; error = ("после возврата параметр не прочитался: {0}" -f $now.error) } }
+    if (-not $Existed) {
+        if ($now.exists) { return @{ ok = $false; error = 'параметр не убрался' } }
+        return @{ ok = $true }
+    }
+    if (-not $now.exists) { return @{ ok = $false; error = 'после записи параметра нет' } }
+    if ($now.kind -ne $Type) { return @{ ok = $false; error = ("вид значения {0}, а было {1}" -f $now.kind, $Type) } }
+    $want = ConvertTo-RegComparable $Old $Type
+    $got = ConvertTo-RegComparable $now.value $Type
+    if ($got -ne $want) { return @{ ok = $false; error = ("читается «{0}», а было «{1}»" -f $got, $want) } }
+    return @{ ok = $true }
 }
 
 # Возвращает одну запись журнала (реестр, служба, задача, переменная среды).
@@ -175,6 +200,11 @@ function Restore-JournalEntry {
             'env' {
                 $v = $(if ($e.existed) { "$($e.old)" } else { $null })
                 [Environment]::SetEnvironmentVariable("$($e.name)", $v, 'User')
+                # сверка: пустое значение Windows хранит как «переменной нет»
+                $now = [Environment]::GetEnvironmentVariable("$($e.name)", 'User')
+                if ([string]::IsNullOrEmpty($v)) {
+                    if (-not [string]::IsNullOrEmpty($now)) { return @{ ok = $false; error = 'переменная не убралась' } }
+                } elseif ($now -cne $v) { return @{ ok = $false; error = ("переменная читается «{0}», а было «{1}»" -f $now, $v) } }
                 return @{ ok = $true }
             }
             'audit' {
@@ -183,13 +213,7 @@ function Restore-JournalEntry {
                 return @{ ok = $false; error = ("auditpol (код {0}): {1}" -f $r.code, $r.out) }
             }
             default {
-                if ($e.existed) {
-                    if (-not (Test-Path -LiteralPath $e.path)) { New-Item -Path $e.path -Force -ErrorAction Stop | Out-Null }
-                    New-ItemProperty -LiteralPath $e.path -Name $e.name -Value $e.old -PropertyType $e.type -Force -ErrorAction Stop | Out-Null
-                } else {
-                    Remove-ItemProperty -LiteralPath $e.path -Name $e.name -Force -ErrorAction SilentlyContinue
-                }
-                return @{ ok = $true }
+                return (Restore-RegValue "$($e.path)" "$($e.name)" ([bool]$e.existed) $e.old "$($e.type)")
             }
         }
     } catch { return @{ ok = $false; error = $_.Exception.Message } }

@@ -221,6 +221,7 @@ By hand, if you prefer (after editing `engine/`, run `python tools/build_engine.
 | **tests/engine-tests.ps1** | Behaviour checks for the engine; the GitHub build runs the same ones. Read-only. |
 | **tests/roundtrip.ps1** | Apply, verify and revert for real, then compare every value with the original one. It changes the system, so it needs the `-Confirmed` switch; the build runs it on a disposable machine. |
 | **CHANGELOG.md** | What changed in every version. The release text on GitHub is taken from here. |
+| **docs/security-model.md** | The security model and rollback guarantees: trust boundaries, the signed journal, write-ahead logging, what survives a crash, how restores are verified, known limits. |
 | **tools/build_engine.py** | Builds `Win11-Privacy-Engine.ps1` from the parts in `engine/`. `--check` compares them, and the build insists on it; `--where N` finds a line of the built file in its part. It stops instead of overwriting the built file if that file was edited by hand (`--force` overwrites anyway). |
 | **tools/release_notes.py** | Builds the release text: the version's section from `CHANGELOG.md`, how to run, and the attached files. |
 | **tools/make_winget.py** | Builds the winget catalogue manifest from the version and the release checksum. |
