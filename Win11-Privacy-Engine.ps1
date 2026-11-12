@@ -235,6 +235,10 @@ $script:UnblockedIds = @{}
 # Журнал изменений реестра: что было до нашего вмешательства.
 # Без него откат требовал ручного импорта .reg-файлов.
 $script:Journal = New-Object System.Collections.Generic.List[object]
+# Метка этого запуска в записях журнала и ключи записей, которые этот запуск
+# положил заранее, а изменение потом не прошло: их убирает следующая запись.
+$script:RunId = [guid]::NewGuid().ToString('N')
+$script:JournalRetract = New-Object 'System.Collections.Generic.HashSet[string]'
 $script:TelemetryDnsRegex = 'telemetry|vortex|events\.data\.microsoft|pipe\.aria|watson|settings-win\.data|ceipdata|telecommand|sqm\.|nexusrules|nexus\.officeapps|data\.microsoft\.com|activity\.windows\.com|licensing\.mp\.microsoft|browser\.events|dds\.microsoft\.com|cdpcs\.access\.microsoft|\.do\.dsp\.mp\.microsoft'
 
 # =========================================================================== #
@@ -322,12 +326,19 @@ function Set-Reg {
     $cur = Get-RegValue $Path $Name
     if ($null -ne $cur -and (ConvertTo-RegComparable $cur $Type) -eq (ConvertTo-RegComparable $Value $Type)) { Write-Log "   [в] $label -- уже настроено"; $script:Already++; return }
 
-    # ВАЖНО: в журнал отката пишем только после удачной записи. Раньше запись
-    # добавлялась заранее, и неудавшиеся попытки оседали в журнале как
-    # «изменения», которых на самом деле не было.
+    # Менять можно, только пока пишется журнал отката, — в том числе при
+    # прямых вызовах (монитор, чистка), а не только из применения модулей.
+    if (-not (Test-CanModify $label)) { return }
     Ensure-Backup          # копию делаем перед первым изменением, а не «всегда»
     $existed = [bool]($null -ne $cur)
     $oldValue = $(if ($existed) { $cur } else { '' })
+    # «Как было» — на диск раньше изменения (см. Write-AheadEntry). Если
+    # изменение не пройдёт, запись отзывается: изменения ведь не было.
+    $entry = @{ kind = 'reg'; path = $Path; name = $Name; type = $Type; existed = $existed; old = $oldValue; newValue = "$Value" }
+    if (-not (Write-AheadEntry $entry)) {
+        Write-Log "   [!] $label -- не меняется: «как было» не легло в журнал отката"
+        $script:Failures++; return
+    }
     $done = $false
     $why = ''
     try {
@@ -337,25 +348,17 @@ function Set-Reg {
     } catch {
         $why = ("{0}: {1}" -f $_.Exception.GetType().Name, $_.Exception.Message)
         $after = Get-RegValue $Path $Name
-        if ($null -ne $after -and (ConvertTo-RegComparable $after $Type) -eq (ConvertTo-RegComparable $Value $Type)) { Write-Log "   [в] $label -- уже настроено"; $script:Already++; return }
+        if ($null -ne $after -and (ConvertTo-RegComparable $after $Type) -eq (ConvertTo-RegComparable $Value $Type)) {
+            Undo-AheadEntry $entry
+            Write-Log "   [в] $label -- уже настроено"; $script:Already++; return
+        }
         $retry = Set-RegDirect -Path $Path -Name $Name -Value $Value -Type $Type
         if ($retry.ok) { $done = $true } else { $why += " / вторая попытка: $($retry.error)" }
     }
 
     if ($done) {
-        # Значение в реестре уже другое, чем было, — поэтому в журнал оно идёт
-        # в любом случае. Ошибка здесь больше не глотается: изменение без
-        # записи в журнале нельзя было бы вернуть.
-        try {
-            $script:Journal.Add(@{ kind = 'reg'; path = $Path; name = $Name; type = $Type
-                                   existed = $existed; old = $oldValue
-                                   newValue = "$Value"; time = (Get-Date).ToString('s') })
-            if ($script:Journal.Count -ge 10) { Save-JournalEntries -Quiet }
-        } catch {
-            Write-Log ("   [!] {0} -- изменено, но в журнал отката не записалось: {1}" -f $label, $_.Exception.Message)
-            $script:JournalFailed = $true; $script:Failures++; return
-        }
-        # «Команда прошла» — ещё не «значение такое»: читаем обратно и сверяем
+        # «Команда прошла» — ещё не «значение такое»: читаем обратно и сверяем.
+        # Запись в журнале остаётся в любом случае: значение уже не прежнее.
         $now = Get-RegValue $Path $Name
         $want = ConvertTo-RegComparable $Value $Type
         $got = ConvertTo-RegComparable $now $Type
@@ -369,6 +372,8 @@ function Set-Reg {
         return
     }
 
+    # изменения не было — заранее положенная запись отзывается
+    Undo-AheadEntry $entry
     if ($why -like '*UnauthorizedAccessException*' -or $why -like '*SecurityException*') {
         # Часть политик Windows держит сама и не отдаёт даже администратору —
         # это не поломка программы, а решение системы, и в ошибки оно не идёт.
@@ -403,21 +408,79 @@ function Get-FolderSizeMB {
     return [math]::Round($sum / 1MB, 1)
 }
 
+# Удаление дерева, которое не заходит внутрь ссылок. Remove-Item -Recurse в
+# PowerShell 5.1 проходит по junction и символическим ссылкам и удаляет то,
+# куда они ведут: ссылка во временной папке на «Документы» стёрла бы
+# документы. Здесь ссылка удаляется сама, как запись, — её цель не трогается.
+# $Stats — @{ deleted; failed; errors }: что удалено, что нет и почему.
+function Remove-TreeNoFollow {
+    param([string]$Path, $Stats)
+    try { $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop } catch { return }
+    try {
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            if ($item.PSIsContainer) { [IO.Directory]::Delete($item.FullName, $false) } else { [IO.File]::Delete($item.FullName) }
+            $Stats.deleted++
+            return
+        }
+        if ($item.PSIsContainer) {
+            foreach ($c in @(Get-ChildItem -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue)) { Remove-TreeNoFollow $c.FullName $Stats }
+            # папка уходит, только если опустела: что внутри не удалилось, уже посчитано
+            if (@(Get-ChildItem -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue).Count -eq 0) { [IO.Directory]::Delete($item.FullName, $false) }
+            return
+        }
+        if ($item.Attributes -band [IO.FileAttributes]::ReadOnly) { $item.Attributes = $item.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly) }
+        [IO.File]::Delete($item.FullName)
+        $Stats.deleted++
+    } catch {
+        $Stats.failed++
+        if ($Stats.errors.Count -lt 3) { $Stats.errors.Add(("{0}: {1}" -f $item.Name, $_.Exception.Message)) }
+    }
+}
+
+# Папки, которые очищать нельзя ни при каком пути: корень диска и системные корни
+function Test-ClearForbidden {
+    param([string]$Full)
+    $f = $Full.TrimEnd('\')
+    if ($f -eq ([IO.Path]::GetPathRoot($Full)).TrimEnd('\')) { return $true }
+    foreach ($p in @($env:SystemRoot, "$env:SystemRoot\System32", $env:ProgramData, $env:ProgramFiles, ${env:ProgramFiles(x86)},
+                     $env:USERPROFILE, [Environment]::GetFolderPath('MyDocuments'), [Environment]::GetFolderPath('Desktop'), (Split-Path $env:USERPROFILE -Parent))) {
+        if ($p -and $f -eq ([IO.Path]::GetFullPath($p)).TrimEnd('\')) { return $true }
+    }
+    return $false
+}
+
 function Clear-FolderContents {
     param([string]$FolderPath, [string]$Label, [string]$Step = '')
     if (-not (Test-Path -LiteralPath $FolderPath)) {
         if ($Step) { Write-Log ("   {0} {1} -- нечего чистить" -f $Step, $Label) }
         return 0.0
     }
+    $full = [IO.Path]::GetFullPath($FolderPath)
+    # Сама папка — ссылка (например, временную папку подменили junction на
+    # «Документы») или корень, который чистить нельзя: отказ, а не удаление.
+    $dirItem = Get-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
+    if (($dirItem -and ($dirItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) -or (Test-ClearForbidden $full)) {
+        Write-Log ("   [!] {0} -- папка {1} ведёт не туда (ссылка или системная папка) -- не очищается" -f $Label, $full)
+        $script:Failures++
+        return 0.0
+    }
     # Большую папку посчитать и вычистить — это минуты, а строка шага
     # появлялась только в конце, и чистка выглядела зависшей.
     if ($Step) { Write-Log ("   {0} {1}..." -f $Step, $Label) }
-    $before = Get-FolderSizeMB $FolderPath
+    $before = Get-FolderSizeMB $full
     if ($DryRun) { Write-Log ("   {0} [тест] {1} -- можно освободить ~{2} МБ" -f $Step, $Label, $before); return 0.0 }
-    Get-ChildItem -LiteralPath $FolderPath -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    $freed = [math]::Max(0, [math]::Round($before - (Get-FolderSizeMB $FolderPath), 1))
+    $st = @{ deleted = 0; failed = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+    foreach ($c in @(Get-ChildItem -LiteralPath $full -Force -ErrorAction SilentlyContinue)) { Remove-TreeNoFollow $c.FullName $st }
+    $freed = [math]::Max(0, [math]::Round($before - (Get-FolderSizeMB $full), 1))
     if ($Step) { Write-Log ("   {0} {1} -- освобождено {2} МБ" -f $Step, $Label, $freed) }
     else { Write-Log ("   [+] {0} -- освобождено {1} МБ" -f $Label, $freed) }
+    # Что не удалилось, называется: раньше ошибки глушились, и «освобождено»
+    # выглядело полным. Занятые файлы — обычное дело, это сведения, а не сбой.
+    if ($st.failed -gt 0) {
+        Write-Log ("       не удалено (заняты или нет доступа): {0}" -f $st.failed)
+        foreach ($e in $st.errors) { Write-Log ("       {0}" -f $e) }
+    }
+    $script:LastClear = $st
     return [double]$freed
 }
 
@@ -686,8 +749,12 @@ function Save-Json {
     Ensure-DataDir
     $path = Join-Path $script:DataDir $Name
     $tmp = $path + '.tmp'
-    ($Object | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $tmp -Encoding UTF8
-    Move-Item -LiteralPath $tmp -Destination $path -Force
+    ($Object | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $tmp -Encoding UTF8 -ErrorAction Stop
+    # Замена одним действием системы (ReplaceFile). Move-Item -Force делал
+    # «удалить старый, переименовать новый» — между ними журнала не было
+    # вовсе, и обрыв в этот миг оставлял программу без пути назад.
+    if (Test-Path -LiteralPath $path) { [IO.File]::Replace($tmp, $path, [NullString]::Value) }
+    else { [IO.File]::Move($tmp, $path) }
 }
 # --- Резервная копия и точка восстановления --------------------------------- #
 #  Делаются не «на всякий случай» при каждом запуске, а ровно перед первым
@@ -721,7 +788,7 @@ function Ensure-Backup {
                 # поток ошибок родной программы превращается в терминирующую
                 # ошибку, и одна нечитаемая ветка обрывала всю копию целиком.
                 # итог считается ниже по файлу на диске, а не по этому вызову
-        try { $null = & cmd.exe /c "reg export `"$native`" `"$file`" /y >nul 2>&1" } catch { }
+                try { $null = & cmd.exe /c "reg export `"$native`" `"$file`" /y >nul 2>&1" } catch { }
                 # считаем только то, что действительно легло на диск: раньше
                 # счётчик прибавлял на каждую попытку, и в журнале стояло
                 # «сохранено веток: 35», даже если часть выгрузить не удалось
@@ -743,12 +810,23 @@ function Ensure-Backup {
 
     if (-not $NoRestorePoint) {
         Write-Section 'Точка восстановления системы'
+        # Чтобы Windows не отказала «точка уже была сегодня», частота создания
+        # точек на время ставится в 0. Раньше так и оставалась — системная
+        # настройка менялась навсегда и мимо журнала. Теперь возвращается.
+        $srKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
+        $srOld = Get-RegValue $srKey 'SystemRestorePointCreationFrequency'
         try {
             Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction SilentlyContinue
-            New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore' -Name 'SystemRestorePointCreationFrequency' -Value 0 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
+            New-ItemProperty -Path $srKey -Name 'SystemRestorePointCreationFrequency' -Value 0 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
             Checkpoint-Computer -Description 'Win11Privacy: до изменений' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop
             Write-Log '   [+] точка восстановления создана'
         } catch { Write-Log "   [!] точку восстановления создать не удалось: $($_.Exception.Message)" }
+        finally {
+            try {
+                if ($null -ne $srOld) { New-ItemProperty -Path $srKey -Name 'SystemRestorePointCreationFrequency' -Value $srOld -PropertyType DWord -Force -ErrorAction Stop | Out-Null }
+                else { Remove-ItemProperty -Path $srKey -Name 'SystemRestorePointCreationFrequency' -Force -ErrorAction SilentlyContinue }
+            } catch { Write-Log "   [!] частота точек восстановления не вернулась: $($_.Exception.Message)"; $script:Failures++ }
+        }
     }
 }
 
@@ -1052,17 +1130,25 @@ function Compress-Journal {
 # ($script:JournalFailed) — менять систему без записи для отката нельзя.
 function Save-JournalEntries {
     param([switch]$Quiet)
-    if ($DryRun -or $script:Journal.Count -eq 0) { return }
+    if ($DryRun -or ($script:Journal.Count -eq 0 -and $script:JournalRetract.Count -eq 0)) { return }
     $mine = $script:Journal.Count
     try {
         if (-not (Test-DataTrusted)) { throw 'папка данных программы не защищена от подмены' }
         Use-JournalLock {
             $prev = Read-JournalFile
             $all = New-Object System.Collections.Generic.List[object]
-            foreach ($e in @($prev.items)) { $all.Add($e) }
+            foreach ($e in @($prev.items)) {
+                # Записи, положенные заранее этим же запуском, чьё изменение не
+                # прошло: «было» там верное, но изменения не было — убираем.
+                # Записи прежних запусков с тем же ключом не трогаются.
+                if ($script:JournalRetract.Count -gt 0 -and "$($e.run)" -eq $script:RunId -and
+                    $script:JournalRetract.Contains((Get-JournalKey (ConvertTo-Fields $e)))) { continue }
+                $all.Add($e)
+            }
             foreach ($e in $script:Journal) { $all.Add($e) }
             Write-JournalFile (Compress-Journal $all.ToArray()) $prev.legacy
             $script:Journal.Clear()
+            $script:JournalRetract.Clear()
         }
     } catch {
         if (-not $script:JournalFailed) {
@@ -1100,6 +1186,40 @@ function Add-JournalEntry {
     $Entry['time'] = (Get-Date).ToString('s')
     $script:Journal.Add($Entry)
     if ($script:Journal.Count -ge 10) { Save-JournalEntries -Quiet }
+}
+
+# Журнал раньше изменения (write-ahead). Прежде запись о том, «как было»,
+# добавлялась после изменения и ложилась на диск пачками по десять: обрыв
+# процесса между изменением и записью оставлял изменение без пути назад.
+# Теперь «как было» сначала ложится на диск, и только потом меняется
+# система. Не легло — менять нельзя ($false). Изменение не прошло — запись
+# отзывается (Undo-AheadEntry): «было» в ней верное, просто изменения не было.
+function Write-AheadEntry {
+    param($Entry)
+    if ($DryRun) { return $true }
+    if ($script:JournalFailed) { return $false }
+    $Entry['time'] = (Get-Date).ToString('s')
+    $Entry['run'] = $script:RunId
+    $script:Journal.Add($Entry)
+    Save-JournalEntries -Quiet
+    return (-not $script:JournalFailed)
+}
+
+function Undo-AheadEntry {
+    param($Entry)
+    if ($DryRun) { return }
+    # ещё не на диске — просто убрать из очереди; уже на диске — отозвать при следующей записи
+    if ($script:Journal.Remove($Entry)) { return }
+    $null = $script:JournalRetract.Add((Get-JournalKey (ConvertTo-Fields $Entry)))
+}
+
+# Менять систему можно, только пока журнал отката пишется. Раньше это
+# проверялось в применении модулей, но не в прямых вызовах записи реестра.
+function Test-CanModify {
+    param([string]$Label)
+    if ($DryRun) { return $true }
+    if ($script:JournalFailed) { Write-Log ("   [!] {0} -- не меняется: журнал отката сейчас не пишется" -f $Label); $script:Failures++; return $false }
+    return $true
 }
 
 function Get-SvcJournalState {
@@ -1140,6 +1260,60 @@ function Get-StartName {
     return 'не было'
 }
 
+# Форма записи журнала перед тем, как по ней что-то делать. Подпись говорит,
+# что запись не меняли, но не то, что она допустима: вид — из известных, поля
+# на месте, пути реестра — только в его ветках, имена служб, задач и
+# переменных — допустимого вида, GUID аудита — наш. Пустая строка — годится,
+# иначе — почему нет.
+function Test-JournalEntryShape {
+    param($Entry)
+    $f = ConvertTo-Fields $Entry
+    $kind = "$($f['kind'])"
+    $types = @('String', 'ExpandString', 'DWord', 'QWord', 'Binary', 'MultiString')
+    $regPath = '^(HKLM|HKCU):\\[^\x00-\x1f]+$|^Registry::HKEY_(LOCAL_MACHINE|CURRENT_USER|USERS)\\[^\x00-\x1f]+$'
+    switch ($kind) {
+        'reg' {
+            if ("$($f['path'])" -notmatch $regPath) { return 'путь не в ветке реестра' }
+            if (-not "$($f['name'])") { return 'пустое имя параметра' }
+            if ($f['existed'] -and "$($f['type'])" -notin $types) { return 'неизвестный тип значения' }
+            return ''
+        }
+        'svc' {
+            if ("$($f['name'])" -notmatch '^[A-Za-z0-9_.\-$]{1,256}$') { return 'недопустимое имя службы' }
+            if ("$($f['old'])" -notmatch '^[0-4]?$') { return 'недопустимый тип запуска' }
+            if ("$($f['delayed'])" -notmatch '^[01]?$') { return 'недопустимый отложенный запуск' }
+            return ''
+        }
+        'task' {
+            if ("$($f['path'])" -notmatch '^\\[^"\x00-\x1f%]+$') { return 'недопустимый путь задачи' }
+            if ("$($f['old'])" -notin @('Enabled', 'Disabled')) { return 'недопустимое состояние задачи' }
+            return ''
+        }
+        'env' {
+            if ("$($f['name'])" -notmatch '^[A-Za-z_][A-Za-z0-9_]{0,254}$') { return 'недопустимое имя переменной' }
+            return ''
+        }
+        'audit' {
+            if ("$($f['guid'])" -ne $script:AuditGuid) { return 'чужая подкатегория аудита' }
+            if ("$($f['old'])" -notmatch '^[0-3]$') { return 'недопустимое значение аудита' }
+            return ''
+        }
+        'startup' {
+            if (-not "$($f['id'])") { return 'пустая запись автозагрузки' }
+            if ("$($f['old'])" -notin @('On', 'Off')) { return 'недопустимое состояние автозагрузки' }
+            return ''
+        }
+        'hive' {
+            if ("$($f['file'])" -notmatch '^[A-Za-z]:\\[^\x00-\x1f]*\\NTUSER\.DAT$') { return 'недопустимый файл куста' }
+            if ("$($f['sub'])" -match '^\\|\.\.|[\x00-\x1f]' -or -not "$($f['sub'])") { return 'недопустимый путь в кусте' }
+            if (-not "$($f['name'])") { return 'пустое имя параметра' }
+            if ($f['existed'] -and "$($f['type'])" -notin $types) { return 'неизвестный тип значения' }
+            return ''
+        }
+    }
+    return 'неизвестный вид записи'
+}
+
 # Возвращает одну запись журнала (реестр, служба, задача, переменная среды).
 # Записи автозагрузки и чужих профилей возвращаются своими функциями.
 function Restore-JournalEntry {
@@ -1155,14 +1329,24 @@ function Restore-JournalEntry {
                 if ($type) { Set-Service -Name $name -StartupType $type -ErrorAction Stop }
                 elseif ($start -ne '') { Set-ItemProperty -LiteralPath $k -Name 'Start' -Value ([int]$start) -Type DWord -ErrorAction Stop }
                 if ("$($e.delayed)" -ne '') { Set-ItemProperty -LiteralPath $k -Name 'DelayedAutostart' -Value ([int]"$($e.delayed)") -Type DWord -ErrorAction SilentlyContinue }
-                # работала до нас — запускаем снова, чтобы не ждать перезагрузки
-                if ($e.running -and $start -ne '4') { Start-Service -Name $name -ErrorAction SilentlyContinue }
+                # тип запуска сверяется: «команда прошла» — ещё не «вернулось»
+                if ($start -ne '' -and "$(Get-RegValue $k 'Start')" -ne $start) {
+                    return @{ ok = $false; error = ("тип запуска не вернулся: сейчас {0}, нужно {1}" -f (Get-StartName "$(Get-RegValue $k 'Start')"), (Get-StartName $start)) }
+                }
+                # работала до нас — запускаем снова, чтобы не ждать перезагрузки;
+                # не запустилась сейчас — так и сказано (тип запуска уже верный)
+                if ($e.running -and $start -ne '4') {
+                    try { Start-Service -Name $name -ErrorAction Stop }
+                    catch { return @{ ok = $true; note = ("тип запуска возвращён, но сейчас служба не запустилась: {0}" -f $_.Exception.Message) } }
+                }
                 return @{ ok = $true }
             }
             'task' {
                 if ("$($e.old)" -ne 'Enabled') { return @{ ok = $true } }
                 $r = Set-TaskEnabled "$($e.path)" $true
-                if ($r -in @('ok', 'system', 'missing')) { return @{ ok = $true } }
+                if ($r -in @('ok', 'system')) { return @{ ok = $true } }
+                # задачи больше нет — возвращать нечего, но это не «вернулось»
+                if ($r -eq 'missing') { return @{ ok = $true; note = 'задачи больше нет' } }
                 return @{ ok = $false; error = 'Windows не дала включить задачу' }
             }
             'env' {
@@ -1999,11 +2183,19 @@ function Apply-Def {
                 if ($s.StartType -eq 'Disabled' -and $s.Status -ne 'Running') {
                     Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
                 }
+                if (-not (Test-CanModify $d.C)) { return }
                 Ensure-Backup
                 $was = Get-SvcJournalState $d.P $s
-                if ($s.Status -eq 'Running') { Stop-Service -Name $d.P -Force -ErrorAction SilentlyContinue }
-                Set-Service -Name $d.P -StartupType Disabled -ErrorAction Stop
-                Add-JournalEntry $was
+                if (-not (Write-AheadEntry $was)) { Write-Log "   [!] $($d.C) -- не меняется: «как было» не легло в журнал отката"; $script:Failures++; return }
+                try {
+                    if ($s.Status -eq 'Running') { Stop-Service -Name $d.P -Force -ErrorAction SilentlyContinue }
+                    Set-Service -Name $d.P -StartupType Disabled -ErrorAction Stop
+                } catch {
+                    # не отключилась — работавшую запускаем обратно, запись отзываем
+                    if ($was.running) { Start-Service -Name $d.P -ErrorAction SilentlyContinue }
+                    Undo-AheadEntry $was
+                    throw
+                }
                 Write-Log "   [+] $($d.C) -- остановлена и отключена"; $script:Changes++
             } catch { Write-Log "   [-] $($d.C) -- недоступна" }
         }
@@ -2015,11 +2207,18 @@ function Apply-Def {
                 if ($s.StartType -eq 'Disabled' -and $s.Status -ne 'Running') {
                     Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
                 }
+                if (-not (Test-CanModify $d.C)) { return }
                 Ensure-Backup
                 $was = Get-SvcJournalState $d.P $s
-                if ($s.Status -eq 'Running') { Stop-Service -Name $d.P -Force -ErrorAction SilentlyContinue }
-                Set-Service -Name $d.P -StartupType Disabled -ErrorAction Stop
-                Add-JournalEntry $was
+                if (-not (Write-AheadEntry $was)) { Write-Log "   [!] $($d.C) -- не меняется: «как было» не легло в журнал отката"; $script:Failures++; return }
+                try {
+                    if ($s.Status -eq 'Running') { Stop-Service -Name $d.P -Force -ErrorAction SilentlyContinue }
+                    Set-Service -Name $d.P -StartupType Disabled -ErrorAction Stop
+                } catch {
+                    if ($was.running) { Start-Service -Name $d.P -ErrorAction SilentlyContinue }
+                    Undo-AheadEntry $was
+                    throw
+                }
                 Write-Log "   [+] $($d.C) -- отключена"; $script:Changes++
             } catch { Write-Log "   [-] $($d.C) -- не удалось" }
         }
@@ -2029,12 +2228,15 @@ function Apply-Def {
             $st = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
             if (-not $st) { Write-Log "   [-] $($d.C) -- нет на этой системе"; return }
             if ($st.State -eq 'Disabled') { Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return }
+            if (-not (Test-CanModify $d.C)) { return }
             Ensure-Backup
+            $tj = @{ kind = 'task'; path = $d.P; old = 'Enabled'; newValue = 'Disabled' }
+            if (-not (Write-AheadEntry $tj)) { Write-Log "   [!] $($d.C) -- не меняется: «как было» не легло в журнал отката"; $script:Failures++; return }
             switch (Set-TaskEnabled $d.P $false) {
-                'ok'      { Add-TaskJournal $d.P; Write-Log "   [+] $($d.C) -- отключена"; $script:Changes++ }
-                'system'  { Add-TaskJournal $d.P; Write-Log "   [+] $($d.C) -- отключена от имени системы (администратору Windows её не отдаёт)"; $script:Changes++ }
-                'missing' { Write-Log "   [-] $($d.C) -- нет на этой системе" }
-                default   { Write-Log "   [!] $($d.C) -- Windows не дала отключить задачу"; $script:Failures++ }
+                'ok'      { Write-Log "   [+] $($d.C) -- отключена"; $script:Changes++ }
+                'system'  { Write-Log "   [+] $($d.C) -- отключена от имени системы (администратору Windows её не отдаёт)"; $script:Changes++ }
+                'missing' { Undo-AheadEntry $tj; Write-Log "   [-] $($d.C) -- нет на этой системе" }
+                default   { Undo-AheadEntry $tj; Write-Log "   [!] $($d.C) -- Windows не дала отключить задачу"; $script:Failures++ }
             }
         }
         'taskglob' {
@@ -2043,9 +2245,12 @@ function Apply-Def {
             foreach ($t in $ts) {
                 if ($DryRun) { Write-Log "   [тест] задача $($t.TaskName) -- отключить"; continue }
                 if ($t.State -eq 'Disabled') { Write-Log "   [в] задача $($t.TaskName) -- уже отключена"; $script:Already++; continue }
+                if (-not (Test-CanModify ("задача " + $t.TaskName))) { break }
                 Ensure-Backup
-                try { Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null; Add-TaskJournal ($t.TaskPath + $t.TaskName); Write-Log "   [+] задача $($t.TaskName) -- отключена"; $script:Changes++ }
-                catch { Write-Log "   [-] задача $($t.TaskName) -- не удалось" }
+                $tj = @{ kind = 'task'; path = ($t.TaskPath + $t.TaskName); old = 'Enabled'; newValue = 'Disabled' }
+                if (-not (Write-AheadEntry $tj)) { Write-Log ("   [!] задача {0} -- не меняется: «как было» не легло в журнал отката" -f $t.TaskName); $script:Failures++; break }
+                try { Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null; Write-Log "   [+] задача $($t.TaskName) -- отключена"; $script:Changes++ }
+                catch { Undo-AheadEntry $tj; Write-Log "   [-] задача $($t.TaskName) -- не удалось" }
             }
         }
         'env' {
@@ -2053,15 +2258,17 @@ function Apply-Def {
             if ([string][Environment]::GetEnvironmentVariable($d.P, 'User') -eq [string]$d.V) {
                 Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
             }
+            if (-not (Test-CanModify $d.C)) { return }
             Ensure-Backup
             $prevEnv = [Environment]::GetEnvironmentVariable($d.P, 'User')
+            $ej = @{ kind = 'env'; name = $d.P; existed = [bool]($null -ne $prevEnv)
+                     old = $(if ($null -ne $prevEnv) { [string]$prevEnv } else { '' }); newValue = [string]$d.V }
+            if (-not (Write-AheadEntry $ej)) { Write-Log "   [!] $($d.C) -- не меняется: «как было» не легло в журнал отката"; $script:Failures++; return }
             try {
                 [Environment]::SetEnvironmentVariable($d.P, [string]$d.V, 'User')
-                Add-JournalEntry @{ kind = 'env'; name = $d.P; existed = [bool]($null -ne $prevEnv)
-                                    old = $(if ($null -ne $prevEnv) { [string]$prevEnv } else { '' }); newValue = [string]$d.V }
                 Write-Log "   [+] $($d.C)"; $script:Changes++
             }
-            catch { Write-Log "   [!] не удалось: $($d.C)"; $script:Failures++ }
+            catch { Undo-AheadEntry $ej; Write-Log "   [!] не удалось: $($d.C)"; $script:Failures++ }
         }
         'vscode'  { Set-VsCodeValue -Key $d.P -Value $d.V -Comment $d.C }
         'firefox' { Set-FirefoxPolicy -Key $d.P -Value $d.V -Comment $d.C }
@@ -2830,9 +3037,17 @@ function ConvertTo-SidValue {
 function Invoke-OneShotTask {
     # -Minutes — сколько задаче разрешено работать; ждём её столько же и ещё
     # немного. Раньше ожидание было 30 секунд при разрешённых двух минутах.
-    param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem, [int]$Minutes = 2)
+    # -Execute/-Arguments — программа запускается напрямую, без cmd.exe. Через
+    # cmd (-CmdLine) идут только постоянные строки программы, которым нужны
+    # его «&&», «|», «>nul»; в них не пропускаются % (cmd раскрыл бы его как
+    # переменную) и переводы строк (они разорвали бы команду).
+    param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem, [int]$Minutes = 2, [string]$Execute = '', [string]$Arguments = '')
     $TaskName = '{0} {1}' -f $TaskName, [guid]::NewGuid().ToString('N').Substring(0, 12)
-    $exe = "$env:SystemRoot\System32\cmd.exe"; $arg = '/d /c ' + $CmdLine
+    if ($Execute) { $exe = $Execute; $arg = $Arguments }
+    else {
+        if ($CmdLine -match '[%\r\n]') { Write-Log '   [!] команда для короткой задачи содержит недопустимые знаки -- не запускается'; return $false }
+        $exe = "$env:SystemRoot\System32\cmd.exe"; $arg = '/d /c ' + $CmdLine
+    }
     $registered = $false
     try {
         $act = New-ScheduledTaskAction -Execute $exe -Argument $arg
@@ -2883,7 +3098,10 @@ function Set-TaskEnabled {
         return 'ok'
     } catch { }
     $flag = $(if ($Enabled) { '/enable' } else { '/disable' })
-    $null = Invoke-OneShotTask -TaskName 'Win11Privacy Task' -CmdLine ('schtasks.exe /change /tn "{0}" {1}' -f $Full, $flag) -AsSystem
+    # schtasks запускается напрямую, а не через cmd; кавычка в имени задачи
+    # разорвала бы аргумент — такого имени у задачи Windows быть не может
+    if ($Full -match '["\r\n]') { return 'fail' }
+    $null = Invoke-OneShotTask -TaskName 'Win11Privacy Task' -Execute "$env:SystemRoot\System32\schtasks.exe" -Arguments ('/change /tn "{0}" {1}' -f $Full, $flag) -AsSystem
     $t = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
     if ($t -and (($t.State -eq 'Disabled') -ne $Enabled)) { return 'system' }
     return 'fail'
@@ -3140,6 +3358,7 @@ function Set-MonitorEnabled {
             $jf = Read-JournalFile -ReadOnly
             $ae = $null
             if ($jf.trusted) { $ae = @($jf.items | Where-Object { "$($_.kind)" -eq 'audit' -and "$($_.guid)" -eq $script:AuditGuid }) | Select-Object -First 1 }
+            if ($ae -and (Test-JournalEntryShape $ae)) { $ae = $null }   # запись не по форме — не исполняется
             if ($ae) {
                 $want = [int]("0" + "$($ae.old)")
                 $rk = Restore-JournalEntry $ae
@@ -3512,8 +3731,7 @@ function Invoke-BufferSystemPurge {
     $res = $null
     try {
         Set-Content -LiteralPath $sf -Value (Get-BufferSystemScript $Dir $rf) -Encoding UTF8 -ErrorAction Stop
-        $cmd = $script:PsExe + ' -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $sf + '"'
-        $null = Invoke-OneShotTask 'Win11Privacy buffer' $cmd -AsSystem -Minutes 5
+        $null = Invoke-OneShotTask 'Win11Privacy buffer' -Execute $script:PsExe -Arguments ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $sf + '"') -AsSystem -Minutes 5
         if (Test-Path -LiteralPath $rf) { $res = Get-Content -LiteralPath $rf -Raw -Encoding UTF8 | ConvertFrom-Json }
     } catch { $res = $null }
     finally { Remove-Item -LiteralPath $rf, $sf -Force -ErrorAction SilentlyContinue }
@@ -5088,10 +5306,16 @@ function Invoke-FootprintWipe {
                 if ($nf -gt 0) { Write-Log ("   [!] записей сетей, которые Windows не отдала: {0}" -f $nf); $script:Failures++ }
             }
             'activity' {
-                foreach ($svc in @(Get-Service -Name 'cdp*' -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Running' })) {
-                    if (-not $DryRun) { Stop-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue }
-                }
+                # Службы держат базу открытой — на время чистки останавливаем,
+                # потом запускаем обратно. Раньше оставались остановленными.
+                $cdpRun = @(Get-Service -Name 'cdp*' -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Running' } | ForEach-Object { $_.Name })
+                foreach ($n in $cdpRun) { if (-not $DryRun) { Stop-Service -Name $n -Force -ErrorAction SilentlyContinue } }
                 $null = Clear-FolderContents (Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform') 'база истории активности'
+                foreach ($n in $cdpRun) {
+                    if ($DryRun) { continue }
+                    try { Start-Service -Name $n -ErrorAction Stop }
+                    catch { Write-Log ("   [i] служба {0} сейчас не запустилась -- запустится после перезагрузки" -f $n) }
+                }
             }
             'recent' {
                 $null = Clear-FolderContents ([Environment]::GetFolderPath('Recent')) 'недавние документы'
@@ -5139,13 +5363,21 @@ function Invoke-FootprintWipe {
 
 # --- отозвать или вернуть доступ программы к датчику ---
 if ($SensorSet) {
-    $root = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\' + $SensorKey
+    # Раньше разрешение датчика писалось в реестр напрямую: мимо журнала
+    # отката (полный откат его не возвращал) и без проверки имени — «..\» в
+    # имени датчика увёл бы запись в другую ветку. Теперь — только имя датчика
+    # из букв и цифр, только Allow/Deny, и через Set-Reg: журнал заранее,
+    # сверка записанного.
     $r = @{ key = $SensorKey; value = $SensorValue; ok = $false }
-    try {
-        if (-not (Test-Path -LiteralPath $root)) { New-Item -Path $root -Force -ErrorAction Stop | Out-Null }
-        New-ItemProperty -LiteralPath $root -Name 'Value' -Value $SensorValue -PropertyType String -Force -ErrorAction Stop | Out-Null
-        $r.ok = $true
-    } catch { $r.error = $_.Exception.Message }
+    if ($SensorKey -notmatch '^[A-Za-z0-9_]{1,64}$' -or $SensorValue -notin @('Allow', 'Deny')) {
+        $r.error = 'недопустимое имя датчика или значение'; Emit-Json $r; exit 1
+    }
+    $root = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\' + $SensorKey
+    $failBefore = $script:Failures
+    Set-Reg -Path $root -Name 'Value' -Value $SensorValue -Type 'String' -Comment ("датчик {0}: {1}" -f $SensorKey, $SensorValue)
+    Save-JournalEntries -Quiet
+    $r.ok = ($script:Failures -eq $failBefore) -and ("$(Get-RegValue $root 'Value')" -eq $SensorValue)
+    if (-not $r.ok) { $r.error = 'Windows не дала изменить разрешение или журнал отката не пишется' }
     Emit-Json $r
     exit 0
 }
@@ -5544,20 +5776,17 @@ if ($StartupSet) {
         $label = $(if ($it) { [string]$it.name } else { $raw })
         if ($it -and ([bool]$it.enabled) -eq $wantOn) { Write-Log ("   [в] {0} -- уже так" -f $label); $script:Already++; continue }
         if ($DryRun) { Write-Log ("   [тест] {0}" -f $label); continue }
+        # журнал раньше изменения: «как было» — на диск, потом переключение
+        if (-not (Test-CanModify $label)) { break }
+        $sj = @{ kind = 'startup'; id = $raw; name = $label
+                 old = $(if ($wantOn) { 'Off' } else { 'On' }); newValue = $(if ($wantOn) { 'On' } else { 'Off' }) }
+        if (-not (Write-AheadEntry $sj)) { Write-Log ("   [!] {0} -- не меняется: «как было» не легло в журнал отката" -f $label); $script:Failures++; break }
         $r = Set-StartupState $raw $wantOn
         if ($r.ok) {
             Write-Log ("   [+] {0} -- {1}" -f $label, $(if ($wantOn) { 'снова запускается' } else { 'больше не запускается' }))
             $done++; $script:Changes++
-            try {
-                $script:Journal.Add(@{ kind = 'startup'; id = $raw; name = $label
-                                       old = $(if ($wantOn) { 'Off' } else { 'On' })
-                                       newValue = $(if ($wantOn) { 'On' } else { 'Off' })
-                                       time = (Get-Date).ToString('s') })
-            } catch {
-                Write-Log ("   [!] {0} -- изменено, но в журнал отката не записалось: {1}" -f $label, $_.Exception.Message)
-                $script:JournalFailed = $true; $script:Failures++; break
-            }
         } else {
+            Undo-AheadEntry $sj
             Write-Log ("   [!] {0} -- {1}" -f $label, $r.error); $script:Failures++
         }
     }
@@ -5879,24 +6108,40 @@ function Apply-ProfilesHives {
     Write-Section 'Другие пользователи и профиль по умолчанию'
     foreach ($pr in @(Get-OtherProfiles)) {
         if ($DryRun) { Write-Log ("   [тест] профиль {0}: настроек {1}" -f $pr.name, $defs.Count); continue }
-        $cnt = @{ changed = 0; failed = 0 }
+        if ($script:JournalFailed) { Write-Log ("   [!] профиль {0}: не меняется -- журнал отката сейчас не пишется" -f $pr.name); $script:Failures++; continue }
+        $cnt = @{ changed = 0; failed = 0; refused = $false }
         $mounted = Use-ProfileHive $pr {
             param($root)
+            # Сначала — что меняем и как было, всей пачкой на диск (журнал
+            # раньше изменения); потом сами изменения; неудачные — отзываются.
+            # Раньше запись в журнал шла после изменения и ложилась на диск
+            # только в конце: обрыв посередине оставлял чужой профиль
+            # изменённым без пути назад.
+            $plan = New-Object System.Collections.Generic.List[object]
             foreach ($d in $defs) {
                 $sub = ("$($d.P)" -replace '^HKCU:\\', '')
                 $kp = "$root\$sub"
                 $cur = Get-RegValue $kp $d.N
-                if ($null -ne $cur -and "$cur" -eq "$($d.V)") { continue }
+                if ($null -ne $cur -and (ConvertTo-RegComparable $cur $d.Type) -eq (ConvertTo-RegComparable $d.V $d.Type)) { continue }
+                $e = @{ kind = 'hive'; file = $pr.file; sid = $pr.sid; profile = $pr.name; sub = $sub
+                        name = $d.N; type = $d.Type; existed = ($null -ne $cur)
+                        old = $(if ($null -ne $cur) { $cur } else { '' }); newValue = "$($d.V)"
+                        time = (Get-Date).ToString('s'); run = $script:RunId }
+                $script:Journal.Add($e)
+                $plan.Add(@{ d = $d; kp = $kp; e = $e })
+            }
+            if ($plan.Count -eq 0) { return }
+            Save-JournalEntries -Quiet
+            if ($script:JournalFailed) { $cnt.refused = $true; return }
+            foreach ($p in $plan) {
                 try {
-                    if (-not (Test-Path -LiteralPath $kp)) { New-Item -Path $kp -Force -ErrorAction Stop | Out-Null }
-                    New-ItemProperty -LiteralPath $kp -Name $d.N -Value $d.V -PropertyType $d.Type -Force -ErrorAction Stop | Out-Null
-                    $script:Journal.Add(@{ kind = 'hive'; file = $pr.file; sid = $pr.sid; profile = $pr.name; sub = $sub
-                                           name = $d.N; type = $d.Type; existed = ($null -ne $cur)
-                                           old = $(if ($null -ne $cur) { $cur } else { '' }); newValue = "$($d.V)"; time = (Get-Date).ToString('s') })
+                    if (-not (Test-Path -LiteralPath $p.kp)) { New-Item -Path $p.kp -Force -ErrorAction Stop | Out-Null }
+                    New-ItemProperty -LiteralPath $p.kp -Name $p.d.N -Value $p.d.V -PropertyType $p.d.Type -Force -ErrorAction Stop | Out-Null
                     $cnt.changed++
-                } catch { $cnt.failed++ }
+                } catch { Undo-AheadEntry $p.e; $cnt.failed++ }
             }
         }
+        if ($cnt.refused) { Write-Log ("   [!] профиль {0}: не меняется -- «как было» не легло в журнал отката" -f $pr.name); continue }
         if (-not $mounted) { Write-Log ("   [!] профиль {0}: куст не подключился (пользователь занят или файл недоступен)" -f $pr.name); $script:Failures++; continue }
         Write-Log ("   [+] профиль {0}: изменено настроек {1}{2}" -f $pr.name, $cnt.changed, $(if ($cnt.failed) { ", не удалось $($cnt.failed)" } else { '' }))
         $script:Changes += $cnt.changed; $script:Failures += $cnt.failed
@@ -5937,9 +6182,13 @@ function Restore-Journal {
     # первая: она помнит состояние до нас. Раньше список переворачивался, и у
     # журнала с повторами (версии до схлопывания) возвращалось то значение,
     # которое программа сама же записала в прошлый раз.
-    $ok = 0; $seen = @{}; $startBack = 0; $svcBack = 0
+    $ok = 0; $seen = @{}; $startBack = 0; $svcBack = 0; $malformed = 0
     $failed = New-Object System.Collections.Generic.List[object]
     foreach ($e in @($jf.items)) {
+        # запись не по форме не исполняется: подпись не заменяет проверку
+        # допустимости. В журнал такая запись не возвращается.
+        $why = Test-JournalEntryShape $e
+        if ($why) { $malformed++; Write-Log ("   [!] запись журнала не по форме ({0}) -- пропущена" -f $why); continue }
         # записи автозагрузки возвращаем тем же способом, каким гасили
         if ("$($e.kind)" -eq 'startup') {
             $key = "startup|$($e.id)"
@@ -5964,8 +6213,10 @@ function Restore-Journal {
         $seen[$key] = $true
         $r = Restore-JournalEntry $e
         if (-not $r.ok) { $failed.Add($e); Write-Log ("   [!] не вернулось: {0} -- {1}" -f $key, $r.error); continue }
+        if ($r.note) { Write-Log ("   [i] {0} -- {1}" -f $key, $r.note) }
         if ($kind -eq 'reg') { $ok++ } else { $svcBack++ }
     }
+    if ($malformed -gt 0) { $script:Failures++ }
     $bad = $failed.Count
     Write-Log ("   [+] возвращено параметров реестра: {0}" -f $ok)
     if ($svcBack -gt 0) { Write-Log ("   [+] возвращено служб, задач и переменных среды: {0}" -f $svcBack) }
@@ -6079,6 +6330,8 @@ function Restore-ChangeKey {
     }
     if ($mine.Count -eq 0) { return @{ ok = $false; error = 'запись не найдена' } }
     $first = $mine[0]              # самое раннее состояние
+    $why = Test-JournalEntryShape $first
+    if ($why) { return @{ ok = $false; error = ('запись журнала не по форме: ' + $why) } }
     if ("$($first.kind)" -eq 'startup') {
         $r = Set-StartupState ([string]$first.id) ("$($first.old)" -eq 'On')
     } elseif ("$($first.kind)" -eq 'hive') {
@@ -6490,15 +6743,18 @@ if ((Use-Module 'oem') -and -not $script:JournalFailed) {
                 $s = Get-Service -Name $it.name -ErrorAction Stop
                 if ($s.StartType -eq 'Disabled' -and $s.Status -ne 'Running') { Write-Log ("   [в] {0} -- уже отключено" -f $it.display); $script:Already++; continue }
                 $was = Get-SvcJournalState $it.name $s
-                if ($s.Status -eq 'Running') { Stop-Service -Name $it.name -Force -ErrorAction SilentlyContinue }
-                Set-Service -Name $it.name -StartupType Disabled -ErrorAction Stop
-                Add-JournalEntry $was
+                if (-not (Write-AheadEntry $was)) { Write-Log ("   [!] {0} -- не меняется: «как было» не легло в журнал отката" -f $it.display); $script:Failures++; break }
+                try {
+                    if ($s.Status -eq 'Running') { Stop-Service -Name $it.name -Force -ErrorAction SilentlyContinue }
+                    Set-Service -Name $it.name -StartupType Disabled -ErrorAction Stop
+                } catch { if ($was.running) { Start-Service -Name $it.name -ErrorAction SilentlyContinue }; Undo-AheadEntry $was; throw }
             } else {
                 $pp = Split-TaskPath $it.name
                 $st = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop
                 if ($st.State -eq 'Disabled') { Write-Log ("   [в] {0} -- уже отключено" -f $it.display); $script:Already++; continue }
-                Disable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null
-                Add-TaskJournal $it.name
+                $tj = @{ kind = 'task'; path = $it.name; old = 'Enabled'; newValue = 'Disabled' }
+                if (-not (Write-AheadEntry $tj)) { Write-Log ("   [!] {0} -- не меняется: «как было» не легло в журнал отката" -f $it.display); $script:Failures++; break }
+                try { Disable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null } catch { Undo-AheadEntry $tj; throw }
             }
             Write-Log ("   [+] отключено: {0}" -f $it.display); $script:Changes++
         } catch { Write-Log ("   [!] не удалось: {0} -- {1}" -f $it.display, $_.Exception.Message); $script:Failures++ }

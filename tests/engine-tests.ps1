@@ -437,8 +437,9 @@ Check 'возврат без выбора ничего не делает' ($null
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
-Write-Host 'Запись в реестр: журнал только после удачи'
-$regFns = @('Get-RegValue', 'Set-RegDirect', 'Set-Reg', 'Test-Admin', 'Test-RegKeyWritable', 'Get-FolderSizeMB', 'ConvertTo-RegComparable')
+Write-Host 'Запись в реестр: журнал заранее, неудача отзывает запись'
+$regFns = @('Get-RegValue', 'Set-RegDirect', 'Set-Reg', 'Test-Admin', 'Test-RegKeyWritable', 'Get-FolderSizeMB', 'ConvertTo-RegComparable',
+            'Write-AheadEntry', 'Undo-AheadEntry', 'Test-CanModify', 'Get-JournalKey', 'ConvertTo-Fields')
 $regFound = @()
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($regFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $regFound += $fn.Name }
@@ -453,6 +454,9 @@ if ($regFound.Count -eq $regFns.Count) {
     # Резервная копия проверяется своим разделом ниже; здесь — заглушка,
     # иначе каждый вызов печатал «Ensure-Backup не найдена».
     function Ensure-Backup { }
+    # запись журнала на диск проверяется своим разделом; здесь очередь остаётся в памяти
+    function Save-JournalEntries { param([switch]$Quiet) }
+    $script:JournalFailed = $false; $script:RunId = 'test'; $script:JournalRetract = New-Object 'System.Collections.Generic.HashSet[string]'
 
     # SECURITY закрыт даже от администратора — запись обязана провалиться
     Set-Reg -Path 'HKLM:\SECURITY\Win11PrivacyProbe' -Name 'x' -Value 1 -Type 'DWord' -Comment 'проверка отказа'
@@ -544,6 +548,10 @@ if (Get-Command Apply-Def -ErrorAction SilentlyContinue) {
     # журнал отката проверяется своим разделом; здесь — запоминаем, что пришло
     $script:JournalSeen = New-Object System.Collections.Generic.List[object]
     function Add-JournalEntry { param($Entry) $script:JournalSeen.Add($Entry) }
+    # журнал заранее (write-ahead): здесь тоже только запоминаем, что пришло
+    function Write-AheadEntry { param($Entry) $script:JournalSeen.Add($Entry); return $true }
+    function Undo-AheadEntry { param($Entry) $null = $script:JournalSeen.Remove($Entry) }
+    function Test-CanModify { param([string]$Label) return $true }
     $DryRun = $false
     $script:Changes = 0; $script:Already = 0; $script:Failures = 0
     $envName = 'WIN11PRIVACY_TEST_VAR'
@@ -563,7 +571,7 @@ if (Get-Command Apply-Def -ErrorAction SilentlyContinue) {
           ("записей: " + $jn)
     [Environment]::SetEnvironmentVariable($envName, $null, 'User')
     Check 'проба убрана' ($null -eq [Environment]::GetEnvironmentVariable($envName, 'User'))
-    Remove-Item -Path 'Function:\Ensure-Backup', 'Function:\Add-JournalEntry' -ErrorAction SilentlyContinue
+    Remove-Item -Path 'Function:\Ensure-Backup', 'Function:\Add-JournalEntry', 'Function:\Write-AheadEntry', 'Function:\Undo-AheadEntry', 'Function:\Test-CanModify' -ErrorAction SilentlyContinue
 } else {
     Check 'Apply-Def найдена в движке' $false
 }
@@ -1162,22 +1170,22 @@ if ($foundTe.Count -eq $wantedTe.Count) {
     function Get-ScheduledTask { param($TaskPath, $TaskName, $ErrorAction) if ($script:teExists) { [pscustomobject]@{ State = $script:teState } } }
     function Disable-ScheduledTask { param($TaskPath, $TaskName, $ErrorAction) if ($script:teDenied) { throw 'Отказано в доступе.' }; $script:teState = 'Disabled' }
     function Enable-ScheduledTask { param($TaskPath, $TaskName, $ErrorAction) if ($script:teDenied) { throw 'Отказано в доступе.' }; $script:teState = 'Ready' }
-    function Invoke-OneShotTask { param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem)
-        $script:teCalls += ("{0}|{1}" -f $AsSystem.IsPresent, $CmdLine)
-        if ($CmdLine -match '/disable$') { $script:teState = 'Disabled' } elseif ($CmdLine -match '/enable$') { $script:teState = 'Ready' }
+    function Invoke-OneShotTask { param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem, [int]$Minutes = 2, [string]$Execute = '', [string]$Arguments = '')
+        $script:teCalls += ("{0}|{1}|{2}" -f $AsSystem.IsPresent, $Execute, $Arguments)
+        if ($Arguments -match '/disable$') { $script:teState = 'Disabled' } elseif ($Arguments -match '/enable$') { $script:teState = 'Ready' }
         return $true }
     try {
         $tp = '\Microsoft\Windows\UsageAndQualityInsights\UsageAndQualityInsights-MaintenanceTask'
         $r1 = Set-TaskEnabled $tp $false
         Check 'закрытая задача отключается от имени SYSTEM' ($r1 -eq 'system' -and $script:teState -eq 'Disabled') ("ответ: $r1, состояние: $($script:teState)")
-        Check 'SYSTEM получает schtasks с полным путём в кавычках' (@($script:teCalls).Count -eq 1 -and $script:teCalls[0] -eq ('True|schtasks.exe /change /tn "' + $tp + '" /disable')) ($script:teCalls -join ' ; ')
+        Check 'SYSTEM получает schtasks напрямую, полный путь задачи в кавычках' (@($script:teCalls).Count -eq 1 -and $script:teCalls[0] -eq ('True|' + "$env:SystemRoot\System32\schtasks.exe" + '|/change /tn "' + $tp + '" /disable')) ($script:teCalls -join ' ; ')
         $r2 = Set-TaskEnabled $tp $true
         Check 'и включается обратно так же' ($r2 -eq 'system' -and $script:teState -eq 'Ready') ("ответ: $r2")
         $script:teDenied = $false; $script:teCalls = @()
         $r3 = Set-TaskEnabled '\Microsoft\Windows\Maps\MapsToastTask' $false
         Check 'обычная задача отключается без SYSTEM' ($r3 -eq 'ok' -and @($script:teCalls).Count -eq 0) ("ответ: $r3")
         $script:teDenied = $true; $script:teState = 'Ready'
-        function Invoke-OneShotTask { param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem) return $true }
+        function Invoke-OneShotTask { param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem, [int]$Minutes = 2, [string]$Execute = '', [string]$Arguments = '') return $true }
         $r4 = Set-TaskEnabled $tp $false
         Check 'если и SYSTEM не смог — так и сказано' ($r4 -eq 'fail') ("ответ: $r4")
         $script:teExists = $false
@@ -1224,9 +1232,9 @@ $bufJob = Start-Job -ArgumentList $engine, $bufRoot -ScriptBlock {
     $script:SafeRoot = $Root + '-safe'; New-Item -ItemType Directory -Force $script:SafeRoot | Out-Null
     function Assert-SafeRoot { $true }
     function Invoke-OneShotTask {
-        param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem)
-        $script:Calls.Add("task system=$AsSystem $CmdLine")
-        if ($CmdLine -match '-File "([^"]+)"') { $null = & $script:PsExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Matches[1]; return ($LASTEXITCODE -eq 0) }
+        param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem, [int]$Minutes = 2, [string]$Execute = '', [string]$Arguments = '')
+        $script:Calls.Add("task system=$AsSystem $Execute $Arguments$CmdLine")
+        if ($Execute -and $Arguments -match '-File "([^"]+)"') { $null = & $Execute -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Matches[1]; return ($LASTEXITCODE -eq 0) }
         return $false
     }
     $script:DiagDir = $Root; $script:DiagDirExpected = $Root; $DryRun = $false; $script:Changes = 0; $script:Failures = 0
@@ -1290,6 +1298,30 @@ if ($bufRes) {
 }
 Remove-Item -LiteralPath $bufRoot -Recurse -Force -ErrorAction SilentlyContinue
 
+# Очистка папок не заходит внутрь ссылок: Remove-Item -Recurse в PowerShell 5.1
+# прошёл бы по junction и удалил бы то, куда она ведёт.
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Clear-FolderContents', 'Remove-TreeNoFollow', 'Test-ClearForbidden', 'Get-FolderSizeMB') }, $true)) { Invoke-Expression $fn.Extent.Text }
+$clLog = New-Object System.Collections.Generic.List[string]
+function Write-Log { param([string]$Message = '') $clLog.Add($Message) }
+$clId = [guid]::NewGuid().ToString('N').Substring(0, 8)
+$cf = Join-Path $env:TEMP ('w11p-clear-' + $clId); $tg = Join-Path $env:TEMP ('w11p-target-' + $clId); $jr0 = Join-Path $env:TEMP ('w11p-jroot-' + $clId)
+New-Item -ItemType Directory -Force (Join-Path $cf 'sub'), $tg | Out-Null
+Set-Content (Join-Path $cf 'a.txt') 'x'; Set-Content (Join-Path $cf 'sub\b.txt') 'x'; Set-Content (Join-Path $tg 'keep.txt') 'x'; Set-Content (Join-Path $cf 'busy.txt') 'x'
+$null = & cmd.exe /c ('mklink /J "' + (Join-Path $cf 'link') + '" "' + $tg + '"')
+$null = & cmd.exe /c ('mklink /J "' + $jr0 + '" "' + $tg + '"')
+$DryRun = $false; $script:Failures = 0
+$clLock = [IO.File]::Open((Join-Path $cf 'busy.txt'), 'Open', 'Read', 'None')
+try { $null = Clear-FolderContents $cf 'проверка' } finally { $clLock.Close() }
+Check 'очистка не заходит внутрь ссылки: цель цела, сама ссылка убрана' ((Test-Path (Join-Path $tg 'keep.txt')) -and -not (Test-Path (Join-Path $cf 'link')) -and -not (Test-Path (Join-Path $cf 'sub')))
+Check 'занятый файл посчитан, а не потерян' ($script:LastClear.failed -eq 1 -and (Test-Path (Join-Path $cf 'busy.txt')))
+$script:Failures = 0
+$null = Clear-FolderContents $jr0 'проверка ссылки'
+Check 'папка-ссылка не очищается вовсе' ((Test-Path (Join-Path $tg 'keep.txt')) -and $script:Failures -eq 1)
+Check 'корень диска и профиль очищать нельзя, временную папку — можно' ((Test-ClearForbidden 'C:\') -and (Test-ClearForbidden $env:USERPROFILE) -and -not (Test-ClearForbidden $env:TEMP))
+& cmd.exe /c ('rmdir "' + $jr0 + '"') | Out-Null
+& cmd.exe /c ('rmdir /s /q "' + $cf + '"') | Out-Null
+& cmd.exe /c ('rmdir /s /q "' + $tg + '"') | Out-Null
+
 # Адреса прямой отправки 1DS, найденные в системных файлах и в настройке UTC
 $hostsBlock = [regex]::Match($engineText, "(?s)\`$script:HostsDomains = @\((.*?)\)\s*\r?\n").Groups[1].Value
 $hostsList = @([regex]::Matches($hostsBlock, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
@@ -1315,7 +1347,9 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
               'Save-JournalEntries', 'Save-Json', 'Load-Json', 'Ensure-DataDir', 'Test-DataTrusted', 'Assert-SafeRoot', 'Test-DirSecure',
               'Protect-DataRoot', 'Get-OwnerSid', 'Add-JournalEntry', 'Get-StartName', 'Restore-JournalEntry', 'Test-JournalWritable',
               'Get-SignKey', 'Get-JournalSig', 'Test-KeyFileSecure', 'Test-JournalEntryKnown', 'Test-PortableTaskTrust', 'Test-AclVolume',
-              'Test-DirChainSecure', 'Test-ItemTrusted', 'Get-UntrustedItems', 'Test-TaskGlobPath', 'Get-TaskGlobFolders', 'Split-TaskPath')
+              'Test-DirChainSecure', 'Test-ItemTrusted', 'Get-UntrustedItems', 'Test-TaskGlobPath', 'Get-TaskGlobFolders', 'Split-TaskPath',
+              'Set-Reg', 'Get-RegValue', 'ConvertTo-RegComparable', 'Set-RegDirect', 'Test-RegKeyWritable', 'Write-AheadEntry', 'Undo-AheadEntry',
+              'Test-CanModify', 'Test-JournalEntryShape')
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
         if ($fn.Name -in $want) { Invoke-Expression $fn.Extent.Text }
     }
@@ -1335,6 +1369,7 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     # ключ подписи: настоящий лежит в ProgramData и без прав администратора недоступен
     $testKey = New-Object byte[] 32; (New-Object Random 7).NextBytes($testKey); $script:SignKey = $testKey
     $script:TaskRun = $false; $script:PortableTaskState = $null; $script:KnownJournal = $null
+    $script:RunId = [guid]::NewGuid().ToString('N'); $script:JournalRetract = New-Object 'System.Collections.Generic.HashSet[string]'
     $script:RegTypes = @('reg', 'regif', 'regpol', 'regsvc'); $script:AuditGuid = '{0CCE9226-69AE-11D9-BED3-505054503030}'
     $script:Defs = @(@{ T = 'reg'; P = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection'; N = 'AllowTelemetry' },
                      @{ T = 'svc'; P = 'DiagTrack' }, @{ T = 'taskglob'; P = 'OneDrive*' })
@@ -1458,14 +1493,61 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     $r.journalFailed = $script:JournalFailed
     $r.failLogged = [bool](@($script:Log | Where-Object { $_ -match 'журнал отката не записался' }).Count)
     $r.writable = Test-JournalWritable
-    try { $holder.Kill() } catch { }
+    try { $holder.Kill(); $null = $holder.WaitForExit(5000) } catch { }
+
+    # Журнал раньше изменения: в момент записи в реестр «как было» уже на диске;
+    # не прошло — запись отзывается; журнал отказал — менять нельзя вовсе.
+    $script:JournalFailed = $false; $script:Journal.Clear()
+    $script:RunId = [guid]::NewGuid().ToString('N'); $script:JournalRetract = New-Object 'System.Collections.Generic.HashSet[string]'
+    function Ensure-Backup { }
+    $script:UnblockedIds = @{}; $script:Changes = 0; $script:Already = 0
+    $probe = 'HKCU:\Software\W11PWal-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
+    $jpath = Join-Path $script:DataDir 'changes.json'
+    $script:SeenOnDisk = $null
+    function New-ItemProperty {
+        param($LiteralPath, $Name, $Value, $PropertyType, [switch]$Force, $ErrorAction)
+        $script:SeenOnDisk = [bool]((Get-Content $jpath -Raw -ErrorAction SilentlyContinue) -match [regex]::Escape("$Name"))
+        Microsoft.PowerShell.Management\New-ItemProperty -LiteralPath $LiteralPath -Name $Name -Value $Value -PropertyType $PropertyType -Force:$Force -ErrorAction $ErrorAction
+    }
+    Set-Reg -Path $probe -Name 'WalProbe' -Value 5 -Type 'DWord' -Comment 'проверка журнала заранее'
+    $r.walBeforeChange = [bool]$script:SeenOnDisk
+    $r.walValue = ((Get-RegValue $probe 'WalProbe') -eq 5)
+    Remove-Item Function:\New-ItemProperty
+    Set-Reg -Path 'HKLM:\SECURITY\W11PWal' -Name 'WalFail' -Value 1 -Type 'DWord' -Comment 'проверка отзыва'
+    Save-JournalEntries -Quiet
+    $jtxt = Get-Content $jpath -Raw
+    $r.walRetracted = ($jtxt -notmatch 'WalFail'); $r.walKept = ($jtxt -match 'WalProbe')
+    $script:JournalFailed = $true
+    Set-Reg -Path $probe -Name 'WalBlocked' -Value 1 -Type 'DWord' -Comment 'проверка запрета'
+    $r.walBlocked = ($null -eq (Get-RegValue $probe 'WalBlocked'))
+    $script:JournalFailed = $false
+    Remove-Item -LiteralPath $probe -Recurse -Force -ErrorAction SilentlyContinue
+    # форма записей журнала: подпись не заменяет проверку допустимости
+    $shapes = @(
+        @{ e = @{ kind = 'reg'; path = 'HKLM:\SOFTWARE\X'; name = 'A'; existed = $true; type = 'DWord'; old = 1 }; ok = $true },
+        @{ e = @{ kind = 'reg'; path = 'C:\Windows\x'; name = 'A' }; ok = $false },
+        @{ e = @{ kind = 'reg'; path = 'HKLM:\SOFTWARE\X'; name = '' }; ok = $false },
+        @{ e = @{ kind = 'reg'; path = 'HKLM:\SOFTWARE\X'; name = 'A'; existed = $true; type = 'Evil' }; ok = $false },
+        @{ e = @{ kind = 'svc'; name = 'DiagTrack'; old = '2' }; ok = $true },
+        @{ e = @{ kind = 'svc'; name = 'a b & c'; old = '2' }; ok = $false },
+        @{ e = @{ kind = 'task'; path = '\Microsoft\Windows\X'; old = 'Enabled' }; ok = $true },
+        @{ e = @{ kind = 'task'; path = '\A" /tr calc'; old = 'Enabled' }; ok = $false },
+        @{ e = @{ kind = 'env'; name = 'POWERSHELL_TELEMETRY_OPTOUT' }; ok = $true },
+        @{ e = @{ kind = 'env'; name = 'PATH;x' }; ok = $false },
+        @{ e = @{ kind = 'audit'; guid = $script:AuditGuid; old = '1' }; ok = $true },
+        @{ e = @{ kind = 'audit'; guid = '{00000000-0000-0000-0000-000000000000}'; old = '1' }; ok = $false },
+        @{ e = @{ kind = 'evil'; x = 1 }; ok = $false })
+    $r.shapeWrong = @($shapes | Where-Object { [bool](-not (Test-JournalEntryShape $_.e)) -ne $_.ok } | ForEach-Object { "$($_.e.kind):$($_.e.name)$($_.e.path)" })
 
     # возврат служб и задач: ровно в то, что было
     $script:Calls = New-Object System.Collections.Generic.List[string]
     function Get-Service { param($Name, $ErrorAction) [pscustomobject]@{ Name = $Name } }
-    function Set-Service { param($Name, $StartupType, $ErrorAction) $script:Calls.Add("set $Name $StartupType") }
+    # тип запуска после возврата сверяется по реестру — заглушки ведут его сами
+    $script:FakeStart = @{}
+    function Set-Service { param($Name, $StartupType, $ErrorAction) $script:Calls.Add("set $Name $StartupType"); $script:FakeStart[$Name] = @{ Automatic = 2; Manual = 3; Disabled = 4 }["$StartupType"] }
+    function Get-RegValue { param($Path, $Name) if ($Name -eq 'Start') { return $script:FakeStart[(Split-Path $Path -Leaf)] } return $null }
     function Start-Service { param($Name, $ErrorAction) $script:Calls.Add("start $Name") }
-    function Set-ItemProperty { param($LiteralPath, $Name, $Value, $Type, $ErrorAction) $script:Calls.Add("prop $Name $Value") }
+    function Set-ItemProperty { param($LiteralPath, $Name, $Value, $Type, $ErrorAction) $script:Calls.Add("prop $Name $Value"); if ($Name -eq 'Start') { $script:FakeStart[(Split-Path $LiteralPath -Leaf)] = [int]$Value } }
     function Set-TaskEnabled { param($Full, $Enabled) $script:Calls.Add("task $Full $Enabled"); 'ok' }
     $r.svcManual = (Restore-JournalEntry ([pscustomobject]@{ kind = 'svc'; name = 'dmwappushservice'; old = '3'; delayed = ''; running = $true })).ok
     $r.svcDelayed = (Restore-JournalEntry ([pscustomobject]@{ kind = 'svc'; name = 'DiagTrack'; old = '2'; delayed = '1'; running = $false })).ok
@@ -1540,6 +1622,10 @@ if ($jr) {
     Check 'задачам переносимая папка, которую можно подменить, не доверена' ((-not $jr.taskTrusted) -and $jr.taskEnsureThrows)
     Check 'сетевая папка — без прав доступа' (-not $jr.uncAcl)
     Check 'путь к папке Windows подменить нельзя, к временной — можно' ($jr.chainWindows -and -not $jr.chainTemp) ("windows=$($jr.chainWindows) temp=$($jr.chainTemp)")
+    Check 'в момент изменения реестра «как было» уже на диске' ($jr.walBeforeChange -and $jr.walValue)
+    Check 'неудавшееся изменение отзывает свою запись, удачное — остаётся' ($jr.walRetracted -and $jr.walKept)
+    Check 'после отказа журнала реестр не меняется' ([bool]$jr.walBlocked)
+    Check 'форма записей журнала проверяется' (@($jr.shapeWrong).Count -eq 0) (@($jr.shapeWrong) -join ', ')
     Check 'журнал прежней версии узнаётся' ([bool]$jr.legacyRead)
     Check 'пометка «прежняя версия» не теряется при дописывании' ([bool]$jr.legacyKept -and $jr.legacyItems -eq 2) ("записей: " + $jr.legacyItems)
     Check 'повреждённый журнал откладывается, а не затирается' ($jr.broken -eq 1 -and $jr.afterBroken -eq 1)
@@ -1578,7 +1664,7 @@ $auJob = Start-Job -ArgumentList $engine -ScriptBlock {
     param($EnginePath)
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-        if ($fn.Name -in @('Get-AuditSetting', 'Get-MonitorEnabled', 'Set-AuditSetting', 'Set-MonitorEnabled', 'Get-AuditName', 'Get-JournalKey', 'ConvertTo-Fields', 'Read-SecurityEvents', 'Invoke-NetGuard')) { Invoke-Expression $fn.Extent.Text }
+        if ($fn.Name -in @('Get-AuditSetting', 'Get-MonitorEnabled', 'Set-AuditSetting', 'Set-MonitorEnabled', 'Get-AuditName', 'Get-JournalKey', 'ConvertTo-Fields', 'Read-SecurityEvents', 'Invoke-NetGuard', 'Test-JournalEntryShape')) { Invoke-Expression $fn.Extent.Text }
     }
     foreach ($a in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
         $lt = $a.Left -as [System.Management.Automation.Language.VariableExpressionAst]
@@ -1712,6 +1798,7 @@ $gdJob = Start-Job -ArgumentList $engine -ScriptBlock {
     $r = @{}
     # заглушки планировщика: задача «отработала» с заданным кодом; что
     # зарегистрировано, то и отдаётся обратно — если не подменили
+    function Write-Log { param([string]$Message = '') }
     $script:Tasks = @{}; $script:Started = New-Object System.Collections.Generic.List[string]; $script:Removed = New-Object System.Collections.Generic.List[string]
     $script:Swap = $false
     function New-ScheduledTaskAction { param($Execute, $Argument) [pscustomobject]@{ Execute = $Execute; Arguments = $Argument } }
@@ -1753,6 +1840,13 @@ $gdJob = Start-Job -ArgumentList $engine -ScriptBlock {
     $r.slow = Invoke-OneShotTask 'w11p-test' 'cmd' -AsSystem -Minutes 0
     $r.slowStopped = $script:Stopped.Count; $r.slowRemoved = $script:Removed.Count
     $script:Code = 0
+    # программа запускается напрямую — без cmd.exe и без сборки командной строки
+    $script:Tasks.Clear()
+    $r.direct = Invoke-OneShotTask 'w11p-test' -Execute 'C:\Windows\System32\schtasks.exe' -Arguments '/change /tn "\A & B" /enable' -AsSystem
+    $r.directSeen = @($script:Started).Count -gt 0
+    # через cmd не пропускаются % и переводы строк
+    $script:Started.Clear(); $before = $script:Tasks.Count
+    $r.pctRejected = (-not (Invoke-OneShotTask 'w11p-test' 'echo %PATH%' -AsSystem)) -and $script:Started.Count -eq 0 -and $script:Tasks.Count -eq $before
     # куст профиля не отключился — об этом сказано и это ошибка
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Use-ProfileHive' }, $true)) { Invoke-Expression $fn.Extent.Text }
     $script:HiveLog = New-Object System.Collections.Generic.List[string]
@@ -1781,6 +1875,8 @@ if ($gd) {
     Check 'чужая задача с тем же именем не запускается и не удаляется' ($gd.okBesideForeign -and $gd.foreignKept)
     Check 'подменённая команда задачи не запускается, задача убирается' ((-not $gd.swapped) -and $gd.swapStarted -eq 0 -and $gd.swapRemoved -eq 1) ("started=$($gd.swapStarted) removed=$($gd.swapRemoved)")
     Check 'короткие задачи после себя не остаются' ($gd.leftover -eq 0) ("осталось: $($gd.leftover)")
+    Check 'короткая задача умеет запускать программу напрямую' ($gd.direct -and $gd.directSeen)
+    Check 'в команду через cmd не пропускаются % и переводы строк' ([bool]$gd.pctRejected)
     Check 'недождавшаяся задача останавливается и убирается' ((-not $gd.slow) -and $gd.slowStopped -eq 1 -and $gd.slowRemoved -eq 1) ("остановлено $($gd.slowStopped), убрано $($gd.slowRemoved)")
     Check 'неотключившийся куст профиля назван и посчитан ошибкой' ($gd.hiveFails -eq 1 -and $gd.hiveLogged)
     Check 'после cmdkey проверяется, что учётных данных не осталось' ($gd.check -eq '(cmdkey /list | findstr /i /c:"virtualapp/didlogical" /c:"SSO_POP_Device" >nul && exit 1 || exit 0)') $gd.check
@@ -1798,8 +1894,10 @@ Check 'откат не удаляет ветки политик Chrome/Office/VS
 $applyDefText = [regex]::Match($engineText, "(?s)function Apply-Def \{.*?\n\}").Value
 $svcApply = [regex]::Match($applyDefText, "(?s)        'svc' \{.*?\n        \}").Value
 $svcOptApply = [regex]::Match($applyDefText, "(?s)        'svcopt' \{.*?\n        \}").Value
-Check 'отключение службы пишется в журнал' (($svcApply -match 'Add-JournalEntry \$was') -and ($svcOptApply -match 'Add-JournalEntry \$was'))
-Check 'отключение задачи пишется в журнал' ($engineText -match "'ok'\s+\{ Add-TaskJournal \`$d\.P")
+# журнал раньше изменения: «как было» ложится на диск до Set-Service
+Check 'отключение службы пишется в журнал заранее' (($svcApply -match '(?s)Write-AheadEntry \$was.*Set-Service') -and ($svcOptApply -match '(?s)Write-AheadEntry \$was.*Set-Service'))
+$taskApply = [regex]::Match($applyDefText, "(?s)        'task' \{.*?\n        \}").Value
+Check 'отключение задачи пишется в журнал заранее' ($taskApply -match '(?s)Write-AheadEntry \$tj.*Set-TaskEnabled \$d\.P \$false')
 Check 'старый откат служб — только для журнала прежней версии' ($engineText -match "if \(\`$legacyRevert\) \{\s+Write-Section 'Службы")
 $silentOk = @($engineText -split "`r?`n" | Where-Object { $_ -match "try \{.*Write-Log.*\[\+\].*\} catch \{ \}\s*$" })
 Check 'монитор отдаёт ошибку чтения журнала безопасности' (($engineText -match 'readError=\$rd\.error') -and ($engineText -match 'netGuardError='))
@@ -1843,7 +1941,15 @@ Check 'полный откат не стирает отложенный журн
 Check 'откат по недоверенному журналу не говорит «возвращены»' ($engineText -match "if \(`"\`$\(\`$rj\.state\)`" -eq 'untrusted'\) \{\s+Write-Log '\[!\] Настройки по журналу изменений не возвращены")
 Check 'откат «по умолчанию» — только для доверенного журнала прежнего образца' (($engineText -match '\$legacyRevert = \("\$\(\$rj\.state\)" -eq ''legacy''\)') -and ($engineText -notmatch '\$legacyRevert = \[bool\]\$rj\.legacy -or'))
 $oemApply = [regex]::Match($engineText, "(?s)if \(\(Use-Module 'oem'\).*?\n\}").Value
-Check 'отключение компонентов производителя пишется в подписанный журнал' (($oemApply -match 'Add-JournalEntry \$was') -and ($oemApply -match 'Add-TaskJournal') -and ($oemApply -notmatch "Save-Json 'oem-disabled\.json'"))
+Check 'отключение компонентов производителя пишется в подписанный журнал заранее' (($oemApply -match '(?s)Write-AheadEntry \$was.*Set-Service') -and ($oemApply -match '(?s)Write-AheadEntry \$tj.*Disable-ScheduledTask') -and ($oemApply -notmatch "Save-Json 'oem-disabled\.json'"))
+Check 'изменения в обход журнала закрыты: датчики, кусты профилей, автозагрузка, точка восстановления, служба истории' (
+    ($engineText -match "(?s)if \(\`$SensorSet\) \{.*?SensorKey -notmatch '\^\[A-Za-z0-9_\]\{1,64\}\$'.*?Set-Reg -Path \`$root") -and
+    ([regex]::Match($engineText, "(?s)function Apply-ProfilesHives \{.*?\n\}").Value -match '(?s)Save-JournalEntries -Quiet.*New-ItemProperty -LiteralPath \$p\.kp') -and
+    ($engineText -match "(?s)if \(\`$StartupSet\) \{.*?Write-AheadEntry \`$sj.*?Set-StartupState") -and
+    ([regex]::Match($engineText, "(?s)function Ensure-Backup \{.*?\n\}").Value -match '\$srOld') -and
+    ($engineText -match 'foreach \(\$n in \$cdpRun\) \{\s+if \(\$DryRun\) \{ continue \}'))
+Check 'файлы данных заменяются одним действием системы' (([regex]::Match($engineText, "(?s)function Save-Json \{.*?\n\}").Value -match '\[IO\.File\]::Replace\(') -and ([regex]::Match($engineText, "(?s)function Save-Json \{.*?\n\}").Value -notmatch 'Move-Item -LiteralPath'))
+Check 'задачи от имени системы запускают schtasks и PowerShell напрямую, без cmd' (($engineText -match '-Execute "\$env:SystemRoot\\System32\\schtasks\.exe"') -and ($engineText -match "Invoke-OneShotTask 'Win11Privacy buffer' -Execute \`$script:PsExe"))
 Check 'список производителя прежней версии сверяется с тем, что программа узнаёт сама' ($engineText -match "foreach \(\`$k in @\(\(Detect-Oem\)\.items\)\)")
 Check 'задачи стража запускают PowerShell по полному пути' (($engineText -notmatch "Execute 'powershell\.exe'") -and ([regex]::Matches($engineText, 'New-ScheduledTaskAction -Execute \$script:PsExe').Count -eq 4))
 Check 'применение проверяет журнал заранее' ($engineText -match 'if \(-not \(Test-JournalWritable\)\) \{\s+Write-Log .ПРИМЕНЕНИЕ ОТМЕНЕНО')
