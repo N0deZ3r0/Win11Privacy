@@ -1599,6 +1599,7 @@ $auJob = Start-Job -ArgumentList $engine -ScriptBlock {
     $script:J = @{ trusted = $true; items = @() }; $script:Restored = New-Object System.Collections.Generic.List[string]
     function Read-JournalFile { param([switch]$ReadOnly) $script:J }
     function Restore-JournalEntry { param($e) if (-not $script:Ignore) { $script:State = [int]$e.old }; @{ ok = $true } }
+    function Remove-JournalKey { param([string]$Key) $script:Restored.Add($Key) }
     # заглушка auditpol: резервная копия политики — числом, как у настоящего
     function auditpol.exe {
         $a = $args -join ' '
