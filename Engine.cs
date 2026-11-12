@@ -244,6 +244,20 @@ namespace Win11Privacy
             }
         }
 
+        // --- PowerShell: только системный, по полному пути ------------------ //
+        //  Раньше, если файла на своём месте не оказывалось, запускался просто
+        //  «powershell.exe». По имени без пути Windows ищет программу и в
+        //  папке самого exe, и в текущей: подложенный туда powershell.exe
+        //  выполнился бы с правами администратора. Теперь — ошибка.
+        internal static string PowerShellPath()
+        {
+            string full = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
+                                       "WindowsPowerShell\\v1.0\\powershell.exe");
+            if (!File.Exists(full))
+                throw new FileNotFoundException(L.T("Не найден системный PowerShell:\n") + full, full);
+            return full;
+        }
+
         // --- путь к готовому к запуску скрипту ------------------------------ //
         internal static string Ensure()
         {

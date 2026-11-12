@@ -242,10 +242,11 @@ namespace Win11Privacy
         private static int RunCliAudit()
         {
             // возвращает число несоответствий как код выхода
-            string script;
-            try { script = ExtractEngineStatic(); }
-            catch (Exception ex) { Console.Error.WriteLine(ex.Message); return -1; }   // защищённой папки нет — движок не запускаем
-            ProcessStartInfo psi = new ProcessStartInfo("powershell.exe",
+            string script, ps;
+            // защищённой папки или системного PowerShell нет — движок не запускаем
+            try { script = ExtractEngineStatic(); ps = EngineFile.PowerShellPath(); }
+            catch (Exception ex) { Console.Error.WriteLine(ex.Message); return -1; }
+            ProcessStartInfo psi = new ProcessStartInfo(ps,
                 "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" -Audit");
             psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = Encoding.UTF8; psi.CreateNoWindow = true;
             Process p = Process.Start(psi);
@@ -261,11 +262,11 @@ namespace Win11Privacy
 
         private static int RunEngineConsole(string extra)
         {
-            string script;
-            try { script = ExtractEngineStatic(); }
+            string script, ps;
+            try { script = ExtractEngineStatic(); ps = EngineFile.PowerShellPath(); }
             catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 1; }
             string desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-            ProcessStartInfo psi = new ProcessStartInfo("powershell.exe",
+            ProcessStartInfo psi = new ProcessStartInfo(ps,
                 "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" " + extra + " -BackupRoot \"" + desktop + "\"");
             psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = Encoding.UTF8; psi.CreateNoWindow = true;
             Process p = Process.Start(psi);

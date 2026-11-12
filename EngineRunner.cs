@@ -175,18 +175,8 @@ namespace Win11Privacy
             return true;
         }
 
-        // Полный путь к PowerShell — надёжнее, чем расчёт на PATH
-        private static string PowerShellExe()
-        {
-            try
-            {
-                string full = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
-                                           "WindowsPowerShell\\v1.0\\powershell.exe");
-                if (File.Exists(full)) return full;
-            }
-            catch { }
-            return "powershell.exe";
-        }
+        // Только системный PowerShell по полному пути (см. EngineFile.PowerShellPath)
+        private static string PowerShellExe() { return EngineFile.PowerShellPath(); }
 
         private ProcessStartInfo EnginePsi(string extra)
         {
@@ -273,7 +263,7 @@ namespace Win11Privacy
             {
                 SettleBusy(L.T("Не удалось запустить PowerShell."));
                 LogLine(L.T("Не удалось запустить PowerShell: ") + ex.Message, Theme.Err);
-                LogLine(L.T("Путь: ") + PowerShellExe(), Theme.TextDim);
+                LogLine(L.T("Путь: ") + psi.FileName, Theme.TextDim);
                 MessageBox.Show(this, L.T("Не удалось запустить PowerShell:\n") + ex.Message,
                     L.T("Ошибка"), MessageBoxButtons.OK, MessageBoxIcon.Error);
             }

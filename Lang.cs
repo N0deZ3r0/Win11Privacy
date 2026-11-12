@@ -59,7 +59,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(1522, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1523, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -1582,6 +1582,7 @@ namespace Win11Privacy
             _map["Здесь по шагам видно, что программа делает: применение и откат настроек, работа автозащиты и наблюдения за сетью. Если что-то пошло не так, сохраните журнал и приложите его к сообщению об ошибке."] = "This shows step by step what the program does: applying and undoing settings, auto-protection and network monitoring. If something goes wrong, save the log and attach it to your bug report.";
             _map["Не удалось подготовить защищённую папку для движка:\n"] = "Could not prepare the protected folder for the engine:\n";
             _map["\n\nБез неё движок не запускается: из незащищённой папки его могла бы подменить любая программа. Перезапустите компьютер и попробуйте снова; если не поможет — проверьте, не блокирует ли антивирус папку ProgramData\\Win11Privacy."] = "\n\nThe engine does not run without it: in an unprotected folder any program could swap it. Restart the computer and try again; if that does not help, check whether an antivirus is blocking the ProgramData\\Win11Privacy folder.";
+            _map["Не найден системный PowerShell:\n"] = "System PowerShell not found:\n";
         }
     }
 }

@@ -197,6 +197,9 @@ $script:PortableTaskState = $null    # можно ли задачам верит
 # выполнился бы с повышенными правами при следующем входе в систему.
 $script:SafeRoot       = Join-Path $env:ProgramData 'Win11Privacy'
 $script:TaskEngine     = Join-Path $script:SafeRoot 'engine.ps1'
+# Задачи стража и наблюдения запускают PowerShell по полному пути: по одному
+# имени Windows ищет программу и в рабочей папке задачи.
+$script:PsExe          = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 # Ключ подписи журнала отката: всегда в защищённом корне, читать его могут
 # только система и администраторы
 $script:SignKeyFile    = Join-Path $script:SafeRoot 'journal.key'
@@ -745,7 +748,12 @@ function Test-KeyFileSecure {
     } catch { return $false }
 }
 
+# Ключ заводится (или заменяется испорченный) только при записи журнала,
+# -Create. Проверка подписи ключ лишь читает: завести новый при проверке —
+# значит наверняка «не сойтись» с журналом, подписанным прежним, и молча
+# лишить человека отката. Без ключа журнал просто непроверяем.
 function Get-SignKey {
+    param([switch]$Create)
     if ($null -ne $script:SignKey) { return $script:SignKey }
     if (-not (Assert-SafeRoot)) { throw 'папка ProgramData\Win11Privacy не защищена — ключа подписи журнала нет' }
     $p = $script:SignKeyFile
@@ -753,11 +761,13 @@ function Get-SignKey {
         $b = $null
         if (Test-KeyFileSecure $p) { try { $b = [IO.File]::ReadAllBytes($p) } catch { $b = $null } }
         if ($null -ne $b -and $b.Length -eq 32) { $script:SignKey = $b; return $b }
+        if (-not $Create) { throw 'ключ подписи журнала испорчен или открыт не только администраторам' }
         if (-not (Test-Admin)) { throw 'ключ подписи журнала недоступен' }
         # ключ мог прочитать кто-то чужой — он больше ничего не доказывает
         Move-Item -LiteralPath $p -Destination ($p + '.untrusted-' + (Get-Date -Format 'yyyyMMdd-HHmmss')) -Force -ErrorAction Stop
         Write-Log '   [!] ключ подписи журнала был открыт не только администраторам или повреждён -- он заменён новым'
     }
+    if (-not $Create) { throw 'ключа подписи журнала нет' }
     if (-not (Test-Admin)) { throw 'ключа подписи журнала нет, а создать его можно только с правами администратора' }
     $b = New-Object byte[] 32
     $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
@@ -779,9 +789,9 @@ function Get-SignKey {
 # Подпись — по тексту, который даёт разбор самого файла: у хэш-таблиц и у
 # прочитанных из файла объектов поля идут в разном порядке.
 function Get-JournalSig {
-    param($Items, [bool]$Legacy)
+    param($Items, [bool]$Legacy, [switch]$ForWrite)
     $canon = ('w11p-journal|{0}|' -f [int]$Legacy) + (ConvertTo-Json -InputObject @($Items) -Depth 8 -Compress)
-    $h = [System.Security.Cryptography.HMACSHA256]::new([byte[]](Get-SignKey))
+    $h = [System.Security.Cryptography.HMACSHA256]::new([byte[]](Get-SignKey -Create:$ForWrite))
     try { return (($h.ComputeHash([Text.Encoding]::UTF8.GetBytes($canon)) | ForEach-Object { $_.ToString('x2') }) -join '') }
     finally { $h.Dispose() }
 }
@@ -820,19 +830,30 @@ function Test-JournalEntryKnown {
 # -ReadOnly — для показа журнала: ничего не откладывать и не писать.
 function Read-JournalFile {
     param([switch]$ReadOnly)
+    # state: none — журнала нет; valid — ему можно верить; legacy — можно
+    # верить, но он прежнего образца (не знает служб и задач); untrusted —
+    # нельзя: повреждён, подпись не сошлась или её нечем проверить. Раньше
+    # отложенный недоверенный журнал выглядел просто «отсутствующим», и
+    # полный откат переходил к прежнему откату «по умолчанию».
     $p = Join-Path $script:DataDir 'changes.json'
-    $res = @{ items = @(); legacy = $false; exists = $false; signed = $false; trusted = $true; updated = ''; dropped = 0 }
+    $res = @{ items = @(); legacy = $false; exists = $false; signed = $false; trusted = $true; state = 'none'; updated = ''; dropped = 0 }
     if (-not (Test-Path -LiteralPath $p)) { return $res }
     $res.exists = $true
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    # Недоверенный журнал откладывается рядом, а не затирается: следующая
+    # запись иначе пошла бы поверх, и прочитать его потом было бы нечем.
+    $setAside = {
+        param([string]$Prefix, [string]$Why)
+        $res.trusted = $false; $res.state = 'untrusted'
+        if ($ReadOnly) { return }
+        $bad = Join-Path $script:DataDir ($Prefix + $stamp + '.json')
+        Move-Item -LiteralPath $p -Destination $bad -Force -ErrorAction Stop
+        Write-Log ("   [!] {0} По нему ничего не возвращается; файл отложен как {1}" -f $Why, (Split-Path $bad -Leaf))
+        $res.exists = $false
+    }
     try { $j = Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json }
     catch {
-        if ($ReadOnly) { $res.trusted = $false; return $res }
-        $bad = Join-Path $script:DataDir ('changes.broken-' + $stamp + '.json')
-        Move-Item -LiteralPath $p -Destination $bad -Force -ErrorAction Stop
-        Write-Log ("   [!] журнал отката был повреждён и отложен как {0}" -f (Split-Path $bad -Leaf))
-        $res.exists = $false
-        $res.legacy = $true
+        & $setAside 'changes.broken-' 'журнал отката повреждён.'
         return $res
     }
     $items = @()
@@ -844,29 +865,26 @@ function Read-JournalFile {
     if ($j.PSObject.Properties['updated']) { $res.updated = "$($j.updated)" }
 
     if ($j.PSObject.Properties['sig'] -and "$($j.sig)") {
+        # Ключ здесь только читается: заводить новый при проверке — значит
+        # наверняка «не сойтись» с журналом, подписанным прежним.
         $want = $null
         try { $want = Get-JournalSig $items $res.legacy } catch { $want = $null }
         if ($null -eq $want) {
-            # проверить нечем — значит, и верить нельзя; но файл не наш, чтобы его трогать
-            $res.trusted = $false
-            if (-not $ReadOnly) { Write-Log '   [!] подпись журнала отката проверить нечем: ключ недоступен. Журналу сейчас верить нельзя.' }
+            & $setAside 'changes.unverifiable-' 'подпись журнала отката проверить нечем: ключа подписи нет или он испорчен.'
             return $res
         }
         if ($want -ne "$($j.sig)") {
-            $res.trusted = $false
-            if ($ReadOnly) { return $res }
-            $bad = Join-Path $script:DataDir ('changes.unverified-' + $stamp + '.json')
-            Move-Item -LiteralPath $p -Destination $bad -Force -ErrorAction Stop
-            Write-Log ("   [!] подпись журнала отката не сошлась: его правила не эта программа или он с другого компьютера. По нему ничего не возвращается; файл отложен как {0}" -f (Split-Path $bad -Leaf))
-            $res.exists = $false
+            & $setAside 'changes.unverified-' 'подпись журнала отката не сошлась: его правила не эта программа или он с другого компьютера.'
             return $res
         }
         $res.signed = $true; $res.items = $items
+        $res.state = $(if ($res.legacy) { 'legacy' } else { 'valid' })
         return $res
     }
     # Без подписи — журнал прежней версии. В защищённой папке подменить его
     # было некому. В переносимой — могли: из него остаются только записи о
     # настройках самой программы.
+    $res.state = $(if ($res.legacy) { 'legacy' } else { 'valid' })
     if ($script:DataDir -eq $script:SafeRoot) { $res.items = $items; return $res }
     $keep = @($items | Where-Object { Test-JournalEntryKnown $_ })
     $res.dropped = $items.Count - $keep.Count
@@ -887,7 +905,7 @@ function Write-JournalFile {
         $back = ConvertFrom-Json (ConvertTo-Json -InputObject $arr -Depth 8 -Compress)
         $parsed = @($back)
     }
-    $sig = Get-JournalSig $parsed $Legacy
+    $sig = Get-JournalSig $parsed $Legacy -ForWrite
     Save-Json 'changes.json' ([ordered]@{ schema = 3; legacy = $Legacy; updated = (Get-Date).ToString('s'); items = $parsed; sig = $sig })
 }
 
@@ -3801,7 +3819,7 @@ if ($InstallGuard) {
         # Снятые внутри модуля пункты страж тоже помнит: иначе он «чинил» бы
         # то, что человек оставил нарочно, — например, DoSvc ради Магазина.
         Save-Json 'profile.json' @{ version=1; modules=$mods; skip=@($SkipItems); created=(Get-Date).ToString('s') }
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -Guard' + $script:DataArg)
+        $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -Guard' + $script:DataArg)
         $t1 = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
         $t1.Delay = 'PT3M'
         # по умолчанию раз в неделю; -GuardDaily — каждый день в то же время
@@ -4451,7 +4469,7 @@ if ($InstallWatcher) {
         if (-not (Get-MonitorEnabled)) { Set-MonitorEnabled $true | Out-Null }
         foreach ($d in $script:Defs) { if ($d.M -eq 'firewall') { Apply-Def $d } }
 
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -WatcherNotify' + $script:DataArg)
+        $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -WatcherNotify' + $script:DataArg)
         $cls = Get-CimClass -ClassName MSFT_TaskEventTrigger -Namespace Root/Microsoft/Windows/TaskScheduler
         $trigger = New-CimInstance -CimClass $cls -ClientOnly
         $trigger.Subscription = '<QueryList><Query Id="0" Path="Security"><Select Path="Security">*[System[(EventID=5157)]]</Select></Query></QueryList>'
@@ -4947,7 +4965,7 @@ if ($InstallSensorGuard) {
         foreach ($c in @($r0.caps)) { foreach ($it in @($c.items)) { $pairs += ($c.id + '|' + $it.app) } }
         Save-Json 'sensor-apps.json' @{ pairs = $pairs; updated = (Get-Date).ToString('s') }
 
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -SensorGuard' + $script:DataArg)
+        $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -SensorGuard' + $script:DataArg)
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 3650)
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
         $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
@@ -4977,7 +4995,7 @@ if ($InstallNetGuard) {
             try { $p = (Get-Process -Id $c.OwningProcess -ErrorAction Stop).Path; if ($p) { $known[$p.ToLowerInvariant()] = $true } } catch { }
         }
         Save-Json 'net-apps.json' @{ known = @($known.Keys); recent = @(); learnUntil = (Get-Date).AddHours(1).ToString('s'); last = (Get-Date).ToString('s') }
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -NetGuard' + $script:DataArg)
+        $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -NetGuard' + $script:DataArg)
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Days 3650)
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
         $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
@@ -5642,12 +5660,12 @@ function Restore-Journal {
     if (-not (Test-DataTrusted)) {
         Write-Log '   [!] папка данных программы не защищена от подмены -- журналу отката сейчас нельзя верить, ничего не возвращаем'
         $script:Failures++
-        return @{ restored = 0; failed = 0 }
+        return @{ restored = 0; failed = 0; state = 'untrusted' }
     }
     $jf = Read-JournalFile
     # подпись не сошлась или её нечем проверить — почему, уже сказано выше
-    if (-not $jf.trusted) { $script:Failures++; return @{ restored = 0; failed = 0; untrusted = $true } }
-    if ($jf.items.Count -eq 0) { Write-Log '   [-] журнал пуст — возвращать нечего'; return @{ restored = 0; failed = 0; legacy = $jf.legacy } }
+    if (-not $jf.trusted) { $script:Failures++; return @{ restored = 0; failed = 0; state = 'untrusted' } }
+    if ($jf.items.Count -eq 0) { Write-Log '   [-] журнал пуст — возвращать нечего'; return @{ restored = 0; failed = 0; legacy = $jf.legacy; state = $jf.state } }
     # Журнал идёт от старых записей к новым, и про каждый параметр нужна
     # первая: она помнит состояние до нас. Раньше список переворачивался, и у
     # журнала с повторами (версии до схлопывания) возвращалось то значение,
@@ -5691,7 +5709,7 @@ function Restore-Journal {
     if ($bad -gt 0) { Write-Log ("   [!] не удалось вернуть: {0} -- эти записи остались в журнале" -f $bad) }
     try { Use-JournalLock { Write-JournalFile $failed.ToArray() $jf.legacy } }
     catch { Write-Log ("   [!] журнал отката не переписался: {0}" -f $_.Exception.Message); $script:Failures++ }
-    return @{ restored = $ok + $svcBack; startup = $startBack; failed = $bad; legacy = $jf.legacy }
+    return @{ restored = $ok + $svcBack; startup = $startBack; failed = $bad; legacy = $jf.legacy; state = $jf.state }
 }
 
 # --------------------------------------------------------------------------- #
@@ -5971,10 +5989,15 @@ if ($Revert) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
 
     Write-Section 'Настройки реестра, службы, задачи'; $rj = Restore-Journal
-    # Журнал прежних версий (или его нет вовсе) не знает, какими были службы,
-    # задачи и переменные среды до программы. Только для него — прежний откат
-    # «по умолчанию», и только для того, что сейчас выключено.
-    $legacyRevert = [bool]$rj.legacy -or -not (Test-Path -LiteralPath (Join-Path $script:DataDir 'changes.json'))
+    # Журнал прежних версий не знает, какими были службы, задачи и переменные
+    # среды до программы. Только для него — прежний откат «по умолчанию», и
+    # только для того, что сейчас выключено. Раньше сюда вело и отсутствие
+    # файла журнала — а его нет и тогда, когда недоверенный журнал только что
+    # отложен: отказ от подделки оборачивался откатом по умолчанию. Теперь —
+    # только журнал прежнего образца, которому можно верить.
+    $legacyRevert = ("$($rj.state)" -eq 'legacy')
+    if ("$($rj.state)" -eq 'untrusted') { Write-Log '   [!] журналу отката нельзя верить -- службы, задачи и политика аудита «по умолчанию» тоже не возвращаются' }
+    elseif ("$($rj.state)" -eq 'none') { Write-Log '   [-] журнала нет -- службы, задачи и переменные среды возвращать не по чему' }
     Write-Section 'Файл hosts'; Remove-HostsBlock
     Write-Section 'Брандмауэр'; Remove-FwRules
     # Политику аудита возвращает журнал — ровно ту, что была до программы.
@@ -6013,16 +6036,27 @@ if ($Revert) {
         }
     }
     Write-Section 'Компоненты производителя'
+    # Новые версии возвращают их по журналу отката (выше). Здесь — список
+    # прежних версий, oem-disabled.json. Подписи у него нет, поэтому из него
+    # берётся только то, что программа сама сейчас узнаёт как компонент
+    # производителя: та же служба или задача, тот же вид. Чужое имя,
+    # дописанное в файл, не включается.
     $oemSaved = Load-Json 'oem-disabled.json'
     if ($oemSaved) {
+        $known = @{}
+        foreach ($k in @((Detect-Oem).items)) { $known[("{0}|{1}" -f $k.type, $k.name).ToLowerInvariant()] = $true }
         foreach ($it in @($oemSaved)) {
+            $type = "$($it.type)"; $name = "$($it.name)"
+            if ($type -notin @('svc', 'task') -or -not $known.ContainsKey(("{0}|{1}" -f $type, $name).ToLowerInvariant())) {
+                Write-Log ("   [!] {0} -- не компонент производителя на этом компьютере, пропущено" -f $name); continue
+            }
             try {
-                if ($it.type -eq 'svc') { Set-Service -Name $it.name -StartupType $(if ($it.state -match 'Auto') { 'Automatic' } else { 'Manual' }) -ErrorAction Stop; Write-Log "   [+] служба $($it.name) -> $($it.state)" }
-                else { $pp = Split-TaskPath $it.name; Enable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null; Write-Log "   [+] задача $($pp[1]) включена" }
-            } catch { Write-Log "   [-] $($it.name) -- пропущено" }
+                if ($type -eq 'svc') { Set-Service -Name $name -StartupType $(if ("$($it.state)" -match 'Auto') { 'Automatic' } else { 'Manual' }) -ErrorAction Stop; Write-Log "   [+] служба $name -> $($it.state)" }
+                else { $pp = Split-TaskPath $name; Enable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null; Write-Log "   [+] задача $($pp[1]) включена" }
+            } catch { Write-Log "   [-] $name -- пропущено" }
         }
         Remove-Item -LiteralPath (Join-Path $script:DataDir 'oem-disabled.json') -Force -ErrorAction SilentlyContinue
-    } else { Write-Log '   [-] ничего не отключалось' }
+    } else { Write-Log '   [-] список прежней версии не найден -- если программа их отключала, они вернулись по журналу' }
 
     Write-Section 'Сторонние программы'
     # Переменные среды возвращает журнал. Журнал прежней версии их не знает:
@@ -6072,14 +6106,24 @@ if ($Revert) {
         foreach ($d in $left) {
             # что вернуть не удалось, остаётся в журнале для второй попытки
             if ($d.file -eq 'changes.json' -and [int]$rj.failed -gt 0) { Write-Log '   [-] журнал отката оставлен: в нём то, что вернуть не удалось'; continue }
+            # Отложенный журнал (повреждён, подпись не сошлась, проверить
+            # нечем) — след подмены, а при потерянном ключе и единственная
+            # копия журнала. Раньше откат стирал его вместе с остальными
+            # данными сразу после того, как отложил.
+            if ($d.file -like 'changes.*-*.json') { Write-Log ("   [-] отложенный журнал оставлен: {0}" -f $d.file); continue }
             try { Remove-Item -LiteralPath (Join-Path $script:DataDir $d.file) -Force -ErrorAction Stop; Write-Log ("   [+] удалён: {0}" -f $d.file) }
             catch { Write-Log ("   [!] не удалось удалить {0}" -f $d.file) }
         }
     }
 
     Write-Log ''
-    Write-Log 'Настройки реестра возвращены по журналу изменений — ручной импорт .reg больше не нужен.'
-    Write-Log 'Папка резервной копии на рабочем столе остаётся как запасной вариант.'
+    if ("$($rj.state)" -eq 'untrusted') {
+        Write-Log '[!] Настройки по журналу изменений не возвращены: журналу нельзя верить (почему — сказано выше).'
+        Write-Log 'Запасной вариант — резервная копия реестра на рабочем столе или точка восстановления Windows.'
+    } else {
+        Write-Log 'Настройки реестра возвращены по журналу изменений — ручной импорт .reg больше не нужен.'
+        Write-Log 'Папка резервной копии на рабочем столе остаётся как запасной вариант.'
+    }
     Write-Log 'Готово. Перезагрузите компьютер.'
     Write-Log '###DONE###'
     exit 0
@@ -6162,27 +6206,32 @@ if ((Use-Module 'oem') -and -not $script:JournalFailed) {
     $oem = Detect-Oem
     Write-Log ("   производитель: {0} {1}" -f $oem.manufacturer, $oem.model)
     if ($oem.items.Count -eq 0) { Write-Log '   [-] компонентов сбора данных не найдено' }
-    $disabledList = @()
+    # Что было до программы, теперь пишется в подписанный журнал отката, как
+    # у любой службы и задачи. Раньше список лежал отдельно, в
+    # oem-disabled.json без подписи: в переносимой папке его мог дописать
+    # кто угодно, и откат включил бы указанные там службы и задачи.
     foreach ($it in $oem.items) {
         if ($DryRun) { Write-Log ("   [тест] {0} {1} -- отключить" -f $it.type, $it.display); continue }
+        if ($script:JournalFailed) { break }
         try {
             if ($it.type -eq 'svc') {
                 $s = Get-Service -Name $it.name -ErrorAction Stop
+                if ($s.StartType -eq 'Disabled' -and $s.Status -ne 'Running') { Write-Log ("   [в] {0} -- уже отключено" -f $it.display); $script:Already++; continue }
+                $was = Get-SvcJournalState $it.name $s
                 if ($s.Status -eq 'Running') { Stop-Service -Name $it.name -Force -ErrorAction SilentlyContinue }
                 Set-Service -Name $it.name -StartupType Disabled -ErrorAction Stop
+                Add-JournalEntry $was
             } else {
                 $pp = Split-TaskPath $it.name
+                $st = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop
+                if ($st.State -eq 'Disabled') { Write-Log ("   [в] {0} -- уже отключено" -f $it.display); $script:Already++; continue }
                 Disable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null
+                Add-TaskJournal $it.name
             }
-            $disabledList += $it
             Write-Log ("   [+] отключено: {0}" -f $it.display); $script:Changes++
         } catch { Write-Log ("   [!] не удалось: {0} -- {1}" -f $it.display, $_.Exception.Message); $script:Failures++ }
     }
-    if ($disabledList.Count -gt 0) {
-        $prev = Load-Json 'oem-disabled.json'
-        $all = @(); if ($prev) { $all += @($prev) }; $all += $disabledList
-        Save-Json 'oem-disabled.json' $all
-    }
+    Save-JournalEntries -Quiet
 }
 
 # --- Другие пользователи и профиль по умолчанию ----------------------------- #

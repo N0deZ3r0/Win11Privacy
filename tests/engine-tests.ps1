@@ -1281,14 +1281,14 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     $r.sigLen = "$($j.sig)".Length
     # запись лежит как есть, а не обёрткой {"value": [...], "Count": N}
     $r.firstKind = "$(@($j.items)[0].kind)"
-    $rj = Read-JournalFile; $r.signedRead = ($rj.signed -and $rj.trusted -and $rj.items.Count -eq 1)
+    $rj = Read-JournalFile; $r.signedRead = ($rj.signed -and $rj.trusted -and $rj.items.Count -eq 1 -and $rj.state -eq 'valid')
 
     # подпись: правка журнала чужой рукой видна, такой журнал не читается
     $jp = Join-Path $script:DataDir 'changes.json'
     $txt = Get-Content $jp -Raw
     Set-Content $jp ($txt -replace '"old":\s*"2"', '"old": "9"') -Encoding UTF8
     $rj = Read-JournalFile
-    $r.tamperUntrusted = (-not $rj.trusted) -and $rj.items.Count -eq 0
+    $r.tamperUntrusted = (-not $rj.trusted) -and $rj.items.Count -eq 0 -and $rj.state -eq 'untrusted'
     $r.tamperAside = @(Get-ChildItem $script:DataDir -Filter 'changes.unverified-*.json').Count
     # дописанная запись тоже
     $script:Journal.Add(@{ kind = 'svc'; name = 'DiagTrack'; old = '2'; newValue = '4' }); Save-JournalEntries -Quiet
@@ -1296,23 +1296,26 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     $j.items += [pscustomobject]@{ kind = 'reg'; path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'; name = 'x'; existed = $true; old = 'C:\evil.exe'; type = 'String' }
     ($j | ConvertTo-Json -Depth 8) | Set-Content $jp -Encoding UTF8
     $r.addUntrusted = -not (Read-JournalFile).trusted
-    # ключа нет — журнал не читается, но и не откладывается: он может быть цел
+    # Ключа нет — журнал непроверяем: при показе он не трогается, а при работе
+    # откладывается целым (а не затирается следующей записью). Новый ключ при
+    # проверке не заводится — иначе прежний журнал наверняка «не сошёлся» бы.
     $script:Journal.Add(@{ kind = 'svc'; name = 'DiagTrack'; old = '2'; newValue = '4' }); Save-JournalEntries -Quiet
-    if (-not $Admin) {
-        $script:SignKey = $null
-        $rj = Read-JournalFile
-        $r.noKeyUntrusted = (-not $rj.trusted) -and (Test-Path $jp)
-    } else {
-        # с правами администратора ключ заводится сам: только своим, 32 байта,
-        # и при следующем чтении тот же; журнал под прежним ключом не принимается
-        $script:SignKeyFile = Join-Path $script:SafeRoot 'journal.key'
-        $script:SignKey = $null; $script:RootState = $null
-        $k1 = [byte[]](Get-SignKey)
+    $script:SignKeyFile = Join-Path $script:SafeRoot 'journal.key'
+    $script:SignKey = $null; $script:RootState = $null
+    $rjv = Read-JournalFile -ReadOnly
+    $r.noKeyViewKept = ($rjv.state -eq 'untrusted') -and (Test-Path $jp)
+    $rj = Read-JournalFile
+    $r.noKeyUntrusted = ($rj.state -eq 'untrusted') -and -not (Test-Path $jp) -and @(Get-ChildItem $script:DataDir -Filter 'changes.unverifiable-*.json').Count -eq 1
+    $r.noKeyNotCreated = -not (Test-Path $script:SignKeyFile)
+    if ($Admin) {
+        # при записи ключ заводится сам: только своим, 32 байта, и при следующем чтении тот же
+        $k1 = [byte[]](Get-SignKey -Create)
         $r.keyCreated = (Test-Path $script:SignKeyFile) -and $k1.Length -eq 32 -and (Test-KeyFileSecure $script:SignKeyFile)
         $script:SignKey = $null
         $r.keyReread = [Convert]::ToBase64String([byte[]](Get-SignKey)) -eq [Convert]::ToBase64String($k1)
-        $r.noKeyUntrusted = -not (Read-JournalFile).trusted
     }
+    # нет файла — «нет журнала», а не «прежний»
+    $r.noneState = (Read-JournalFile -ReadOnly).state
     $script:SignKey = $testKey
     $r.keyBackOk = (Read-JournalFile).trusted
     # журнал прежней версии без подписи в переносимой папке: только записи о настройках программы
@@ -1323,7 +1326,7 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
         '{"kind":"task","path":"\\Microsoft\\Windows\\Customer Experience Improvement Program\\Consolidator","old":"Enabled"},' +
         '{"kind":"startup","id":"run|HKLM|x","old":"On"}]}') -Encoding UTF8
     $rj = Read-JournalFile
-    $r.legacyKept2 = $rj.items.Count; $r.legacyDropped = $rj.dropped
+    $r.legacyKept2 = $rj.items.Count; $r.legacyDropped = $rj.dropped; $r.schema2State = $rj.state
     # тот же журнал в защищённой папке — целиком: подменить его там было некому
     $keepDir = $script:DataDir; $script:DataDir = $script:SafeRoot
     New-Item -ItemType Directory -Force $script:SafeRoot | Out-Null
@@ -1346,7 +1349,7 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
 
     # журнал прежней версии: без schema — помечается навсегда
     Set-Content (Join-Path $script:DataDir 'changes.json') '{"items":[{"kind":"reg","path":"HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection","name":"AllowTelemetry","existed":false,"old":""}]}' -Encoding UTF8
-    $r.legacyRead = (Read-JournalFile).legacy
+    $rjl = Read-JournalFile; $r.legacyRead = $rjl.legacy; $r.legacyState = $rjl.state
     $script:Journal.Add(@{ kind = 'task'; path = '\A\B'; old = 'Enabled'; newValue = 'Disabled' })
     Save-JournalEntries -Quiet
     $j = Get-Content (Join-Path $script:DataDir 'changes.json') -Raw | ConvertFrom-Json
@@ -1440,7 +1443,12 @@ if ($jr) {
     Check 'подписанный журнал читается' ([bool]$jr.signedRead)
     Check 'изменённая запись в журнале видна: журнал не читается и отложен' ([bool]$jr.tamperUntrusted -and $jr.tamperAside -ge 1)
     Check 'дописанная в журнал запись видна' ([bool]$jr.addUntrusted)
-    Check 'без ключа журналу не верится' ([bool]$jr.noKeyUntrusted)
+    Check 'без ключа журналу не верится, и он откладывается целым' ([bool]$jr.noKeyUntrusted)
+    Check 'без ключа показ журнала его не трогает' ([bool]$jr.noKeyViewKept)
+    Check 'проверка подписи не заводит новый ключ' ([bool]$jr.noKeyNotCreated)
+    Check 'нет файла журнала — «нет журнала», а не «прежний»' ($jr.noneState -eq 'none') ("state=" + $jr.noneState)
+    Check 'журнал без schema — состояние legacy' ($jr.legacyState -eq 'legacy') ("state=" + $jr.legacyState)
+    Check 'журнал нового образца без подписи — не «прежний»' ($jr.schema2State -eq 'valid') ("state=" + $jr.schema2State)
     if ($isAdmin) {
         Check 'ключ подписи заводится сам и закрыт от всех, кроме системы и администраторов' ([bool]$jr.keyCreated)
         Check 'ключ подписи при следующем чтении тот же' ([bool]$jr.keyReread)
@@ -1638,6 +1646,13 @@ $svcOptApply = [regex]::Match($applyDefText, "(?s)        'svcopt' \{.*?\n      
 Check 'отключение службы пишется в журнал' (($svcApply -match 'Add-JournalEntry \$was') -and ($svcOptApply -match 'Add-JournalEntry \$was'))
 Check 'отключение задачи пишется в журнал' ($engineText -match "'ok'\s+\{ Add-TaskJournal \`$d\.P")
 Check 'старый откат служб — только для журнала прежней версии' ($engineText -match "if \(\`$legacyRevert\) \{\s+Write-Section 'Службы")
+Check 'полный откат не стирает отложенный журнал' ($engineText -match "if \(\`$d\.file -like 'changes\.\*-\*\.json'\) \{ Write-Log")
+Check 'откат по недоверенному журналу не говорит «возвращены»' ($engineText -match "if \(`"\`$\(\`$rj\.state\)`" -eq 'untrusted'\) \{\s+Write-Log '\[!\] Настройки по журналу изменений не возвращены")
+Check 'откат «по умолчанию» — только для доверенного журнала прежнего образца' (($engineText -match '\$legacyRevert = \("\$\(\$rj\.state\)" -eq ''legacy''\)') -and ($engineText -notmatch '\$legacyRevert = \[bool\]\$rj\.legacy -or'))
+$oemApply = [regex]::Match($engineText, "(?s)if \(\(Use-Module 'oem'\).*?\n\}").Value
+Check 'отключение компонентов производителя пишется в подписанный журнал' (($oemApply -match 'Add-JournalEntry \$was') -and ($oemApply -match 'Add-TaskJournal') -and ($oemApply -notmatch "Save-Json 'oem-disabled\.json'"))
+Check 'список производителя прежней версии сверяется с тем, что программа узнаёт сама' ($engineText -match "foreach \(\`$k in @\(\(Detect-Oem\)\.items\)\)")
+Check 'задачи стража запускают PowerShell по полному пути' (($engineText -notmatch "Execute 'powershell\.exe'") -and ([regex]::Matches($engineText, 'New-ScheduledTaskAction -Execute \$script:PsExe').Count -eq 4))
 Check 'применение проверяет журнал заранее' ($engineText -match 'if \(-not \(Test-JournalWritable\)\) \{\s+Write-Log .ПРИМЕНЕНИЕ ОТМЕНЕНО')
 Check 'задача планировщика не работает с папкой, которую можно подменить' ($engineText -match 'if \(\$script:TaskRun -and -not \(Test-DataTrusted\)\) \{ exit 1 \}')
 Check 'страж в переносимом режиме не ставится на папку, которую можно подменить' ([regex]::Match($engineText, "(?s)function Install-TaskEngine \{.*?\n\}").Value -match 'Test-PortableTaskTrust')
@@ -1646,6 +1661,8 @@ if (Test-Path $engineCs) {
     $ecs = Get-Content $engineCs -Raw -Encoding UTF8
     Check 'движок не кладётся во временную папку, если защищённую подготовить не вышло' (($ecs -notmatch 'GetTempPath') -and ($ecs -match 'throw new InvalidOperationException\(L\.T\("Не удалось подготовить защищённую папку'))
     Check 'окно проверяет папку данных на любой глубине' ($ecs -match 'Quarantine\(d, r, aside\)')
+    Check 'PowerShell запускается только по полному системному пути' (($ecs -match 'throw new FileNotFoundException\(L\.T\("Не найден системный PowerShell') -and
+        (@(Get-ChildItem (Split-Path $engine) -Filter '*.cs' | Where-Object { (Get-Content $_.FullName -Raw -Encoding UTF8) -match '"powershell\.exe"' }).Count -eq 0))
 }
 Check 'копия движка для задач — только через защищённую установку' (($engineText -notmatch "Copy-Item -LiteralPath \`$PSCommandPath -Destination \`$engineDst") -and ([regex]::Matches($engineText, '\$engineDst = Install-TaskEngine').Count -eq 4))
 
