@@ -49,6 +49,19 @@ namespace Win11Privacy
         {
             _changesList.Controls.Clear();
             List<object> items = (d != null) ? Json.GetArr(d, "items") : new List<object>();
+            // Журнал есть, но верить ему нельзя (подпись не сошлась или ключа
+            // нет) — это не «программа ничего не меняла». Раньше страница
+            // показывала тут пустой журнал.
+            if (d != null && d.ContainsKey("trusted") && !Json.GetBool(d, "trusted"))
+            {
+                SectionHeader su = new SectionHeader(L.T("Журналу изменений нельзя верить"));
+                su.Font = Font; _changesList.Controls.Add(su);
+                _changesList.Restack();
+                _changesState.Text = L.T("Подпись журнала не сошлась или ключа подписи нет: его могли изменить. По нему ничего не возвращается.\n") +
+                                     L.T("Файл не удалён — при следующем изменении он будет отложен рядом. Запасной путь — резервная копия реестра или точка восстановления Windows.");
+                if (_btnChangesBack != null) _btnChangesBack.Enabled = false;
+                return;
+            }
             if (items.Count == 0)
             {
                 SectionHeader sh = new SectionHeader(L.T("Программа ещё ничего не меняла"));

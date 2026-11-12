@@ -438,7 +438,7 @@ Check 'возврат без выбора ничего не делает' ($null
 # --------------------------------------------------------------------------- #
 Write-Host ''
 Write-Host 'Запись в реестр: журнал только после удачи'
-$regFns = @('Get-RegValue', 'Set-RegDirect', 'Set-Reg', 'Test-Admin', 'Test-RegKeyWritable', 'Get-FolderSizeMB')
+$regFns = @('Get-RegValue', 'Set-RegDirect', 'Set-Reg', 'Test-Admin', 'Test-RegKeyWritable', 'Get-FolderSizeMB', 'ConvertTo-RegComparable')
 $regFound = @()
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($regFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $regFound += $fn.Name }
@@ -467,6 +467,22 @@ if ($regFound.Count -eq $regFns.Count) {
     Check 'значение записано' ((Get-RegValue 'HKCU:\Software\Win11PrivacyProbe' 'x') -eq 7)
     Remove-Item -LiteralPath 'HKCU:\Software\Win11PrivacyProbe' -Recurse -Force -ErrorAction SilentlyContinue
     Check 'служебный ключ убран' (-not (Test-Path 'HKCU:\Software\Win11PrivacyProbe'))
+
+    # записанное сверяется: если читается другое, это не успех, но в журнал
+    # изменение попадает всё равно — значение в реестре уже не прежнее
+    $script:grvCalls = 0
+    function Get-RegValue { param([string]$Path, [string]$Name) $script:grvCalls++; if ($script:grvCalls -eq 1) { return $null }; return 5 }
+    $script:Journal = New-Object System.Collections.Generic.List[object]; $script:Failures = 0; $script:Changes = 0
+    Set-Reg -Path 'HKCU:\Software\Win11PrivacyProbe2' -Name 'x' -Value 7 -Type 'DWord' -Comment 'проверка сверки'
+    Check 'записанное сверяется: другое значение — не успех' ($script:Failures -eq 1 -and $script:Changes -eq 0) (($logLines | Select-Object -Last 1))
+    Check '…но изменение всё равно попадает в журнал отката' ($script:Journal.Count -eq 1)
+    foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-RegValue' }, $true)) { Invoke-Expression $fn.Extent.Text }
+    Remove-Item -LiteralPath 'HKCU:\Software\Win11PrivacyProbe2' -Recurse -Force -ErrorAction SilentlyContinue
+    Check 'сравнение значений реестра по типу' (((ConvertTo-RegComparable -1 'DWord') -eq (ConvertTo-RegComparable 4294967295 'DWord')) -and
+        ((ConvertTo-RegComparable '%SystemRoot%\x' 'ExpandString') -eq (ConvertTo-RegComparable "$env:SystemRoot\x" 'ExpandString')) -and
+        ((ConvertTo-RegComparable ([byte[]](1, 255)) 'Binary') -eq '01ff') -and ((ConvertTo-RegComparable '1' 'DWord') -eq (ConvertTo-RegComparable 1 'DWord')) -and
+        ((ConvertTo-RegComparable 'a' 'String') -ne (ConvertTo-RegComparable 'b' 'String')))
+    $script:Journal = New-Object System.Collections.Generic.List[object]; $script:Failures = 0; $script:Changes = 0
 
     # политика, которую система не отдаёт, — это не ошибка программы
     $script:Failures = 0; $script:Blocked = 0
@@ -1189,22 +1205,69 @@ $bufJob = Start-Job -ArgumentList $engine, $bufRoot -ScriptBlock {
     $leaf = (Split-Path $Root -Leaf) + '\'
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-        if ($fn.Name -in @('Get-BufferFiles', 'Get-BufferInfo', 'Purge-Buffer')) { Invoke-Expression $fn.Extent.Text }
+        if ($fn.Name -in @('Get-BufferFiles', 'Get-BufferInfo', 'Purge-Buffer', 'Get-BufferSystemScript', 'Invoke-BufferSystemPurge')) { Invoke-Expression $fn.Extent.Text }
     }
     foreach ($a in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
         $lt = $a.Left -as [System.Management.Automation.Language.VariableExpressionAst]
         if ($null -ne $lt -and $lt.VariablePath.UserPath -eq 'script:BufferFileRx') { Invoke-Expression $a.Extent.Text }
     }
+    $script:Calls = New-Object System.Collections.Generic.List[string]
     function Write-Section { param($t) }
     function Write-Log { param($m) }
     function Get-Service { param($Name, $ErrorAction) $null }
-    function takeown.exe { }
-    function icacls.exe { }
-    $script:DiagDir = $Root; $DryRun = $false; $script:Changes = 0; $script:Failures = 0
+    # права системной папки больше не трогаются: такие вызовы — ошибка
+    function takeown.exe { $script:Calls.Add('takeown') }
+    function icacls.exe { $script:Calls.Add('icacls') }
+    # «Система» здесь — тот же пользователь: задача по-настоящему выполняет
+    # сгенерированный сценарий, и проверяется он сам, его итог и статусы.
+    $script:PsExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $script:SafeRoot = $Root + '-safe'; New-Item -ItemType Directory -Force $script:SafeRoot | Out-Null
+    function Assert-SafeRoot { $true }
+    function Invoke-OneShotTask {
+        param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem)
+        $script:Calls.Add("task system=$AsSystem $CmdLine")
+        if ($CmdLine -match '-File "([^"]+)"') { $null = & $script:PsExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Matches[1]; return ($LASTEXITCODE -eq 0) }
+        return $false
+    }
+    $script:DiagDir = $Root; $script:DiagDirExpected = $Root; $DryRun = $false; $script:Changes = 0; $script:Failures = 0
     $before = Get-BufferInfo
     Purge-Buffer
     $left = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -File | ForEach-Object { $p = $_.FullName; $p.Substring($p.IndexOf($leaf) + $leaf.Length) })
-    @{ files = $before.files; left = $left; dirs = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -Directory).Count }
+    $r = @{ files = $before.files; left = $left; dirs = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -Directory).Count
+            aclCalls = @($script:Calls | Where-Object { $_ -in @('takeown', 'icacls') }).Count; taskCalls = @($script:Calls | Where-Object { $_ -like 'task *' }).Count
+            failsClean = $script:Failures }
+    # файл держит другой процесс: удаление переходит к системе, а остаток назван
+    $busy = Join-Path $Root 'ETLLogs\busy.etl'
+    Set-Content -LiteralPath $busy -Value 'x' -Encoding ASCII
+    $lock = [IO.File]::Open($busy, 'Open', 'Read', 'None')
+    try { $script:Calls.Clear(); $script:Failures = 0; Purge-Buffer } finally { $lock.Close() }
+    $sys = @($script:Calls | Where-Object { $_ -like 'task *' })
+    $r.busySystem = ($sys.Count -eq 1 -and $sys[0] -like 'task system=True *powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "*buffer-purge-*.ps1"')
+    $r.busyReported = ($script:Failures -eq 1)
+    $r.busyAcl = @($script:Calls | Where-Object { $_ -in @('takeown', 'icacls') }).Count
+    # чужая папка вместо ожидаемой — ничего не удаляется
+    $other = Join-Path $Root 'DownloadedSettings'
+    Set-Content -LiteralPath (Join-Path $other 'x.etl') -Value 'x' -Encoding ASCII
+    $script:DiagDir = $other; $script:Failures = 0
+    Purge-Buffer
+    $r.wrongDirKept = (Test-Path -LiteralPath (Join-Path $other 'x.etl')) -and $script:Failures -eq 1
+    # итог задачи от имени системы: всё удалено / часть / папка не читается
+    $sd = $Root + '-sys'; New-Item -ItemType Directory -Force (Join-Path $sd 'ETLLogs') | Out-Null
+    foreach ($f in @('a.rbs', 'ETLLogs\b.etl', 'keep.json')) { Set-Content -LiteralPath (Join-Path $sd $f) -Value 'x' -Encoding ASCII }
+    $s1 = Invoke-BufferSystemPurge $sd
+    $r.sysSuccess = ($s1.status -eq 'success' -and $s1.deleted -eq 2 -and $s1.left -eq 0 -and (Test-Path -LiteralPath (Join-Path $sd 'keep.json')))
+    $r.sysSuccessInfo = "$($s1.status) found=$($s1.found) deleted=$($s1.deleted) left=$($s1.left) why=$($s1.why)"
+    foreach ($f in @('a.rbs', 'ETLLogs\b.etl')) { Set-Content -LiteralPath (Join-Path $sd $f) -Value 'x' -Encoding ASCII }
+    $lock2 = [IO.File]::Open((Join-Path $sd 'ETLLogs\b.etl'), 'Open', 'Read', 'None')
+    try { $s2 = Invoke-BufferSystemPurge $sd } finally { $lock2.Close() }
+    $r.sysPartial = ($s2.status -eq 'partial' -and $s2.deleted -eq 1 -and $s2.failed -eq 1 -and $s2.left -eq 1)
+    $r.sysErrName = (@($s2.errors).Count -eq 1 -and "$(@($s2.errors)[0].file)" -eq 'b.etl' -and "$(@($s2.errors)[0].error)")
+    $r.sysPartialInfo = "$($s2.status) deleted=$($s2.deleted) failed=$($s2.failed) left=$($s2.left)"
+    $s3 = Invoke-BufferSystemPurge (Join-Path $sd 'no-such-folder')
+    $r.sysFailed = ($s3.status -eq 'failed' -and $s3.why)
+    $r.sysNoResultsLeft = @(Get-ChildItem -LiteralPath $script:SafeRoot -Filter 'buffer-*').Count -eq 0
+    Remove-Item -LiteralPath $sd, $script:SafeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    $r
 }
 $bufDone = Wait-Job $bufJob -Timeout 90
 $bufRes = $(if ($bufDone) { Receive-Job $bufJob } else { $null })
@@ -1214,6 +1277,16 @@ if ($bufRes) {
     Check 'в буфер считаются только очередь и трассировки' ($bufRes.files -eq 5) ("насчитано: " + $bufRes.files)
     Check 'после очистки остались настройки и прочее' ((@($bufRes.left | Sort-Object) -join ',') -eq 'DownloadedSettings\utc.app.json,parse.dat') ("осталось: " + (@($bufRes.left) -join ', '))
     Check 'папки не удаляются' ($bufRes.dirs -eq 4) ("папок: " + $bufRes.dirs)
+    Check 'права системной папки не меняются (без takeown и icacls)' ($bufRes.aclCalls -eq 0 -and $bufRes.busyAcl -eq 0) ("вызовов: $($bufRes.aclCalls)/$($bufRes.busyAcl)")
+    Check 'что удалилось само, система не трогает' ($bufRes.taskCalls -eq 0 -and $bufRes.failsClean -eq 0)
+    Check 'занятый файл удаляется от имени системы' ([bool]$bufRes.busySystem)
+    Check 'оставшийся файл не выдаётся за успех' ([bool]$bufRes.busyReported)
+    Check 'чистится только ожидаемая папка' ([bool]$bufRes.wrongDirKept)
+    Check 'задача от имени системы: всё удалено — success' ([bool]$bufRes.sysSuccess) $bufRes.sysSuccessInfo
+    Check 'задача от имени системы: часть осталась — partial' ([bool]$bufRes.sysPartial) $bufRes.sysPartialInfo
+    Check 'задача от имени системы: папка не читается — failed с причиной' ([bool]$bufRes.sysFailed)
+    Check 'сценарий и итог задачи после чтения удаляются' ([bool]$bufRes.sysNoResultsLeft)
+    Check 'в итоге задачи — имя неудалённого файла и причина' ([bool]$bufRes.sysErrName)
 }
 Remove-Item -LiteralPath $bufRoot -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -1242,7 +1315,7 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
               'Save-JournalEntries', 'Save-Json', 'Load-Json', 'Ensure-DataDir', 'Test-DataTrusted', 'Assert-SafeRoot', 'Test-DirSecure',
               'Protect-DataRoot', 'Get-OwnerSid', 'Add-JournalEntry', 'Get-StartName', 'Restore-JournalEntry', 'Test-JournalWritable',
               'Get-SignKey', 'Get-JournalSig', 'Test-KeyFileSecure', 'Test-JournalEntryKnown', 'Test-PortableTaskTrust', 'Test-AclVolume',
-              'Test-DirChainSecure', 'Test-ItemTrusted', 'Get-UntrustedItems')
+              'Test-DirChainSecure', 'Test-ItemTrusted', 'Get-UntrustedItems', 'Test-TaskGlobPath', 'Get-TaskGlobFolders', 'Split-TaskPath')
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
         if ($fn.Name -in $want) { Invoke-Expression $fn.Extent.Text }
     }
@@ -1264,7 +1337,8 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     $script:TaskRun = $false; $script:PortableTaskState = $null; $script:KnownJournal = $null
     $script:RegTypes = @('reg', 'regif', 'regpol', 'regsvc'); $script:AuditGuid = '{0CCE9226-69AE-11D9-BED3-505054503030}'
     $script:Defs = @(@{ T = 'reg'; P = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection'; N = 'AllowTelemetry' },
-                     @{ T = 'svc'; P = 'DiagTrack' }, @{ T = 'taskglob'; P = 'Consolidator*' })
+                     @{ T = 'svc'; P = 'DiagTrack' }, @{ T = 'taskglob'; P = 'OneDrive*' })
+    $script:TaskGlobFolders = @{ 'OneDrive*' = @('\') }
     $r = @{}
 
     # ключи журнала: у служб, задач и переменных свои, и первая запись главная
@@ -1323,10 +1397,15 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
         '{"kind":"reg","path":"HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection","name":"AllowTelemetry","existed":true,"old":"3","type":"DWord"},' +
         '{"kind":"reg","path":"HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run","name":"x","existed":true,"old":"C:\\evil.exe","type":"String"},' +
         '{"kind":"svc","name":"DiagTrack","old":"2"},{"kind":"svc","name":"Evil","old":"2"},' +
-        '{"kind":"task","path":"\\Microsoft\\Windows\\Customer Experience Improvement Program\\Consolidator","old":"Enabled"},' +
+        '{"kind":"task","path":"\\OneDrive Reporting Task-S-1-5-21-1","old":"Enabled"},' +
+        '{"kind":"task","path":"\\Microsoft\\Windows\\Evil\\OneDrive Fake","old":"Enabled"},' +
         '{"kind":"startup","id":"run|HKLM|x","old":"On"}]}') -Encoding UTF8
     $rj = Read-JournalFile
     $r.legacyKept2 = $rj.items.Count; $r.legacyDropped = $rj.dropped; $r.schema2State = $rj.state
+    # задача по маске — только в своей папке
+    $r.globRoot = Test-TaskGlobPath '\OneDrive Standalone Update Task-S-1-5-21-1' 'OneDrive*'
+    $r.globDeep = Test-TaskGlobPath '\Microsoft\Windows\Evil\OneDrive Fake' 'OneDrive*'
+    $r.globDefault = Test-TaskGlobPath '\NvTmMon_{B2FE1952}' 'NvTm*'
     # тот же журнал в защищённой папке — целиком: подменить его там было некому
     $keepDir = $script:DataDir; $script:DataDir = $script:SafeRoot
     New-Item -ItemType Directory -Force $script:SafeRoot | Out-Null
@@ -1454,8 +1533,9 @@ if ($jr) {
         Check 'ключ подписи при следующем чтении тот же' ([bool]$jr.keyReread)
     }
     Check 'с ключом журнал снова читается' ([bool]$jr.keyBackOk)
-    Check 'журнал без подписи в переносимой папке: только записи о настройках программы' ($jr.legacyKept2 -eq 3 -and $jr.legacyDropped -eq 3) ("оставлено $($jr.legacyKept2), пропущено $($jr.legacyDropped)")
-    Check 'журнал без подписи в защищённой папке читается целиком' ($jr.safeLegacyAll -eq 6) ("записей: $($jr.safeLegacyAll)")
+    Check 'журнал без подписи в переносимой папке: только записи о настройках программы' ($jr.legacyKept2 -eq 3 -and $jr.legacyDropped -eq 4) ("оставлено $($jr.legacyKept2), пропущено $($jr.legacyDropped)")
+    Check 'задача по маске — только в своей папке планировщика' ($jr.globRoot -and -not $jr.globDeep -and $jr.globDefault) ("корень=$($jr.globRoot) чужая папка=$($jr.globDeep) без списка папок=$($jr.globDefault)")
+    Check 'журнал без подписи в защищённой папке читается целиком' ($jr.safeLegacyAll -eq 7) ("записей: $($jr.safeLegacyAll)")
     Check 'окну переносимая папка доверена, как его exe' ([bool]$jr.winTrusted)
     Check 'задачам переносимая папка, которую можно подменить, не доверена' ((-not $jr.taskTrusted) -and $jr.taskEnsureThrows)
     Check 'сетевая папка — без прав доступа' (-not $jr.uncAcl)
@@ -1498,7 +1578,7 @@ $auJob = Start-Job -ArgumentList $engine -ScriptBlock {
     param($EnginePath)
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-        if ($fn.Name -in @('Get-AuditSetting', 'Get-MonitorEnabled', 'Set-AuditSetting', 'Set-MonitorEnabled', 'Get-AuditName')) { Invoke-Expression $fn.Extent.Text }
+        if ($fn.Name -in @('Get-AuditSetting', 'Get-MonitorEnabled', 'Set-AuditSetting', 'Set-MonitorEnabled', 'Get-AuditName', 'Get-JournalKey', 'ConvertTo-Fields', 'Read-SecurityEvents', 'Invoke-NetGuard')) { Invoke-Expression $fn.Extent.Text }
     }
     foreach ($a in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
         $lt = $a.Left -as [System.Management.Automation.Language.VariableExpressionAst]
@@ -1509,21 +1589,28 @@ $auJob = Start-Job -ArgumentList $engine -ScriptBlock {
     $script:Failures = 0
     $script:Seen = New-Object System.Collections.Generic.List[object]
     function Add-JournalEntry { param($Entry) $script:Seen.Add($Entry) }
-    function Save-JournalEntries { param([switch]$Quiet) }
+    $script:FailJournal = $false; $script:JournalFailed = $false; $script:BackupFails = $false; $script:SetCalls = 0
+    function Save-JournalEntries { param([switch]$Quiet) if ($script:FailJournal) { $script:JournalFailed = $true } }
     function Get-RegValue { param($Path, $Name) 999999999 }
     function Set-Reg { }
     $script:SecurityLogKey = 'x'; $script:SecurityLogMin = 1
     $script:State = 0; $script:SetFails = $false; $script:Ignore = $false
+    # журнал отката: по умолчанию записи об аудите в нём нет
+    $script:J = @{ trusted = $true; items = @() }; $script:Restored = New-Object System.Collections.Generic.List[string]
+    function Read-JournalFile { param([switch]$ReadOnly) $script:J }
+    function Restore-JournalEntry { param($e) if (-not $script:Ignore) { $script:State = [int]$e.old }; @{ ok = $true } }
     # заглушка auditpol: резервная копия политики — числом, как у настоящего
     function auditpol.exe {
         $a = $args -join ' '
         if ($a -match '/backup /file:(\S+)') {
+            if ($script:BackupFails) { $global:LASTEXITCODE = 1; return }
             $f = $Matches[1]
             Set-Content $f $script:Head -Encoding UTF8
             Add-Content $f ('PC,System,Filtering Platform Connection,' + $script:AuditGuid + ',Erfolg und Fehler,,' + $script:State)
             $global:LASTEXITCODE = 0; return
         }
         if ($a -match '/set') {
+            $script:SetCalls++
             if ($script:SetFails) { $global:LASTEXITCODE = 5; 'Error 0x00000005 occurred'; return }
             if (-not $script:Ignore) { $script:State = [int]($a -match '/success:enable') + 2 * [int]($a -match '/failure:enable') }
             $global:LASTEXITCODE = 0; return
@@ -1543,6 +1630,45 @@ $auJob = Start-Job -ArgumentList $engine -ScriptBlock {
     $r.failLogged = [bool](@($script:Log | Where-Object { $_ -match 'auditpol не изменил' }).Count)
     $script:SetFails = $false; $script:Ignore = $true; $script:State = 3; $r.ignored = Set-MonitorEnabled $false
     $r.names = (Get-AuditName '0') + '|' + (Get-AuditName '3')
+    # Выключение возвращает прежнюю политику из журнала, а не «нет аудита»
+    $script:Ignore = $false; $script:Failures = 0
+    $script:J = @{ trusted = $true; items = @([pscustomobject]@{ kind = 'audit'; guid = $script:AuditGuid; old = '1'; newValue = '3' }) }
+    $script:State = 3; $r.offBack = Set-MonitorEnabled $false; $r.offBackState = $script:State
+    $r.offBackKey = @($script:Restored) -join ','
+    # групповая политика держит своё — не успех
+    $script:Ignore = $true; $script:State = 3; $r.offBackGpo = Set-MonitorEnabled $false; $r.gpoFails = $script:Failures
+    # журнала нет — выключаем, как просили
+    $script:Ignore = $false; $script:J = @{ trusted = $true; items = @() }; $script:State = 3
+    $r.offPlain = Set-MonitorEnabled $false; $r.offPlainState = $script:State
+    # журнал безопасности: «событий нет» и «не читается» — разное
+    $e1 = Read-SecurityEvents -Ids 1 -Since (Get-Date).AddYears(1) -Max 1 -LogName 'Application'
+    $e2 = Read-SecurityEvents -Ids 1 -Since (Get-Date).AddDays(-1) -Max 1 -LogName 'W11P-No-Such-Log'
+    $r.evNone = (@($e1.events).Count -eq 0 -and -not $e1.error)
+    $r.evError = [bool]$e2.error
+    # исходная политика не читается — аудит не включается вовсе
+    $script:BackupFails = $true; $script:SetCalls = 0; $script:Failures = 0
+    $r.unknownOn = Set-MonitorEnabled $true; $r.unknownSets = $script:SetCalls; $r.unknownFails = $script:Failures
+    $script:BackupFails = $false
+    # журнал не записался — включённый аудит возвращается как был
+    $script:FailJournal = $true; $script:JournalFailed = $false; $script:State = 1
+    $r.jfOn = Set-MonitorEnabled $true; $r.jfState = $script:State
+    $r.jfLogged = [bool](@($script:Log | Where-Object { $_ -match 'возвращена как была' }).Count)
+    $script:FailJournal = $false; $script:JournalFailed = $false
+    # слежение за сетью: журнал не прочитался при первом же запуске — окно не теряется
+    $script:Saved = $null; $script:Prev = $null
+    function Load-Json { param($Name) $script:Prev }
+    function Save-Json { param($Name, $Object) $script:Saved = $Object }
+    function Show-Toast { param($a, $b) }
+    function Get-NetAppsSince { param([datetime]$Since, [int]$Max = 1) $script:NetReadError = $script:FakeErr; @{} }
+    $script:FakeErr = 'Access is denied'
+    $null = Invoke-NetGuard -Quiet
+    $r.ngFirstLast = [datetime]$script:Saved.last; $r.ngFirstErr = "$($script:Saved.readError)"
+    $script:Prev = [pscustomobject]@{ known = @(); recent = @(); learnUntil = (Get-Date).AddHours(-1).ToString('s'); last = '2026-01-02T03:04:05' }
+    $null = Invoke-NetGuard -Quiet
+    $r.ngKeptLast = "$($script:Saved.last)"
+    $script:FakeErr = ''
+    $null = Invoke-NetGuard -Quiet
+    $r.ngOkLast = [datetime]$script:Saved.last; $r.ngOkErr = "$($script:Saved.readError)"
     $r
 }
 $auDone = Wait-Job $auJob -Timeout 60
@@ -1557,6 +1683,16 @@ if ($au) {
     Check 'сбой auditpol не выдаётся за успех' ((-not $au.failOff) -and $au.failLogged)
     Check 'неизменившаяся политика не выдаётся за успех' (-not $au.ignored)
     Check 'политика аудита словами' ($au.names -eq 'выкл|успех и отказ') $au.names
+    Check 'выключение монитора возвращает прежнюю политику из журнала' ($au.offBack -and $au.offBackState -eq 1 -and $au.offBackKey -eq ('audit|' + '{0CCE9226-69AE-11D9-BED3-505054503030}').ToLowerInvariant()) ("состояние $($au.offBackState), ключ $($au.offBackKey)")
+    Check 'если вернуть не дали — не успех' ((-not $au.offBackGpo) -and $au.gpoFails -eq 1)
+    Check 'без записи в журнале монитор просто выключается' ($au.offPlain -and $au.offPlainState -eq 0)
+    Check '«событий нет» в журнале — не ошибка' ([bool]$au.evNone)
+    Check 'журнал, который не читается, — ошибка, а не пустой список' ([bool]$au.evError)
+    Check 'исходная политика аудита не читается — аудит не включается' ((-not $au.unknownOn) -and $au.unknownSets -eq 0 -and $au.unknownFails -eq 1) ("вызовов /set: $($au.unknownSets)")
+    Check 'журнал отката не записался — аудит возвращается как был' ((-not $au.jfOn) -and $au.jfState -eq 1 -and $au.jfLogged) ("состояние: $($au.jfState)")
+    Check 'первый сбой чтения журнала не съедает окно слежения' (($au.ngFirstLast -lt (Get-Date).AddMinutes(-15)) -and $au.ngFirstErr) ("last=$($au.ngFirstLast)")
+    Check 'при сбое отметка «проверено до» не двигается' ($au.ngKeptLast -eq '2026-01-02T03:04:05') $au.ngKeptLast
+    Check 'без сбоя отметка — сейчас, ошибка стёрта' (($au.ngOkLast -gt (Get-Date).AddMinutes(-5)) -and -not $au.ngOkErr)
 }
 
 # --------------------------------------------------------------------------- #
@@ -1609,6 +1745,22 @@ $gdJob = Start-Job -ArgumentList $engine -ScriptBlock {
     $r.swapStarted = $script:Started.Count; $r.swapRemoved = $script:Removed.Count
     $script:Swap = $false
     $r.leftover = @($script:Tasks.Keys | Where-Object { $_ -ne 'w11p-test' }).Count
+    # не дождались — задача останавливается, а не дорабатывает без нас
+    $script:Stopped = New-Object System.Collections.Generic.List[string]
+    function Stop-ScheduledTask { param($TaskPath, $TaskName, $ErrorAction) $script:Stopped.Add($TaskName) }
+    $script:Code = 267009; $script:Removed.Clear()
+    $r.slow = Invoke-OneShotTask 'w11p-test' 'cmd' -AsSystem -Minutes 0
+    $r.slowStopped = $script:Stopped.Count; $r.slowRemoved = $script:Removed.Count
+    $script:Code = 0
+    # куст профиля не отключился — об этом сказано и это ошибка
+    foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Use-ProfileHive' }, $true)) { Invoke-Expression $fn.Extent.Text }
+    $script:HiveLog = New-Object System.Collections.Generic.List[string]
+    function Write-Log { param([string]$Message = '') $script:HiveLog.Add($Message) }
+    function reg.exe { if ("$args" -match '^load') { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 } }
+    $script:Failures = 0
+    $null = Use-ProfileHive @{ sid = 'S-1-5-21-0-0-0-4242'; name = 'test'; file = 'C:\nope\NTUSER.DAT' } { param($root) }
+    $r.hiveFails = $script:Failures
+    $r.hiveLogged = [bool](@($script:HiveLog | Where-Object { $_ -match 'NTUSER\.DAT остался подключённым' }).Count)
     $r.check = Get-CredCheckCmd @('WindowsLive:target=virtualapp/didlogical', 'MicrosoftAccount:target=SSO_POP_Device')
     # статусы удаления — на своей пробной ветке
     $k = 'HKCU:\Software\W11PTest-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -1628,6 +1780,8 @@ if ($gd) {
     Check 'чужая задача с тем же именем не запускается и не удаляется' ($gd.okBesideForeign -and $gd.foreignKept)
     Check 'подменённая команда задачи не запускается, задача убирается' ((-not $gd.swapped) -and $gd.swapStarted -eq 0 -and $gd.swapRemoved -eq 1) ("started=$($gd.swapStarted) removed=$($gd.swapRemoved)")
     Check 'короткие задачи после себя не остаются' ($gd.leftover -eq 0) ("осталось: $($gd.leftover)")
+    Check 'недождавшаяся задача останавливается и убирается' ((-not $gd.slow) -and $gd.slowStopped -eq 1 -and $gd.slowRemoved -eq 1) ("остановлено $($gd.slowStopped), убрано $($gd.slowRemoved)")
+    Check 'неотключившийся куст профиля назван и посчитан ошибкой' ($gd.hiveFails -eq 1 -and $gd.hiveLogged)
     Check 'после cmdkey проверяется, что учётных данных не осталось' ($gd.check -eq '(cmdkey /list | findstr /i /c:"virtualapp/didlogical" /c:"SSO_POP_Device" >nul && exit 1 || exit 0)') $gd.check
     Check 'у удаления свой статус: убрано / не было' ("$($gd.st1)|$($gd.st2)|$($gd.st3)|$($gd.st4)" -eq 'removed|absent|removed|absent') "$($gd.st1)|$($gd.st2)|$($gd.st3)|$($gd.st4)"
 }
@@ -1646,6 +1800,44 @@ $svcOptApply = [regex]::Match($applyDefText, "(?s)        'svcopt' \{.*?\n      
 Check 'отключение службы пишется в журнал' (($svcApply -match 'Add-JournalEntry \$was') -and ($svcOptApply -match 'Add-JournalEntry \$was'))
 Check 'отключение задачи пишется в журнал' ($engineText -match "'ok'\s+\{ Add-TaskJournal \`$d\.P")
 Check 'старый откат служб — только для журнала прежней версии' ($engineText -match "if \(\`$legacyRevert\) \{\s+Write-Section 'Службы")
+$silentOk = @($engineText -split "`r?`n" | Where-Object { $_ -match "try \{.*Write-Log.*\[\+\].*\} catch \{ \}\s*$" })
+Check 'монитор отдаёт ошибку чтения журнала безопасности' (($engineText -match 'readError=\$rd\.error') -and ($engineText -match 'netGuardError='))
+Check 'слежение за сетью не пропускает минуты, когда журнал не читался' ($engineText -match '\$last = \$\(if \(\$err\) \{ if \(\$state -and \$state\.last\) \{ "\$\(\$state\.last\)" \} else \{ \$since\.ToString\(''s''\) \} \}')
+Check 'журнал безопасности читается только через Read-SecurityEvents' ([regex]::Matches($engineText, "LogName\s*=\s*'Security'\s*;").Count -eq 0 -and [regex]::Matches($engineText, 'Get-WinEvent -FilterHashtable @\{ LogName = \$LogName').Count -eq 1)
+Check 'прежний откат ищет задачи по маске в любой папке, остальное — только в своих' ([regex]::Matches($engineText, 'Get-TaskGlobTasks \$d\.P -AnyFolder').Count -eq 1)
+$changesCs = Join-Path (Split-Path $engine) 'PageChanges.cs'
+if (Test-Path $changesCs) { Check 'страница «Изменения» говорит, что журналу нельзя верить' ((Get-Content $changesCs -Raw -Encoding UTF8) -match 'Json\.GetBool\(d, "trusted"\)') }
+$actionsCs = Join-Path (Split-Path $engine) 'Actions.cs'
+if (Test-Path $actionsCs) { Check 'страница «Монитор» говорит, что журнал не читается' ((Get-Content $actionsCs -Raw -Encoding UTF8) -match 'Json\.GetStr\(d, "readError"\)') }
+# Движок выполняется сверху вниз: функция, описанная ниже места вызова, в
+# этот момент ещё не существует. Тесты с заглушками этого не видят (так
+# выключение монитора на живой системе ломалось о Restore-ChangeKey). Здесь
+# для каждого блока верхнего уровня обходится вся цепочка вызовов.
+$ordDefs = @{}
+foreach ($f in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) { if (-not $ordDefs.ContainsKey($f.Name)) { $ordDefs[$f.Name] = $f } }
+$ordCalls = @{}
+$ordGet = { param($node) $h = @{}; foreach ($c in $node.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)) { $nm = $c.GetCommandName(); if ($nm -and $ordDefs.ContainsKey($nm)) { $h[$nm] = $true } }; @($h.Keys) }
+foreach ($k in @($ordDefs.Keys)) { $ordCalls[$k] = @(& $ordGet $ordDefs[$k].Body) }
+$ordBad = New-Object System.Collections.Generic.List[string]
+foreach ($st in $engineAst.EndBlock.Statements) {
+    if ($st -is [System.Management.Automation.Language.FunctionDefinitionAst]) { continue }
+    $seenO = @{}; $q = New-Object System.Collections.Generic.Queue[object]
+    foreach ($n in @(& $ordGet $st)) { $q.Enqueue(@($n, $n)) }
+    while ($q.Count -gt 0) {
+        $it = $q.Dequeue(); $n = $it[0]
+        if ($seenO.ContainsKey($n)) { continue }; $seenO[$n] = $true
+        if ($ordDefs[$n].Extent.StartOffset -gt $st.Extent.StartOffset) { $ordBad.Add(("строка {0}: {1}" -f $st.Extent.StartLineNumber, $it[1])); continue }
+        foreach ($m in $ordCalls[$n]) { $q.Enqueue(@($m, ($it[1] + ' -> ' + $m))) }
+    }
+}
+Check 'каждая вызываемая функция описана в файле выше места вызова' ($ordBad.Count -eq 0) (($ordBad | Select-Object -First 3) -join ' | ')
+Check 'неудачи в изменениях не молчат: приложения, сети, рекламный ID, .reg, рентген, CDPSvc' (
+    ($engineText -match 'для новых пользователей не убрано') -and ($engineText -match 'записей сетей, которые Windows не отдала') -and
+    ($engineText -match "switch \(Remove-RegStatus \`$adKey 'Id'\)") -and ($engineText -match 'reg import .*\$code = \$LASTEXITCODE') -and
+    ($engineText -match "catch \{ \`$kept\.Add\(") -and ($engineText -match 'служба CDPSvc сейчас не запустилась'))
+Check 'ни одно «[+]» не прячет ошибку в пустом catch' ($silentOk.Count -eq 0) (($silentOk | ForEach-Object { $_.Trim().Substring(0, [Math]::Min(80, $_.Trim().Length)) }) -join ' | ')
+Check 'очистка буфера не меняет права системной папки' (([regex]::Match($engineText, "(?s)function Purge-Buffer \{.*?\n\}").Value -notmatch 'takeown|icacls'))
+Check 'задачи по маске ищутся только в своих папках' (($engineText -notmatch '\$_\.TaskName -like \$d\.P') -and ([regex]::Matches($engineText, 'Get-TaskGlobTasks \$d\.P').Count -eq 3))
 Check 'полный откат не стирает отложенный журнал' ($engineText -match "if \(\`$d\.file -like 'changes\.\*-\*\.json'\) \{ Write-Log")
 Check 'откат по недоверенному журналу не говорит «возвращены»' ($engineText -match "if \(`"\`$\(\`$rj\.state\)`" -eq 'untrusted'\) \{\s+Write-Log '\[!\] Настройки по журналу изменений не возвращены")
 Check 'откат «по умолчанию» — только для доверенного журнала прежнего образца' (($engineText -match '\$legacyRevert = \("\$\(\$rj\.state\)" -eq ''legacy''\)') -and ($engineText -notmatch '\$legacyRevert = \[bool\]\$rj\.legacy -or'))

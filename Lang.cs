@@ -59,7 +59,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(1523, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1528, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -1583,6 +1583,11 @@ namespace Win11Privacy
             _map["Не удалось подготовить защищённую папку для движка:\n"] = "Could not prepare the protected folder for the engine:\n";
             _map["\n\nБез неё движок не запускается: из незащищённой папки его могла бы подменить любая программа. Перезапустите компьютер и попробуйте снова; если не поможет — проверьте, не блокирует ли антивирус папку ProgramData\\Win11Privacy."] = "\n\nThe engine does not run without it: in an unprotected folder any program could swap it. Restart the computer and try again; if that does not help, check whether an antivirus is blocking the ProgramData\\Win11Privacy folder.";
             _map["Не найден системный PowerShell:\n"] = "System PowerShell not found:\n";
+            _map["Журнал безопасности не читается — цифры ниже неполные: "] = "The Security log cannot be read — the figures below are incomplete: ";
+            _map["Слежение за сетью не смогло прочитать журнал безопасности: "] = "Network watch could not read the Security log: ";
+            _map["Журналу изменений нельзя верить"] = "The change log cannot be trusted";
+            _map["Подпись журнала не сошлась или ключа подписи нет: его могли изменить. По нему ничего не возвращается.\n"] = "The log's signature does not match or the signing key is missing: it may have been altered. Nothing is restored from it.\n";
+            _map["Файл не удалён — при следующем изменении он будет отложен рядом. Запасной путь — резервная копия реестра или точка восстановления Windows."] = "The file is not deleted — it will be set aside next to it on the next change. The fallback is the registry backup or a Windows restore point.";
         }
     }
 }

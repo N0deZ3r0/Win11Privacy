@@ -523,6 +523,18 @@ namespace Win11Privacy
             _monitorTiles.Controls.Add(Tile(L.T("Правил брандмауэра"), Json.GetInt(d, "firewallRules").ToString(), _monitorEnabled ? L.T("наблюдение включено") : L.T("наблюдение выключено"), _monitorEnabled ? Theme.Ok : Theme.TextFaint));
 
             _monitorList.Controls.Clear();
+            // Журнал безопасности не прочитался — это не «никто ничего не
+            // отправлял». Раньше в таком случае список просто был пуст.
+            string readErr = Json.GetStr(d, "readError");
+            if (!string.IsNullOrEmpty(readErr))
+            {
+                SectionHeader se = new SectionHeader(L.T("Журнал безопасности не читается — цифры ниже неполные: ") + readErr); se.Font = Font; _monitorList.Controls.Add(se);
+            }
+            string guardErr = Json.GetStr(d, "netGuardError");
+            if (!string.IsNullOrEmpty(guardErr))
+            {
+                SectionHeader sg = new SectionHeader(L.T("Слежение за сетью не смогло прочитать журнал безопасности: ") + guardErr); sg.Font = Font; _monitorList.Controls.Add(sg);
+            }
             List<object> fresh = Json.GetArr(d, "newApps");
             if (fresh.Count > 0)
             {
