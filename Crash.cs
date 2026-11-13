@@ -31,7 +31,7 @@ namespace Win11Privacy
             {
                 string dir = _folder;
                 if (string.IsNullOrEmpty(dir))
-                    dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Win11Privacy");
+                    dir = Path.Combine(EngineFile.ProgramDataDir(), "Win11Privacy");
                 return Path.Combine(dir, "crash.log");
             }
         }

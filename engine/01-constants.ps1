@@ -58,6 +58,9 @@ $script:RegTypes = @('reg', 'regif', 'regpol', 'regsvc')
 # пользователя.
 $script:OsBuild = 0
 try { $script:OsBuild = [int](Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'CurrentBuildNumber' -ErrorAction Stop).CurrentBuildNumber } catch { }
+# Сколько часов во временной папке не трогать свежие файлы: ими ещё
+# пользуются запущенные программы, а чистка однажды стёрла рабочие файлы.
+$script:TempKeepHours = 24
 $script:Changes = 0
 $script:Failures = 0
 $script:Already = 0

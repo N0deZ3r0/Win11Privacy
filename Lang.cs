@@ -59,7 +59,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(1536, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1547, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -1596,6 +1596,17 @@ namespace Win11Privacy
             _map["Журналу изменений нельзя верить"] = "The change log cannot be trusted";
             _map["Подпись журнала не сошлась или ключа подписи нет: его могли изменить. По нему ничего не возвращается.\n"] = "The log's signature does not match or the signing key is missing: it may have been altered. Nothing is restored from it.\n";
             _map["Файл не удалён — при следующем изменении он будет отложен рядом. Запасной путь — резервная копия реестра или точка восстановления Windows."] = "The file is not deleted — it will be set aside next to it on the next change. The fallback is the registry backup or a Windows restore point.";
+            _map["Файл профиля не читается как JSON."] = "The profile file cannot be read as JSON.";
+            _map["В профиле недопустимое имя модуля: "] = "The profile has an invalid module name: ";
+            _map["В профиле нет ни одного модуля."] = "The profile has no modules.";
+            _map["В профиле недопустимый номер пункта: "] = "The profile has an invalid item number: ";
+            _map["Готово, но не всё прошло: что именно — в строках [!] выше."] = "Done, but not everything went through: see the [!] lines above.";
+            _map["Готово, с ошибками."] = "Done, with errors.";
+            _map["Temp, кэш обновлений, эскизы, дампы. Удалённое не вернуть; корзина — по отдельному вопросу."] = "Temp, update cache, thumbnails, dumps. What is deleted cannot be brought back; the recycle bin is a separate question.";
+            _map["Очистить и корзину?\n\nИз корзины файлы уже не вернуть — ни кнопкой «Откат», ни как-то иначе.\n"] = "Empty the recycle bin too?\n\nFiles in the recycle bin cannot be brought back — not by \"Roll back\", not any other way.\n";
+            _map["Остальная чистка (кэши, временные файлы, дампы) идёт в любом случае; во временной папке файлы моложе суток не трогаются."] = "The rest of the cleanup (caches, temporary files, dumps) runs either way; in the temp folder, files younger than a day are left alone.";
+            _map["Чистка: корзина"] = "Cleanup: recycle bin";
+            _map["Выключает облачную защиту (MAPS) и отправку образцов. Защита от новых, ещё неизвестных угроз заметно слабеет. На домашних ПК «Защита от подделки» может не дать это применить."] = "Turns off cloud protection (MAPS) and sample submission. Protection against new, not yet known threats gets noticeably weaker. On home PCs, Tamper Protection may refuse to apply this.";
         }
     }
 }

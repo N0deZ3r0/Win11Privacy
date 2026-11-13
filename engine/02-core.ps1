@@ -217,18 +217,23 @@ function Set-Reg {
 
     # Если параметр уже такой, как нужно — не трогаем его: часть значений
     # панели задач Windows защищает от перезаписи даже тем же самым числом.
+    # «Такой» — и по данным, и по виду: строка «1» вместо числа 1 раньше
+    # считалась настроенной, хотя Windows читает такой параметр как ошибку.
+    # Откату нужен прежний вид значения и данные как есть: раньше в журнал шёл
+    # вид нового значения, и строка «1» возвращалась числом. Есть ли значение
+    # вообще — тоже отсюда: пустое двоичное или многострочное Get-RegValue
+    # отдаёт как «нет», и откат удалил бы его вместо возврата. Этот же
+    # прочитанный вид решает, настроено ли уже: REG_SZ «1» на месте DWORD 1
+    # раньше считался настроенным, хотя Windows читает такой параметр иначе.
     $cur = Get-RegValue $Path $Name
-    if ($null -ne $cur -and (ConvertTo-RegComparable $cur $Type) -eq (ConvertTo-RegComparable $Value $Type)) { Write-Log "   [в] $label -- уже настроено"; $script:Already++; return }
+    $raw = Get-RegRaw $Path $Name
+    if ($raw.ok -and $raw.exists -and "$($raw.kind)" -eq $Type -and
+        (ConvertTo-RegComparable $raw.value $Type) -eq (ConvertTo-RegComparable $Value $Type)) { Write-Log "   [в] $label -- уже настроено"; $script:Already++; return }
 
     # Менять можно, только пока пишется журнал отката, — в том числе при
     # прямых вызовах (монитор, чистка), а не только из применения модулей.
     if (-not (Test-CanModify $label)) { return }
     Ensure-Backup          # копию делаем перед первым изменением, а не «всегда»
-    # Откату нужен прежний вид значения и данные как есть: раньше в журнал шёл
-    # вид нового значения, и строка «1» возвращалась числом. Есть ли значение
-    # вообще — тоже отсюда: пустое двоичное или многострочное Get-RegValue
-    # отдаёт как «нет», и откат удалил бы его вместо возврата.
-    $raw = Get-RegRaw $Path $Name
     if (-not $raw.ok -and $raw.denied -and $Policy) {
         # как и отказ в записи ниже: политику держит сама Windows
         Write-Log "   [-] $label -- Windows этой редакции не разрешает менять этот параметр"
@@ -359,18 +364,35 @@ function Get-FolderSizeMB {
 # PowerShell 5.1 проходит по junction и символическим ссылкам и удаляет то,
 # куда они ведут: ссылка во временной папке на «Документы» стёрла бы
 # документы. Здесь ссылка удаляется сама, как запись, — её цель не трогается.
-# $Stats — @{ deleted; failed; errors }: что удалено, что нет и почему.
+# $Stats — @{ deleted; failed; skipped; errors }: что удалено, что нет и почему.
+#
+# -TrustedOwnerOnly — для общих системных папок (C:\Windows\Temp,
+# ProgramData\...\WER), куда может писать любой пользователь: удаляется
+# только то, чей владелец доверенный ($script:ClearOwners), и только в такие
+# папки движок заходит. Остальное оставляется его хозяину.
+$script:ClearOwners = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-19', 'S-1-5-20',
+                        'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+function Test-TrustedOwner {
+    param([string]$Path)
+    try { return ($script:ClearOwners -contains (Get-Acl -LiteralPath $Path -ErrorAction Stop).GetOwner([Security.Principal.SecurityIdentifier]).Value) }
+    catch { return $false }
+}
+
 function Remove-TreeNoFollow {
-    param([string]$Path, $Stats)
+    param([string]$Path, $Stats, [switch]$TrustedOwnerOnly)
     try { $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop } catch { return }
     try {
+        # Общая системная папка: чужое не трогаем и внутрь не заходим. Ссылки
+        # пропускаются целиком: Get-Acl на ссылке отвечает про её ЦЕЛЬ, и по
+        # владельцу судить о самой ссылке нельзя.
+        if ($TrustedOwnerOnly -and (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or -not (Test-TrustedOwner $item.FullName))) { $Stats.skipped++; return }
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
             if ($item.PSIsContainer) { [IO.Directory]::Delete($item.FullName, $false) } else { [IO.File]::Delete($item.FullName) }
             $Stats.deleted++
             return
         }
         if ($item.PSIsContainer) {
-            foreach ($c in @(Get-ChildItem -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue)) { Remove-TreeNoFollow $c.FullName $Stats }
+            foreach ($c in @(Get-ChildItem -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue)) { Remove-TreeNoFollow $c.FullName $Stats -TrustedOwnerOnly:$TrustedOwnerOnly }
             # папка уходит, только если опустела: что внутри не удалилось, уже посчитано
             if (@(Get-ChildItem -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue).Count -eq 0) { [IO.Directory]::Delete($item.FullName, $false) }
             return
@@ -382,6 +404,47 @@ function Remove-TreeNoFollow {
         $Stats.failed++
         if ($Stats.errors.Count -lt 3) { $Stats.errors.Add(("{0}: {1}" -f $item.Name, $_.Exception.Message)) }
     }
+}
+
+# Сценарий для задачи от имени пользователя: очищает его папки тем же
+# способом — ссылки удаляются как записи, внутрь них не заходит. -MinAgeHours
+# оставляет свежие файлы (во временной папке ими ещё пользуются программы).
+function Get-ClearUserScript {
+    return @'
+param([string]$InputFile, [string]$ResultFile)
+$in = (Get-Content -LiteralPath $InputFile -Raw -Encoding UTF8) | ConvertFrom-Json
+function Clr($p, $s, $cut) {
+  try { $i = Get-Item -LiteralPath $p -Force -ErrorAction Stop } catch { return }
+  try {
+    if ($i.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+      if ($i.PSIsContainer) { [IO.Directory]::Delete($i.FullName, $false) } else { [IO.File]::Delete($i.FullName) }
+      $s.deleted++; return }
+    if ($i.PSIsContainer) {
+      foreach ($c in @(Get-ChildItem -LiteralPath $i.FullName -Force -ErrorAction SilentlyContinue)) { Clr $c.FullName $s $cut }
+      if (@(Get-ChildItem -LiteralPath $i.FullName -Force -ErrorAction SilentlyContinue).Count -eq 0) { [IO.Directory]::Delete($i.FullName, $false) }
+      return }
+    if ($cut -and ($i.LastWriteTime -gt $cut -or $i.CreationTime -gt $cut)) { $s.recent++; return }
+    $len = $i.Length
+    if ($i.Attributes -band [IO.FileAttributes]::ReadOnly) { $i.Attributes = $i.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly) }
+    [IO.File]::Delete($i.FullName); $s.deleted++; $s.bytes += $len
+  } catch { $s.failed++; if ($s.errors.Count -lt 3) { $s.errors += ('{0}: {1}' -f $i.Name, $_.Exception.Message) } }
+}
+$out = @()
+foreach ($t in @($in.targets)) {
+  $s = @{ path = "$($t.path)"; state = 'done'; deleted = 0; failed = 0; recent = 0; bytes = [int64]0; errors = @() }
+  $p = "$($t.path)"
+  if (-not (Test-Path -LiteralPath $p -PathType Container)) { $s.state = 'missing' }
+  elseif ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { $s.state = 'link' }
+  else {
+    $cut = $null; if ([double]$t.minAgeHours -gt 0) { $cut = (Get-Date).AddHours(-[double]$t.minAgeHours) }
+    $f = "$($t.filter)"
+    $items = $(if ($f) { @(Get-ChildItem -LiteralPath $p -Filter $f -File -Force -ErrorAction SilentlyContinue) } else { @(Get-ChildItem -LiteralPath $p -Force -ErrorAction SilentlyContinue) })
+    foreach ($c in $items) { Clr $c.FullName $s $cut }
+  }
+  $out += $s
+}
+ConvertTo-Json -InputObject @{ targets = $out } -Depth 5 -Compress | Set-Content -LiteralPath $ResultFile -Encoding UTF8
+'@
 }
 
 # Папки, которые очищать нельзя ни при каком пути: корень диска и системные корни
@@ -397,7 +460,7 @@ function Test-ClearForbidden {
 }
 
 function Clear-FolderContents {
-    param([string]$FolderPath, [string]$Label, [string]$Step = '')
+    param([string]$FolderPath, [string]$Label, [string]$Step = '', [switch]$TrustedOwnerOnly)
     if (-not (Test-Path -LiteralPath $FolderPath)) {
         if ($Step) { Write-Log ("   {0} {1} -- нечего чистить" -f $Step, $Label) }
         return 0.0
@@ -416,19 +479,80 @@ function Clear-FolderContents {
     if ($Step) { Write-Log ("   {0} {1}..." -f $Step, $Label) }
     $before = Get-FolderSizeMB $full
     if ($DryRun) { Write-Log ("   {0} [тест] {1} -- можно освободить ~{2} МБ" -f $Step, $Label, $before); return 0.0 }
-    $st = @{ deleted = 0; failed = 0; errors = (New-Object System.Collections.Generic.List[string]) }
-    foreach ($c in @(Get-ChildItem -LiteralPath $full -Force -ErrorAction SilentlyContinue)) { Remove-TreeNoFollow $c.FullName $st }
+    $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+    foreach ($c in @(Get-ChildItem -LiteralPath $full -Force -ErrorAction SilentlyContinue)) { Remove-TreeNoFollow $c.FullName $st -TrustedOwnerOnly:$TrustedOwnerOnly }
     $freed = [math]::Max(0, [math]::Round($before - (Get-FolderSizeMB $full), 1))
     if ($Step) { Write-Log ("   {0} {1} -- освобождено {2} МБ" -f $Step, $Label, $freed) }
     else { Write-Log ("   [+] {0} -- освобождено {1} МБ" -f $Label, $freed) }
     # Что не удалилось, называется: раньше ошибки глушились, и «освобождено»
     # выглядело полным. Занятые файлы — обычное дело, это сведения, а не сбой.
+    if ($st.skipped -gt 0) { Write-Log ("       оставлено файлов и папок других пользователей: {0}" -f $st.skipped) }
     if ($st.failed -gt 0) {
         Write-Log ("       не удалено (заняты или нет доступа): {0}" -f $st.failed)
         foreach ($e in $st.errors) { Write-Log ("       {0}" -f $e) }
     }
     $script:LastClear = $st
     return [double]$freed
+}
+
+# Системная ли папка: внутри Windows или ProgramData. Такие движок чистит сам
+# (с -TrustedOwnerOnly); всё прочее — папки пользователя, их чистит задача
+# от его имени.
+function Test-SystemClearPath {
+    param([string]$Full)
+    foreach ($root in @($script:WinDir, $script:ProgramDataDir)) {
+        if ($root -and $Full.StartsWith($root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
+# Папки пользователя — одной задачей от его имени. $Targets — список
+# @{ P; L; Age (часы, 0 — все); Filter (маска файлов в самой папке) }.
+# Возвращает освобождённые МБ.
+function Clear-UserFolders {
+    param([object[]]$Targets)
+    $send = @(); $total = 0.0
+    foreach ($t in $Targets) {
+        # папки того, кто сидит за компьютером (см. Convert-ToSessionPath)
+        $full = Convert-ToSessionPath ([IO.Path]::GetFullPath($t.P))
+        if (Test-ClearForbidden $full) { Write-Log ("   [!] {0} -- {1} чистить нельзя" -f $t.L, $full); $script:Failures++; continue }
+        $send += @{ path = $full; label = "$($t.L)"; minAgeHours = [double]$t.Age; filter = "$($t.Filter)" }
+    }
+    if ($send.Count -eq 0) { return 0.0 }
+    if ($DryRun) { foreach ($s in $send) { Write-Log ("   [тест] {0} -- очистит задача от вашего имени" -f $s.label) }; return 0.0 }
+    $r = Invoke-AsUser 'clear' (Get-ClearUserScript) @{ targets = $send } -Minutes 15
+    if (-not $r.ok) {
+        Write-Log ("   [!] папки профиля не очищены: {0}" -f $r.why); $script:Failures++
+        return 0.0
+    }
+    for ($i = 0; $i -lt $send.Count; $i++) {
+        $res = @($r.result.targets)[$i]
+        $lbl = $send[$i].label
+        if ($null -eq $res) { Write-Log ("   [!] {0} -- итога нет" -f $lbl); $script:Failures++; continue }
+        switch ("$($res.state)") {
+            'missing' { Write-Log ("   [-] {0} -- нечего чистить" -f $lbl) }
+            'link'    { Write-Log ("   [!] {0} -- папка оказалась ссылкой и не очищается" -f $lbl); $script:Failures++ }
+            default {
+                $mb = [math]::Round([double]$res.bytes / 1MB, 1); $total += $mb
+                Write-Log ("   [+] {0} -- освобождено {1} МБ" -f $lbl, $mb)
+                if ([int]$res.recent -gt 0) { Write-Log ("       оставлено свежих файлов (моложе {0} ч): {1}" -f $send[$i].minAgeHours, $res.recent) }
+                if ([int]$res.failed -gt 0) {
+                    Write-Log ("       не удалено (заняты или нет доступа): {0}" -f $res.failed)
+                    foreach ($e in @($res.errors)) { if ($e) { Write-Log ("       {0}" -f $e) } }
+                }
+            }
+        }
+    }
+    return [double]$total
+}
+
+# Одна папка — тем способом, который ей годится (см. Test-SystemClearPath)
+function Clear-Folder {
+    param([string]$FolderPath, [string]$Label, [string]$Step = '', [double]$MinAgeHours = 0)
+    $full = [IO.Path]::GetFullPath($FolderPath)
+    if (Test-SystemClearPath $full) { return (Clear-FolderContents $full $Label $Step -TrustedOwnerOnly) }
+    if ($Step) { Write-Log ("   {0} {1}..." -f $Step, $Label) }
+    return (Clear-UserFolders @(@{ P = $full; L = $Label; Age = $MinAgeHours }))
 }
 
 # Задачи по маске имени (OneDrive*, NvTm*) — только в своих папках

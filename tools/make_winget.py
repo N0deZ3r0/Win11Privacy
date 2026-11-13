@@ -100,7 +100,9 @@ Description: |-
   the system back instead of ticking boxes. Shows the telemetry events Windows
   has actually collected about this computer, which apps used the camera,
   microphone and location, and what leaves the machine over the network.
-  Every change is journalled and can be reverted one item at a time.
+  Settings changes are journalled and can be reverted one item at a time.
+  What the optional cleanup deletes (temporary files, the telemetry buffer,
+  removed apps) cannot be brought back.
 Tags:
   - privacy
   - telemetry

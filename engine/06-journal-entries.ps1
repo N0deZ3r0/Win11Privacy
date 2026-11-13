@@ -113,6 +113,15 @@ function Test-JournalEntryShape {
             if ("$($f['old'])" -notmatch '^[0-3]$') { return 'недопустимое значение аудита' }
             return ''
         }
+        'appcfg' {
+            if ("$($f['app'])" -notin @('vscode', 'firefox')) { return 'неизвестная программа' }
+            # ключ настройки: буквы, цифры, точка, дефис, подчёркивание
+            if ("$($f['name'])" -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$') { return 'недопустимое имя настройки' }
+            # «как было» — одно значение JSON, а не произвольный текст: иначе
+            # дописанная запись подставила бы в файл настроек что угодно
+            if ("$($f['old'])" -and "$($f['old'])" -notmatch '^("[^"\\\x00-\x1f]*"|true|false|-?[0-9]+(\.[0-9]+)?)$') { return 'недопустимое прежнее значение' }
+            return ''
+        }
         'startup' {
             if (-not "$($f['id'])") { return 'пустая запись автозагрузки' }
             if ("$($f['old'])" -notin @('On', 'Off')) { return 'недопустимое состояние автозагрузки' }
@@ -247,6 +256,33 @@ function Restore-JournalEntry {
                 $r = Set-AuditSetting "$($e.guid)" ([int]"$($e.old)")
                 if ($r.ok) { return @{ ok = $true } }
                 return @{ ok = $false; error = ("auditpol (код {0}): {1}" -f $r.code, $r.out) }
+            }
+            'appcfg' {
+                # Возвращается ровно наш ключ: было значение — то же самое
+                # слово в слово, не было — ключ убирается. Остальное в файле
+                # не трогается, даже если человек поменял его после нас.
+                $was = [bool]$e.existed
+                $tok = "$($e.old)"
+                if ("$($e.app)" -eq 'vscode') {
+                    if (-not (Test-Path -LiteralPath (Get-VsCodeSettingsPath) -PathType Leaf)) { return @{ ok = $true; note = 'файла настроек больше нет' } }
+                    $w = Write-VsCodeKey "$($e.name)" $(if ($was) { $tok } else { '' })
+                    if (-not $w.ok) { return @{ ok = $false; error = $w.why } }
+                    $now = Get-VsCodeRaw "$($e.name)"
+                    if ($was) {
+                        if (-not $now.exists) { return @{ ok = $false; error = 'ключ не вернулся' } }
+                        if ($now.token -ne $tok) { return @{ ok = $false; error = ("читается {0}, а было {1}" -f $now.token, $tok) } }
+                    } elseif ($now.exists) { return @{ ok = $false; error = 'ключ не убрался' } }
+                    return @{ ok = $true }
+                }
+                if (-not (Get-FirefoxPoliciesPath)) { return @{ ok = $true; note = 'Firefox больше не установлен' } }
+                $w = $(if ($was) { Write-FirefoxKey "$($e.name)" (ConvertFrom-JsonToken $tok) } else { Write-FirefoxKey "$($e.name)" $null -Remove })
+                if (-not $w.ok) { return @{ ok = $false; error = $w.why } }
+                if ($w.removedFile) { return @{ ok = $true; note = 'policies.json создала программа и он опустел -- удалён' } }
+                $nowF = Get-FirefoxPolicy "$($e.name)"
+                if ($was) {
+                    if ($null -eq $nowF) { return @{ ok = $false; error = 'политика не вернулась' } }
+                } elseif ($null -ne $nowF) { return @{ ok = $false; error = 'политика не убралась' } }
+                return @{ ok = $true }
             }
             default {
                 return (Restore-RegValue "$($e.path)" "$($e.name)" ([bool]$e.existed) $e.old "$($e.type)")

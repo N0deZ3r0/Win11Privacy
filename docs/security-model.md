@@ -34,6 +34,43 @@ like ProgramData. Otherwise the task exits without doing anything.
 that fails the checks above, so an elevated run never consumes a planted
 `profile.json`, journal or state file.
 
+**Environment and PowerShell modules.** An elevated process inherits the
+environment of whoever started it, and the first folder in `PSModulePath` is the
+user's `Documents\WindowsPowerShell\Modules`, which any program of the user can
+write to. The commands the engine lives on (`Get-ScheduledTask`,
+`Get-NetFirewallRule`, `Resolve-DnsName`…) are auto-loaded from that list, so a
+planted module named like a system one would have run as administrator — from
+the guard, at every sign-in, without a UAC prompt. The first statement after
+`param(` therefore reduces `PSModulePath` to `$PSHOME\Modules`, and the engine
+then rebuilds `SystemRoot`, `ProgramData`, `ProgramFiles`, `PATH` and the
+profile folders from the system itself (`GetSystemDirectory`, HKLM, the
+`ProfileList` key by the process SID) instead of trusting variables that
+`HKCU\Environment` can override. The window starts the engine with the same
+values (`EngineFile.Harden`) and a system working directory. A test runs the
+engine with a planted `ScheduledTasks` module and a spoofed `ProgramData` and
+checks that neither is used.
+
+**Folders of the user (cleanup, VS Code).** Deleting or writing *by path* as
+administrator in a folder the user's programs can write to cannot be tied to what
+was checked: a path component can be replaced by a link between the check and the
+action. So the engine never does that there.
+
+* Folders of the user's profile (`%TEMP%`, `%LOCALAPPDATA%\…`, VS Code
+  `settings.json`) are handled by a short task that runs **as the same user, without
+  elevation** (`Invoke-AsUser`): it can do exactly what the user can already do.
+  The task script is constant engine text stored in the protected folder; its
+  input is JSON, its answer a small JSON file, and the engine reads only numbers
+  and short strings from it. It refuses a link on the path and never follows one.
+* Shared system folders (`C:\Windows\Temp`, `ProgramData\…\WER`) are cleaned by the
+  engine itself, but only objects whose **owner** is SYSTEM, Administrators,
+  TrustedInstaller or a system service, and it does not descend into anything
+  else. A non-administrator cannot create an object owned by SYSTEM or
+  Administrators (that needs the take-ownership or restore privilege), so a
+  junction planted in `C:\Windows\Temp` is skipped, not deleted through.
+* `%TEMP%` keeps files younger than 24 hours (running programs still use them);
+  the recycle bin is emptied only after a separate question, and the cleanup module
+  is off by default.
+
 ## Undo journal (`changes.json`)
 
 * **Signed.** Schema 3, HMAC-SHA256 over the items. The 32-byte key is created
@@ -46,8 +83,17 @@ that fails the checks above, so an elevated run never consumes a planted
   it is allowed. Before an entry is executed: registry paths must be in
   HKLM/HKCU/HKU, value kinds known, service/task/variable names of a valid form,
   hive files `X:\...\NTUSER.DAT` without quotes, the audit GUID our own.
-* **Locked.** Every write *and every read* takes the machine-wide mutex
-  `Global\Win11Privacy-Journal`: ReplaceFile has a moment when the file is not
+* **Locked.** Every write *and every read* takes a lock — the file
+  `C:\ProgramData\Win11Privacy\journal.lock`, opened without sharing in the
+  protected folder (re-entrant within one process; released by Windows if the
+  process dies). It used to be the named mutex `Global\Win11Privacy-Journal`, which
+  any process, even a service without privileges, could create and hold, stopping
+  both apply and rollback (reproduced on the VM). The file has an explicit ACL set
+  at creation — SYSTEM and Administrators only, *not even read* for Users (an ACL
+  inherited from the folder would let any process open it for reading without
+  sharing and hold it), and a lock left with wider rights is repaired when it is
+  opened. Read-only display of the journal falls back to an unlocked read
+  without administrator rights. ReplaceFile has a moment when the file is not
   there under its name, and a reader without the lock saw "no journal". Data
   files are opened with `FILE_SHARE_DELETE`, so a reader never blocks another
   process's replace; a replace blocked by someone else (an antivirus) waits and
@@ -157,6 +203,25 @@ guarantees; kill during `reg.exe load/unload` itself.
   backup made by an older version (no signatures) can only be imported by hand.
   Importing a backup is the fallback path and is not written to the undo journal.
 
+## Settings of other programs (VS Code, Firefox)
+
+* The journal holds **one key** per entry (`appcfg`: program, key, the value as it
+  was written in the file, whether the file existed), written before the change
+  like every other entry. Rollback puts back exactly that key — the same text, or
+  removes it if it was not there — and leaves everything else in the file alone,
+  including what the user changed after the program did. A file the program created
+  and that is empty after the rollback is deleted.
+* Before, the first apply copied the whole `settings.json` to `*.win11privacy.bak`
+  and the rollback copied it back over the file: everything the user had changed in
+  between was lost (reproduced on the VM). Copies left by older versions are never
+  applied, only mentioned.
+* VS Code `settings.json` is in the user's profile, so it is written by the
+  de-elevated task (see *Folders of the user*); a link on the path is refused.
+  Firefox `policies.json` is in Program Files (administrators only) and written
+  directly, with a JSON depth of 20 so that deep corporate policies are not cut.
+* Entries are shape-checked on rollback: known program, a valid key name, and the
+  old value must be a single JSON scalar.
+
 ## Firewall and hosts
 
 * The telemetry address rule is replaced in stages: the new rule is created next
@@ -211,9 +276,40 @@ number and CSV columns by position (checked on a Russian VM).
   can put back an *older* journal signed by this machine. It contains only
   genuine records of the program, so it cannot inject foreign values — at most
   a rollback returns settings to an earlier "before" state.
-* The journal mutex lives in the global namespace; another program could create
-  it first and hold it. The engine then refuses to change anything (a denial of
-  service, not a bypass).
+* The registry backup folder is created on the desktop, where the user's programs
+  can write, and `reg.exe` writes into it as administrator. Its name has a random
+  suffix (it cannot be planted in advance) and it is checked not to be a link right
+  after creation, but a program that renames the folder in the short moment between
+  creation and writing could still redirect the `.reg` files and `backup-sig.json`
+  (fixed names, not executable) to another folder. The impact is limited to
+  creating or overwriting files with those names.
+* **Elevation under another account.** A standard user may type an administrator's
+  password. The engine then runs as that administrator while someone else is signed
+  in. Settings under `HKCU` still go to the signed-in user (his hive is written like
+  the other profiles), but the guard and the watch tasks run with the highest
+  privilege level, which only an administrator has: they are installed for the
+  administrator account and work while it is signed in. The engine says so when they
+  are enabled.
+* Firewall rule by addresses: names that live on shared endpoints (shared Azure
+  Storage, `e-msedge`, Office front door) are not resolved into the rule — blocking
+  their addresses would cut other services. They stay blocked by name in `hosts`.
+  Disabling Defender's cloud protection (MAPS) is a real reduction in protection
+  against new threats, not a minor one.
+* Deletions are not in the journal and cannot be undone: the cleanup module,
+  the telemetry buffer wipe, the removal of apps and the footprint wipe.
+* A release is built by CI with provenance attestation, but the exe is not
+  Authenticode-signed and the compiler (`csc`) does not produce reproducible
+  builds: two builds of the same sources give different exe hashes. The engine
+  *is* reproducible, and CI compares it with the build from `engine/`.
+* A few values are written to a store Windows does not document as a policy
+  interface (`PolicyManager\default`, `MaxTelemetryAllowed` under `Policies`): Windows may
+  rewrite them, and the guard puts them back. The program does not claim that
+  every listed value changes behaviour on every build; the check reports what is
+  actually set. Whether turning off Delivery Optimization (`DoSvc`) affects
+  Windows Update on every edition has not been verified.
+* CI runs the apply/revert round trip on `windows-latest` (Windows Server, not
+  Windows 11) and only for part of the modules; Pro and Enterprise are not
+  covered by any test, and neither is PowerShell 7 (the engine does not use it).
 
 ## How it is tested
 
@@ -267,6 +363,42 @@ SYSTEM и администраторы — полный доступ, польз
 папки, не прошедшей эти проверки: движок с правами администратора не прочитает
 подложенный `profile.json`, журнал или файл состояния.
 
+**Окружение и модули PowerShell.** Повышенный процесс получает окружение того,
+кто его запустил, а первой папкой в `PSModulePath` стоит
+`Документы\WindowsPowerShell\Modules` пользователя, куда пишет любая его
+программа. Команды, на которых держится движок (`Get-ScheduledTask`,
+`Get-NetFirewallRule`, `Resolve-DnsName`…), подгружаются по этому списку, и
+подложенный модуль с именем системного выполнился бы с правами администратора —
+у стража при каждом входе, без запроса UAC. Поэтому первой командой после
+`param(` список сводится к `$PSHOME\Modules`, а `SystemRoot`, `ProgramData`,
+`ProgramFiles`, `PATH` и папки профиля движок заново берёт у самой системы
+(`GetSystemDirectory`, HKLM, ключ `ProfileList` по SID процесса), а не из
+переменных, которые можно переопределить в `HKCU\Environment`. Окно запускает
+движок с теми же значениями (`EngineFile.Harden`) и системной рабочей папкой.
+Тест запускает движок с подложенным модулем `ScheduledTasks` и подменённой
+`ProgramData` и проверяет, что ни то ни другое не используется.
+
+**Папки пользователя (чистка, VS Code).** Удалять или писать *по пути* с
+правами администратора там, куда могут писать программы пользователя, нельзя:
+проверку нельзя привязать к действию, компонент пути между ними можно подменить
+ссылкой. Поэтому движок так не делает.
+
+* Папки профиля (`%TEMP%`, `%LOCALAPPDATA%\…`, `settings.json` VS Code) обрабатывает
+  короткая задача **от имени самого пользователя, без повышения**
+  (`Invoke-AsUser`): она может ровно то, что он и так может сам. Сценарий задачи —
+  постоянный текст движка в защищённой папке; данные ей идут JSON-ом, ответ — малым
+  JSON-файлом, из которого движок берёт только числа и короткие строки. Ссылка на
+  пути — отказ, внутрь ссылок задача не заходит.
+* Общие системные папки (`C:\Windows\Temp`, `ProgramData\…\WER`) чистит сам
+  движок, но только объекты, чей **владелец** — SYSTEM, администраторы,
+  TrustedInstaller или системная служба, и внутрь чужого не заходит.
+  Не-администратор не может создать объект с таким владельцем (нужна привилегия
+  смены владельца или восстановления), поэтому junction, подложенная в
+  `C:\Windows\Temp`, пропускается, а не удаляется насквозь.
+* Во `%TEMP%` файлы моложе 24 часов остаются (ими ещё пользуются запущенные
+  программы); корзина очищается только после отдельного вопроса, а сам модуль
+  чистки по умолчанию выключен.
+
 ## Журнал отката (`changes.json`)
 
 * **Подписан.** Схема 3, HMAC-SHA256 по записям. Ключ — 32 байта из
@@ -279,9 +411,18 @@ SYSTEM и администраторы — полный доступ, польз
   допустима. Перед исполнением: пути реестра — только в HKLM/HKCU/HKU, вид
   значения — известный, имена служб, задач и переменных — допустимые, файл куста
   — `X:\...\NTUSER.DAT` без кавычек, GUID аудита — наш.
-* **Под замком.** Каждая запись *и каждое чтение* берут общесистемный мьютекс
-  `Global\Win11Privacy-Journal`: у ReplaceFile есть миг, когда файла под этим
-  именем нет, и чтение без замка видело «журнала нет». Файлы данных
+* **Под замком.** Каждая запись *и каждое чтение* берут замок — файл
+  `C:\ProgramData\Win11Privacy\journal.lock`, открытый без совместного доступа в
+  защищённой папке (внутри одного процесса повторно входимый; если процесс
+  завершился, Windows закрывает файл сама). Раньше это был именованный мьютекс
+  `Global\Win11Privacy-Journal`, который мог создать и держать любой процесс, даже
+  служба без прав, — и тогда не работали ни применение, ни откат (проверено на VM);
+  у файла явные права при создании — только SYSTEM и администраторы, даже читать
+  пользователям нельзя (унаследованные от папки права позволили бы любому процессу
+  открыть его на чтение без совместного доступа и держать), а замок, оставшийся с
+  более широкими правами, исправляется при открытии. Без прав администратора
+  показ журнала читает его и без замка. У ReplaceFile есть миг, когда файла под
+  этим именем нет, и чтение без замка видело «журнала нет». Файлы данных
   открываются с `FILE_SHARE_DELETE`, поэтому чтение не мешает подмене файла
   другим процессом; подмена, которой мешает кто-то другой (антивирус), ждёт и
   пробует снова. Журнал, который сейчас не прочитался, — *не читается*, а не
@@ -391,6 +532,26 @@ SYSTEM и администраторы — полный доступ, польз
   версии (без подписей) можно импортировать только вручную. Возврат из копии —
   запасной путь, в журнал отката он не пишется.
 
+## Настройки других программ (VS Code, Firefox)
+
+* В журнале — **один ключ** на запись (`appcfg`: программа, ключ, значение так, как
+  оно написано в файле, был ли файл), и пишется она раньше изменения, как все
+  остальные. Откат возвращает ровно этот ключ — тем же текстом, а если его не было,
+  убирает — и не трогает всё остальное в файле, в том числе то, что человек
+  поменял после программы. Файл, который завела программа и который после отката
+  опустел, удаляется.
+* Раньше при первом применении весь `settings.json` копировался в
+  `*.win11privacy.bak`, а откат копировал его обратно поверх файла: всё, что человек
+  успел поменять, пропадало (проверено на VM). Копии прежних версий не применяются
+  никогда, о них только говорится.
+* `settings.json` VS Code лежит в профиле пользователя, поэтому его пишет задача без
+  повышения (см. *Папки пользователя*); ссылка на пути — отказ. `policies.json`
+  Firefox лежит в Program Files (писать могут только администраторы) и пишется
+  напрямую, с глубиной JSON 20, чтобы глубокие корпоративные политики не
+  обрезались.
+* Записи проверяются по форме при откате: программа из известных, допустимое имя
+  ключа, прежнее значение — одно значение JSON.
+
 ## Брандмауэр и hosts
 
 * Правило адресов телеметрии заменяется по шагам: новое создаётся рядом со
@@ -446,9 +607,40 @@ ConstrainedLanguage (WDAC/AppLocker) движок сразу останавли�
   папку, может вернуть туда *прежний* журнал, подписанный на этом компьютере. В
   нём только настоящие записи программы, чужого значения так не подставить —
   самое большее откат вернёт настройки к более раннему «до».
-* Мьютекс журнала — в общем пространстве имён; другая программа может завести
-  его первой и держать. Тогда движок отказывается что-либо менять (отказ в
-  работе, а не обход защиты).
+* Папка резервной копии реестра создаётся на рабочем столе, куда пишут программы
+  пользователя, а `reg.exe` пишет в неё с правами администратора. У имени случайный
+  хвост (заранее подложить нельзя), сразу после создания проверяется, что это не
+  ссылка, но программа, которая успеет переименовать папку в короткий миг между
+  созданием и записью, всё же могла бы перенаправить файлы `.reg` и
+  `backup-sig.json` (фиксированные имена, не исполняемые) в другую папку. Последствия
+  ограничены созданием или перезаписью файлов с такими именами.
+* **Повышение под другой учётной записью.** Обычный пользователь может ввести
+  пароль администратора. Тогда движок работает от имени этого администратора, а за
+  компьютером сидит другой человек. Настройки `HKCU` всё равно доходят до вошедшего
+  (его куст пишется так же, как у других профилей), но страж и слежение работают с
+  наивысшим уровнем, который есть только у администратора: они ставятся на учётную
+  запись администратора и работают, пока он в Windows. Движок говорит об этом при
+  включении.
+* Правило брандмауэра по адресам: имена, живущие на общих узлах (общее хранилище
+  Azure, `e-msedge`, общий вход Office), в правило не попадают — закрыв их адреса,
+  программа отрезала бы чужие службы. Они остаются закрытыми по имени в `hosts`.
+  Выключение облачной защиты Защитника (MAPS) — реальное снижение защиты от новых
+  угроз, а не «небольшое».
+* Удалённое в журнал не пишется и не возвращается: модуль чистки, стирание буфера
+  телеметрии, удаление приложений и стирание цифрового следа.
+* Релиз собирает CI с аттестацией происхождения, но exe не подписан Authenticode, а
+  компилятор (`csc`) не даёт воспроизводимой сборки: две сборки одних исходников
+  дают разные хеши exe. Движок воспроизводим, и CI сверяет его со сборкой из
+  `engine/`.
+* Часть значений пишется в хранилище, которое Windows не описывает как интерфейс
+  политик (`PolicyManager\default`, `MaxTelemetryAllowed` в `Policies`): Windows
+  может их переписать, и страж возвращает их. Программа не утверждает, что каждое
+  значение из списка меняет поведение на каждой сборке: проверка показывает то, что
+  реально стоит. Влияет ли отключение «Оптимизации доставки» (`DoSvc`) на Windows
+  Update во всех редакциях, не проверено.
+* CI гоняет применение и откат на `windows-latest` (это Windows Server, а не
+  Windows 11) и только по части модулей; Pro и Enterprise не проверяет ни один
+  тест, как и PowerShell 7 (движок его не использует).
 
 ## Как проверяется
 

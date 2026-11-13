@@ -158,7 +158,7 @@ function Invoke-FootprintWipe {
                 # потом запускаем обратно. Раньше оставались остановленными.
                 $cdpRun = @(Get-Service -Name 'cdp*' -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Running' } | ForEach-Object { $_.Name })
                 foreach ($n in $cdpRun) { if (-not $DryRun) { Stop-Service -Name $n -Force -ErrorAction SilentlyContinue } }
-                $null = Clear-FolderContents (Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform') 'база истории активности'
+                $null = Clear-Folder (Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform') 'база истории активности'
                 foreach ($n in $cdpRun) {
                     if ($DryRun) { continue }
                     try { Start-Service -Name $n -ErrorAction Stop }
@@ -166,7 +166,7 @@ function Invoke-FootprintWipe {
                 }
             }
             'recent' {
-                $null = Clear-FolderContents ([Environment]::GetFolderPath('Recent')) 'недавние документы'
+                $null = Clear-Folder ([Environment]::GetFolderPath('Recent')) 'недавние документы'
                 if (-not $DryRun) {
                     try { Remove-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs' -Recurse -Force -ErrorAction Stop; Write-Log '   [+] список RecentDocs в реестре очищен' } catch [System.Management.Automation.ItemNotFoundException] { } catch { Write-Log ("   [!] список RecentDocs в реестре не очищен -- {0}" -f $_.Exception.Message); $script:Failures++ }
                 }
@@ -180,15 +180,15 @@ function Invoke-FootprintWipe {
                 try { Remove-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths' -Recurse -Force -ErrorAction Stop; Write-Log '   [+] введённые пути очищены'; $script:Changes++ } catch { Write-Log '   [-] введённых путей нет' }
             }
             'clipboard' {
-                $null = Clear-FolderContents (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Clipboard') 'история буфера обмена'
+                $null = Clear-Folder (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Clipboard') 'история буфера обмена'
             }
             'wer' {
-                $null = Clear-FolderContents (Join-Path $env:ProgramData 'Microsoft\Windows\WER\ReportArchive') 'архив отчётов об ошибках'
-                $null = Clear-FolderContents (Join-Path $env:ProgramData 'Microsoft\Windows\WER\ReportQueue') 'очередь отчётов об ошибках'
-                $null = Clear-FolderContents (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\WER') 'локальные отчёты об ошибках'
+                $null = Clear-Folder (Join-Path $env:ProgramData 'Microsoft\Windows\WER\ReportArchive') 'архив отчётов об ошибках'
+                $null = Clear-Folder (Join-Path $env:ProgramData 'Microsoft\Windows\WER\ReportQueue') 'очередь отчётов об ошибках'
+                $null = Clear-Folder (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\WER') 'локальные отчёты об ошибках'
             }
             'inputpers' {
-                $null = Clear-FolderContents (Join-Path $env:APPDATA 'Microsoft\InputPersonalization') 'личный словарь набора'
+                $null = Clear-Folder (Join-Path $env:APPDATA 'Microsoft\InputPersonalization') 'личный словарь набора'
             }
             'dnscache' {
                 if ($DryRun) { Write-Log '   [тест] кэш DNS — очистить'; break }

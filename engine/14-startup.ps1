@@ -362,6 +362,7 @@ function Find-NewStartup {
 if ($InstallGuard) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Страж приватности'
+    Write-SessionUserNote
     try {
         Ensure-DataDir
         $engineDst = Install-TaskEngine
@@ -370,7 +371,7 @@ if ($InstallGuard) {
         # то, что человек оставил нарочно, — например, DoSvc ради Магазина.
         Save-Json 'profile.json' @{ version=1; modules=$mods; skip=@($SkipItems); created=(Get-Date).ToString('s') }
         $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -Guard' + $script:DataArg)
-        $t1 = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+        $t1 = New-ScheduledTaskTrigger -AtLogOn -User $script:RunAccount
         $t1.Delay = 'PT3M'
         # по умолчанию раз в неделю; -GuardDaily — каждый день в то же время
         $t2 = if ($GuardDaily) { New-ScheduledTaskTrigger -Daily -At 12:00 }
@@ -386,7 +387,7 @@ if ($InstallGuard) {
             $triggers += $t3
         } catch { }
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
-        $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+        $principal = New-ScheduledTaskPrincipal -UserId $script:RunAccount -LogonType Interactive -RunLevel Highest
         Register-ScheduledTask -TaskName $script:GuardTask -Action $action -Trigger $triggers -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
         Write-Log ("   [+] страж установлен: проверка через 3 минуты после входа в систему и {0}" -f $(if ($GuardDaily) { 'каждый день в 12:00' } else { 'по воскресеньям в 12:00' }))
         if ($triggers.Count -gt 2) { Write-Log '   [+] и через 5 минут после каждого установленного обновления Windows' }

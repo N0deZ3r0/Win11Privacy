@@ -383,3 +383,14 @@ Windows не отдаёт 	blocked by Windows:
 Журналу изменений нельзя верить	The change log cannot be trusted
 Подпись журнала не сошлась или ключа подписи нет: его могли изменить. По нему ничего не возвращается.\n	The log's signature does not match or the signing key is missing: it may have been altered. Nothing is restored from it.\n
 Файл не удалён — при следующем изменении он будет отложен рядом. Запасной путь — резервная копия реестра или точка восстановления Windows.	The file is not deleted — it will be set aside next to it on the next change. The fallback is the registry backup or a Windows restore point.
+Файл профиля не читается как JSON.	The profile file cannot be read as JSON.
+В профиле недопустимое имя модуля: 	The profile has an invalid module name: 
+В профиле нет ни одного модуля.	The profile has no modules.
+В профиле недопустимый номер пункта: 	The profile has an invalid item number: 
+Готово, но не всё прошло: что именно — в строках [!] выше.	Done, but not everything went through: see the [!] lines above.
+Готово, с ошибками.	Done, with errors.
+Temp, кэш обновлений, эскизы, дампы. Удалённое не вернуть; корзина — по отдельному вопросу.	Temp, update cache, thumbnails, dumps. What is deleted cannot be brought back; the recycle bin is a separate question.
+Очистить и корзину?\n\nИз корзины файлы уже не вернуть — ни кнопкой «Откат», ни как-то иначе.\n	Empty the recycle bin too?\n\nFiles in the recycle bin cannot be brought back — not by "Roll back", not any other way.\n
+Остальная чистка (кэши, временные файлы, дампы) идёт в любом случае; во временной папке файлы моложе суток не трогаются.	The rest of the cleanup (caches, temporary files, dumps) runs either way; in the temp folder, files younger than a day are left alone.
+Чистка: корзина	Cleanup: recycle bin
+Выключает облачную защиту (MAPS) и отправку образцов. Защита от новых, ещё неизвестных угроз заметно слабеет. На домашних ПК «Защита от подделки» может не дать это применить.	Turns off cloud protection (MAPS) and sample submission. Protection against new, not yet known threats gets noticeably weaker. On home PCs, Tamper Protection may refuse to apply this.

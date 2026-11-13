@@ -6,23 +6,88 @@
 # путь назад. Общесистемный замок делает запись неделимой.
 # Не дождались замка — не пишем вовсе: раньше после 10 секунд ожидания тело
 # выполнялось без замка, и два запуска снова затирали друг другу журнал.
+#
+# Замок — файл journal.lock в защищённом корне ProgramData\Win11Privacy,
+# открытый без совместного доступа. Раньше это был именованный мьютекс
+# Global\Win11Privacy-Journal, а его может создать и держать любой процесс,
+# даже от имени службы без прав: пока он держал, не работали ни применение,
+# ни откат (проверено на VM). У файла права только для системы и
+# администраторов — ни на запись, ни на чтение, — так что занять его без прав
+# администратора нельзя ни как, в том числе открыв «просто на чтение».
+# Процесс завершился, не отпустив замок, — Windows закрывает файл сама.
+# Замок повторно входимый: запись, которая читает журнал под замком, не ждёт
+# сама себя.
+$script:JournalLockDepth = 0
+function Get-JournalLockPath { return (Join-Path $script:SafeRoot 'journal.lock') }
+
+function Open-JournalLockFile {
+    $p = Get-JournalLockPath
+    $dir = Split-Path $p -Parent
+    if (Test-Admin) {
+        # Корень заводится и проверяется до замка: корень, который успел
+        # завести кто-то другой, отложен в сторону вместе с его «замком»
+        if (-not (Assert-SafeRoot)) { throw 'папка ProgramData\Win11Privacy не защищена от подмены — замка журнала отката нет' }
+    } elseif (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+        # заводить корень без прав администратора нельзя: он был бы ничей
+        throw (New-Object System.UnauthorizedAccessException 'защищённой папки программы нет, а завести её может только администратор')
+    }
+    # ссылка на месте замка увела бы его открытие в чужой файл
+    if ((Test-Path -LiteralPath $p) -and ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'на месте замка журнала лежит ссылка'
+    }
+    if (-not (Test-Admin)) {
+        # без прав администратора замок не взять: файл закрыт и на запись, и
+        # на чтение (см. ниже), открытие кончится отказом в доступе
+        return [IO.File]::Open($p, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    }
+    # Права замка — только система и администраторы, на чтение тоже, и
+    # задаются при создании файла. Унаследованные от папки данных права
+    # («Пользователи: чтение») позволили бы любому процессу открыть замок на
+    # чтение без совместного доступа и держать: тогда ни применение, ни откат
+    # не получили бы замок — тот же отказ в работе, что был у общего мьютекса.
+    $sec = New-Object System.Security.AccessControl.FileSecurity
+    $sec.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+        $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'Allow')))
+    }
+    $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+    # права открытия включают смену прав и владельца: ими исправляется замок,
+    # оставшийся с широкими правами (SetAccessControl на открытом дескрипторе)
+    $fs = New-Object System.IO.FileStream($p, [IO.FileMode]::OpenOrCreate,
+                                          ([Security.AccessControl.FileSystemRights]'ReadData, WriteData, ReadPermissions, ChangePermissions, TakeOwnership'),
+                                          [IO.FileShare]::None, 4096, [IO.FileOptions]::None, $sec)
+    # замок, оставшийся с более широкими правами (создан до этой защиты),
+    # исправляется, пока он у нас в руках
+    if (-not (Test-KeyFileSecure $p)) {
+        try { $fs.SetAccessControl($sec) } catch { $fs.Dispose(); throw }
+    }
+    return $fs
+}
+
 function Use-JournalLock {
     param([scriptblock]$Body)
-    $mx = New-Object System.Threading.Mutex($false, 'Global\Win11Privacy-Journal')
-    $held = $false
-    try {
-        for ($i = 0; $i -lt $script:JournalLockTries -and -not $held; $i++) {
-            try { $held = $mx.WaitOne($script:JournalLockWaitMs) }
-            catch {
-                # прежний владелец завершился, не отпустив замок: замок наш
-                if ("$($_.Exception)" -match 'AbandonedMutex') { $held = $true } else { throw }
-            }
+    if ($script:JournalLockDepth -gt 0) {
+        $script:JournalLockDepth++
+        try { & $Body } finally { $script:JournalLockDepth-- }
+        return
+    }
+    $fs = $null
+    $until = (Get-Date).AddMilliseconds([double]$script:JournalLockTries * [double]$script:JournalLockWaitMs)
+    while ($null -eq $fs) {
+        try { $fs = Open-JournalLockFile }
+        catch [System.UnauthorizedAccessException] {
+            throw (New-Object System.UnauthorizedAccessException 'замок журнала отката открывается только с правами администратора')
+        } catch [System.IO.IOException] {
+            # занят другим запуском (или антивирус проверяет файл) — ждём
+            if ((Get-Date) -ge $until) { throw 'журнал отката занят другим запуском программы' }
+            Start-Sleep -Milliseconds 200
         }
-        if (-not $held) { throw 'журнал отката занят другим запуском программы' }
-        & $Body
-    } finally {
-        if ($held) { try { $mx.ReleaseMutex() } catch { } }
-        try { $mx.Dispose() } catch { }
+    }
+    $script:JournalLockDepth = 1
+    try { & $Body }
+    finally {
+        $script:JournalLockDepth = 0
+        try { $fs.Dispose() } catch { }
     }
 }
 
@@ -118,13 +183,14 @@ function Test-JournalEntryKnown {
             elseif ($d.T -eq 'task') { $k[(Get-JournalKey @{ kind = 'task'; path = $d.P })] = $true }
             elseif ($d.T -eq 'taskglob') { $globs.Add("$($d.P)") }
             elseif ($d.T -eq 'env') { $k[(Get-JournalKey @{ kind = 'env'; name = $d.P })] = $true }
+            elseif ($d.T -in @('vscode', 'firefox')) { $k[(Get-JournalKey @{ kind = 'appcfg'; app = $d.T; name = $d.P })] = $true }
         }
         $k[(Get-JournalKey @{ kind = 'audit'; guid = $script:AuditGuid })] = $true
         $script:KnownJournal = $k; $script:KnownTaskGlobs = $globs.ToArray()
     }
     $f = ConvertTo-Fields $Entry
     $kind = "$($f['kind'])"
-    if ($kind -notin @('reg', 'svc', 'task', 'env', 'audit')) { return $false }
+    if ($kind -notin @('reg', 'svc', 'task', 'env', 'audit', 'appcfg')) { return $false }
     if ($script:KnownJournal.ContainsKey((Get-JournalKey $f))) { return $true }
     if ($kind -eq 'task') {
         # по маске — только в её папках, а не любая задача с подходящим именем
@@ -142,6 +208,13 @@ function Read-JournalFile {
     param([switch]$ReadOnly)
     $box = @{ r = $null }
     try { Use-JournalLock { $box.r = Read-JournalFileUnlocked -ReadOnly:$ReadOnly } }
+    catch [System.UnauthorizedAccessException] {
+        # Без прав администратора замок не взять. Показать журнал можно и
+        # без него: чтение ничего не меняет, а миг подмены файла другим
+        # запуском Read-JournalFileUnlocked пережидает сам.
+        if ($ReadOnly) { return (Read-JournalFileUnlocked -ReadOnly) }
+        return @{ items = @(); legacy = $false; exists = $true; signed = $false; trusted = $false; state = 'unreadable'; updated = ''; dropped = 0 }
+    }
     catch {
         if (-not $ReadOnly) { Write-Log ("   [!] журнал отката сейчас не читается ({0}) -- файл не тронут, повторите позже" -f $_.Exception.Message) }
         return @{ items = @(); legacy = $false; exists = $true; signed = $false; trusted = $false; state = 'unreadable'; updated = ''; dropped = 0 }
@@ -295,6 +368,8 @@ function Get-JournalKey {
     if ($k -eq 'task') { return ("task|{0}" -f "$($F['path'])").ToLowerInvariant() }
     if ($k -eq 'env')  { return ("env|{0}" -f "$($F['name'])").ToLowerInvariant() }
     if ($k -eq 'audit') { return ("audit|{0}" -f "$($F['guid'])").ToLowerInvariant() }
+    # настройка сторонней программы: ключ в её файле (VS Code, Firefox)
+    if ($k -eq 'appcfg') { return ("appcfg|{0}|{1}" -f "$($F['app'])", "$($F['name'])").ToLowerInvariant() }
     return ("reg|{0}|{1}" -f "$($F['path'])", "$($F['name'])").ToLowerInvariant()
 }
 

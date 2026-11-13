@@ -223,20 +223,52 @@ namespace Win11Privacy
             try
             {
                 string txt = File.ReadAllText(profilePath);
-                Dictionary<string, object> d = Json.ParseObject(txt);
-                List<string> mods = new List<string>();
-                foreach (object o in Json.GetArr(d, "modules")) mods.Add(Json.Str(o));
-                if (mods.Count == 0) return 2;
-                string extra = "-Modules " + string.Join(",", mods.ToArray());
-                List<string> skip = new List<string>();
-                foreach (object o in Json.GetArr(d, "skip")) skip.Add(Json.Str(o));
-                if (skip.Count > 0) extra += " -SkipItems " + string.Join(",", skip.ToArray());
-                if (d.ContainsKey("backup") && !Json.GetBool(d, "backup")) extra += " -NoBackup";
-                if (d.ContainsKey("restorePoint") && !Json.GetBool(d, "restorePoint")) extra += " -NoRestorePoint";
-                if (d.ContainsKey("allProfiles") && Json.GetBool(d, "allProfiles")) extra += " -AllProfiles";
+                string why;
+                string extra = SilentProfileArgs(Json.ParseObject(txt), out why);
+                // 4 — профиль негодный и движок не запускался; 2 у движка значит
+                // «закончил, но с ошибками», путать их нельзя
+                if (extra == null) { Console.Error.WriteLine(why); return 4; }
                 return RunEngineConsole(extra);
             }
-            catch { return 1; }
+            catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 1; }
+        }
+
+        // Имена модулей и пунктов из файла профиля идут в командную строку
+        // движка. Раньше они клеились как есть, и «telemetry -Revert» в файле
+        // добавил бы к запуску другой ключ движка. Теперь годится только вид,
+        // который бывает у модулей (telemetry, app_vscode) и пунктов
+        // (telemetry#3): без пробелов, кавычек и дефисов. Остальное — отказ
+        // целиком, а не запуск с тем, что осталось.
+        private static readonly System.Text.RegularExpressions.Regex ModuleIdRx =
+            new System.Text.RegularExpressions.Regex(@"^[a-z][a-z0-9_]{0,40}$");
+        private static readonly System.Text.RegularExpressions.Regex ItemIdRx =
+            new System.Text.RegularExpressions.Regex(@"^[a-z][a-z0-9_]{0,40}#[0-9]{1,4}$");
+
+        internal static string SilentProfileArgs(Dictionary<string, object> d, out string why)
+        {
+            why = "";
+            if (d == null) { why = L.T("Файл профиля не читается как JSON."); return null; }
+            List<string> mods = new List<string>();
+            foreach (object o in Json.GetArr(d, "modules"))
+            {
+                string m = Json.Str(o);
+                if (m == null || !ModuleIdRx.IsMatch(m)) { why = L.T("В профиле недопустимое имя модуля: ") + m; return null; }
+                if (!mods.Contains(m)) mods.Add(m);
+            }
+            if (mods.Count == 0) { why = L.T("В профиле нет ни одного модуля."); return null; }
+            string extra = "-Modules " + string.Join(",", mods.ToArray());
+            List<string> skip = new List<string>();
+            foreach (object o in Json.GetArr(d, "skip"))
+            {
+                string s = Json.Str(o);
+                if (s == null || !ItemIdRx.IsMatch(s)) { why = L.T("В профиле недопустимый номер пункта: ") + s; return null; }
+                if (!skip.Contains(s)) skip.Add(s);
+            }
+            if (skip.Count > 0) extra += " -SkipItems " + string.Join(",", skip.ToArray());
+            if (d.ContainsKey("backup") && !Json.GetBool(d, "backup")) extra += " -NoBackup";
+            if (d.ContainsKey("restorePoint") && !Json.GetBool(d, "restorePoint")) extra += " -NoRestorePoint";
+            if (d.ContainsKey("allProfiles") && Json.GetBool(d, "allProfiles")) extra += " -AllProfiles";
+            return extra;
         }
 
         private static int RunCliAudit()
@@ -249,6 +281,7 @@ namespace Win11Privacy
             ProcessStartInfo psi = new ProcessStartInfo(ps,
                 "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" -Audit");
             psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = Encoding.UTF8; psi.CreateNoWindow = true;
+            EngineFile.Harden(psi);
             Process p = Process.Start(psi);
             string json = null;
             while (!p.StandardOutput.EndOfStream) { string l = p.StandardOutput.ReadLine(); if (l != null && l.TrimStart().StartsWith("###JSON###")) json = l.TrimStart().Substring(10).Trim(); }
@@ -269,6 +302,7 @@ namespace Win11Privacy
             ProcessStartInfo psi = new ProcessStartInfo(ps,
                 "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" " + extra + " -BackupRoot \"" + desktop + "\"");
             psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = Encoding.UTF8; psi.CreateNoWindow = true;
+            EngineFile.Harden(psi);
             Process p = Process.Start(psi);
             while (!p.StandardOutput.EndOfStream) { string l = p.StandardOutput.ReadLine(); if (l != null && !l.TrimStart().StartsWith("###JSON###") && l.Trim() != "###DONE###") Console.WriteLine(l); }
             p.WaitForExit();

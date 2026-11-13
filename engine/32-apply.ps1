@@ -111,6 +111,25 @@ if ((Use-Module 'oem') -and -not $script:JournalFailed) {
     Save-JournalEntries -Quiet
 }
 
+# --- Тот, кто вошёл в Windows, если это не мы ------------------------------- #
+#  Пароль администратора мог ввести обычный пользователь: тогда настройки
+#  HKCU легли бы в профиль администратора, а человек за компьютером не
+#  получил бы ничего — и проверка, читая тот же HKCU, сказала бы «применено».
+if (-not $script:JournalFailed) {
+    $sessUser = Get-OtherSessionUser
+    if ($sessUser) {
+        Write-Section 'Пользователь, который вошёл в Windows'
+        Write-Log ("   программа работает от имени {0}, а за компьютером {1}" -f $script:RunAccount, $sessUser.name)
+        if (-not $sessUser.profile) {
+            Write-Log '   [!] папку его профиля Windows не назвала -- настройки пользователя до него не дойдут'
+            $script:Failures++
+        } else {
+            Write-Log '   настройки пользователя ложатся и в его профиль, а страж и слежение ставятся на его вход'
+            Apply-ProfilesHives -Only @(@{ name = $sessUser.name; sid = $sessUser.sid; file = (Join-Path $sessUser.profile 'NTUSER.DAT') })
+        }
+    }
+}
+
 # --- Другие пользователи и профиль по умолчанию ----------------------------- #
 if ($AllProfiles -and -not $script:JournalFailed) { Apply-ProfilesHives }
 
@@ -124,37 +143,48 @@ if ((Use-Module 'cleanup') -and -not $script:JournalFailed) {
     $wu = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
     $wuWasRunning = ($wu -and $wu.Status -eq 'Running')
     if ($wuWasRunning -and -not $DryRun) { Stop-Service wuauserv -Force -ErrorAction SilentlyContinue }
-    $targets = @(
-        @{ P = $env:TEMP;                                            L = 'временные файлы пользователя' },
+    # Системные папки движок чистит сам, но только то, чей владелец
+    # доверенный: в C:\Windows\Temp может завести папку любой пользователь, и
+    # подложенная им ссылка увела бы удаление с правами администратора в
+    # защищённую папку. Папки профиля чистит задача от имени самого
+    # пользователя — там повышения, которым можно злоупотребить, нет вовсе
+    # (см. Clear-UserFolders). Во временной папке свежие файлы остаются: ими
+    # ещё пользуются запущенные программы.
+    $sysTargets = @(
         @{ P = "$env:SystemRoot\Temp";                               L = 'временные файлы Windows' },
         @{ P = "$env:SystemRoot\SoftwareDistribution\Download";      L = 'кэш загруженных обновлений' },
         @{ P = "$env:SystemRoot\Logs\CBS";                           L = 'логи обслуживания компонентов' },
-        @{ P = "$env:LOCALAPPDATA\Microsoft\Windows\WER";            L = 'локальные отчёты об ошибках' },
-        @{ P = "$env:ProgramData\Microsoft\Windows\WER\ReportQueue"; L = 'очередь отчётов об ошибках' },
-        @{ P = "$env:LOCALAPPDATA\CrashDumps";                       L = 'дампы аварийных завершений' },
-        @{ P = "$env:LOCALAPPDATA\Microsoft\Windows\INetCache";      L = 'кэш интернет-файлов' },
-        @{ P = "$env:LOCALAPPDATA\D3DSCache";                        L = 'кэш шейдеров DirectX' }
+        @{ P = "$env:ProgramData\Microsoft\Windows\WER\ReportQueue"; L = 'очередь отчётов об ошибках' }
     )
-    $steps = $targets.Count + 3
+    $userTargets = @(
+        @{ P = "$env:TEMP";                                      L = 'временные файлы пользователя'; Age = $script:TempKeepHours },
+        @{ P = "$env:LOCALAPPDATA\Microsoft\Windows\WER";         L = 'локальные отчёты об ошибках';  Age = 0 },
+        @{ P = "$env:LOCALAPPDATA\CrashDumps";                    L = 'дампы аварийных завершений';   Age = 0 },
+        @{ P = "$env:LOCALAPPDATA\Microsoft\Windows\INetCache";   L = 'кэш интернет-файлов';          Age = 0 },
+        @{ P = "$env:LOCALAPPDATA\D3DSCache";                     L = 'кэш шейдеров DirectX';         Age = 0 },
+        @{ P = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer";    L = 'кэш эскизов';                  Age = 0; Filter = 'thumbcache_*.db' }
+    )
+    $steps = $sysTargets.Count + 2 + [int][bool]$EmptyRecycleBin
     $n = 0
     Write-Log ("   шагов всего: {0}" -f $steps)
-    foreach ($t in $targets) {
+    foreach ($t in $sysTargets) {
         $n++
         $tag = '[{0,3}%] ({1}/{2})' -f [int](100.0 * $n / $steps), $n, $steps
-        $total += (Clear-FolderContents -FolderPath $t.P -Label $t.L -Step $tag)
+        $total += (Clear-FolderContents -FolderPath $t.P -Label $t.L -Step $tag -TrustedOwnerOnly)
     }
+    $n++
+    Write-Log ('[{0,3}%] ({1}/{2}) папки профиля -- чистит задача от вашего имени, без прав администратора' -f [int](100.0 * $n / $steps), $n, $steps)
+    $total += (Clear-UserFolders $userTargets)
     if (-not $DryRun) {
-        $thumbs = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
-        if (Test-Path -LiteralPath $thumbs) {
-            $before = Get-FolderSizeMB $thumbs
-            Get-ChildItem -LiteralPath $thumbs -Filter 'thumbcache_*.db' -Force -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-            $f = [math]::Max(0, [math]::Round($before - (Get-FolderSizeMB $thumbs), 1)); $total += $f
-            Write-Log ("   {0} кэш эскизов -- освобождено {1} МБ" -f ('[{0,3}%] ({1}/{2})' -f [int](100.0 * ($n + 1) / $steps), ($n + 1), $steps), $f)
+        # Корзина — только по отдельному согласию: вернуть из неё уже ничего
+        # нельзя, а раньше она очищалась вместе с кэшами, заодно.
+        if ($EmptyRecycleBin) {
+            $n++
+            $tag = '[{0,3}%] ({1}/{2})' -f [int](100.0 * $n / $steps), $n, $steps
+            try { Clear-RecycleBin -Force -ErrorAction Stop; Write-Log ("   {0} корзина очищена" -f $tag) } catch { Write-Log ("   {0} корзина уже пуста" -f $tag) }
+        } else {
+            Write-Log '   [-] корзина не тронута: очистить её можно, только отметив это отдельно'
         }
-        $n++   # шаг «кэш эскизов» засчитан
-        $n++   # следующий шаг — корзина
-        $tag = '[{0,3}%] ({1}/{2})' -f [int](100.0 * $n / $steps), $n, $steps
-        try { Clear-RecycleBin -Force -ErrorAction Stop; Write-Log ("   {0} корзина очищена" -f $tag) } catch { Write-Log ("   {0} корзина уже пуста" -f $tag) }
         $n++
         $tag = '[{0,3}%] ({1}/{2})' -f [int](100.0 * $n / $steps), $n, $steps
         try { Delete-DeliveryOptimizationCache -Force -ErrorAction Stop | Out-Null; Write-Log ("   {0} кэш Delivery Optimization очищен" -f $tag) } catch { Write-Log ("   {0} кэш Delivery Optimization пропущен" -f $tag) }
@@ -213,3 +243,8 @@ else { Write-Log 'Менять было нечего — всё уже наст�
 Emit-Json @{ changes=$script:Changes; already=$script:Already; failures=$script:Failures
              blocked=$script:Blocked; backup=$script:BackupDir }
 Write-Log '###DONE###'
+# Код выхода — итог для тихого режима и сценариев: 0 — всё прошло, 2 — работа
+# закончена, но с ошибками (какими — в журнале выше). Раньше применение
+# всегда заканчивалось нулём, и «успех или неудача профиля» не различались.
+if ($script:JournalFailed -or $script:Failures -gt 0) { exit 2 }
+exit 0

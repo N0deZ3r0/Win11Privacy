@@ -76,7 +76,18 @@ function Protect-DataRoot {
                 Write-Log ("   [!] папку данных завёл не администратор -- она отложена как {0}" -f (Split-Path "$Dir.untrusted-$stamp" -Leaf))
             }
         }
-        if (-not (Test-Path -LiteralPath $Dir)) { New-Item -ItemType Directory -Path $Dir -Force | Out-Null }
+        $sec = New-Object System.Security.AccessControl.DirectorySecurity
+        $sec.SetAccessRuleProtection($true, $false)
+        $inh = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+        foreach ($p in @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @('S-1-5-32-545', 'ReadAndExecute'))) {
+            $sid = New-Object Security.Principal.SecurityIdentifier($p[0])
+            $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, $p[1], $inh, 'None', 'Allow')))
+        }
+        $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        # Новая папка — сразу с правами: раньше она создавалась с правами,
+        # унаследованными от ProgramData, и закрывалась вторым шагом, а между
+        # ними обычный пользователь успел бы завести в ней свой файл.
+        if (-not (Test-Path -LiteralPath $Dir)) { $null = [IO.Directory]::CreateDirectory($Dir, $sec) }
         if (Test-DirSecure $Dir) { return $true }
         # Папка прежних версий: права наследовались от ProgramData, и обычный
         # пользователь мог завести файлы и папки на любой глубине — раньше
@@ -91,14 +102,6 @@ function Protect-DataRoot {
             if ($u.Item.PSIsContainer) { [IO.Directory]::Move($u.Item.FullName, $to) } else { [IO.File]::Move($u.Item.FullName, $to) }
             Write-Log ("   [!] в папке данных лежал чужой файл, он отложен: {0}" -f $u.Rel)
         }
-        $sec = New-Object System.Security.AccessControl.DirectorySecurity
-        $sec.SetAccessRuleProtection($true, $false)
-        $inh = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
-        foreach ($p in @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @('S-1-5-32-545', 'ReadAndExecute'))) {
-            $sid = New-Object Security.Principal.SecurityIdentifier($p[0])
-            $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, $p[1], $inh, 'None', 'Allow')))
-        }
-        $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
         [IO.Directory]::SetAccessControl($Dir, $sec)
         return (Test-DirSecure $Dir)
     } catch {

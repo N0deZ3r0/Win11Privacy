@@ -119,9 +119,23 @@ param(
     [switch]$AllProfiles,
     # --- проверка утечек: доходит ли соединение до серверов сбора ---
     [switch]$LeakTest,
+    # --- чистка: корзину очищать только по отдельному согласию ---
+    [switch]$EmptyRecycleBin,
     [switch]$GdidReissue,
     [switch]$GdidRestore
 )
+
+# --------------------------------------------------------------------------- #
+#  Модули PowerShell — только системные, и это первая строка после param.
+#  Движок вызывает команды из модулей (ScheduledTasks, NetSecurity, Appx...),
+#  и PowerShell подгружает их по PSModulePath, где первой стоит папка
+#  «Документы\WindowsPowerShell\Modules». Туда пишет любая программа
+#  пользователя без прав администратора, а движок и задачи стража работают с
+#  этими правами: модуль с тем же именем выполнился бы вместо системного.
+#  До этой строки PowerShell не загружает ни одного модуля (проверено), а
+#  здесь нет ни одной команды — только присваивание: Join-Path сам из модуля.
+# --------------------------------------------------------------------------- #
+$env:PSModulePath = "$PSHOME\Modules"
 
 $ErrorActionPreference = 'Continue'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
@@ -142,6 +156,82 @@ if ($script:LangMode -ne 'FullLanguage') {
     Write-Host ('###JSON### {"error":"languageMode","languageMode":"' + $script:LangMode + '"}')
     Write-Host '###DONE###'
     exit 3
+}
+
+# --------------------------------------------------------------------------- #
+#  Окружение — из самой системы, а не из переменных среды. Переменные среды
+#  повышенного процесса складываются и из HKCU\Environment, а туда пишет любая
+#  программа пользователя: ProgramData, указанная на свою папку, увела бы
+#  журнал отката и ключ подписи туда, где их можно подменить, а TEMP или
+#  LOCALAPPDATA, указанные на системную папку, — чистку. Системная папка
+#  берётся у Windows (GetSystemDirectory), ProgramData и Program Files — из
+#  HKLM, папка профиля — из HKLM\...\ProfileList по SID этого процесса.
+#  Пути профиля дальше строятся от неё: перенесённые через «Документы →
+#  Свойства» папки программа не трогает.
+# --------------------------------------------------------------------------- #
+$script:SysDir   = [Environment]::SystemDirectory
+$script:WinDir   = [IO.Path]::GetDirectoryName($script:SysDir)
+$script:SysDrive = [IO.Path]::GetPathRoot($script:SysDir).TrimEnd('\')
+
+function Get-MachinePath {
+    param([string]$Key, [string]$Name, [string]$Default)
+    try {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+        try {
+            $k = $base.OpenSubKey($Key, $false)
+            if ($null -ne $k) {
+                $v = ''
+                try { $v = [string]$k.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) } finally { $k.Close() }
+                # раскрываем сами и только системные имена: %USERPROFILE% и
+                # прочие пользовательские переменные здесь не годятся
+                $v = $v.Replace('%SystemDrive%', $script:SysDrive).Replace('%SYSTEMDRIVE%', $script:SysDrive).Replace('%systemdrive%', $script:SysDrive)
+                $v = $v.Replace('%SystemRoot%', $script:WinDir).Replace('%SYSTEMROOT%', $script:WinDir).Replace('%systemroot%', $script:WinDir)
+                if ($v -and $v.IndexOf('%') -lt 0 -and [IO.Path]::IsPathRooted($v)) { return $v.TrimEnd('\') }
+            }
+        } finally { $base.Close() }
+    } catch { }
+    return $Default
+}
+
+$script:ProgramDataDir = Get-MachinePath 'SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' 'ProgramData' ($script:SysDrive + '\ProgramData')
+$script:ProgramFilesDir = Get-MachinePath 'SOFTWARE\Microsoft\Windows\CurrentVersion' 'ProgramFilesDir' ($script:SysDrive + '\Program Files')
+$script:ProgramFilesX86Dir = Get-MachinePath 'SOFTWARE\Microsoft\Windows\CurrentVersion' 'ProgramFilesDir (x86)' ($script:SysDrive + '\Program Files (x86)')
+$script:UserSid = ''
+# DOMAIN\имя — из маркера процесса: им ставятся задачи планировщика
+$script:RunAccount = ''
+try {
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $script:UserSid = $me.User.Value
+    $script:RunAccount = $me.Name
+} catch { }
+# Папка профиля: $null — узнать у системы не вышло, и тогда пути профиля
+# (чистка, VS Code, следы) не трогаются вовсе
+$script:UserProfileDir = $null
+if ($script:UserSid) {
+    $script:UserProfileDir = Get-MachinePath ('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $script:UserSid) 'ProfileImagePath' $null
+}
+
+$env:SystemRoot    = $script:WinDir
+$env:windir        = $script:WinDir
+$env:SystemDrive   = $script:SysDrive
+$env:ComSpec       = $script:SysDir + '\cmd.exe'
+$env:ProgramData   = $script:ProgramDataDir
+$env:ALLUSERSPROFILE = $script:ProgramDataDir
+$env:ProgramFiles  = $script:ProgramFilesDir
+$env:ProgramW6432  = $script:ProgramFilesDir
+${env:ProgramFiles(x86)} = $script:ProgramFilesX86Dir
+$env:CommonProgramFiles = $script:ProgramFilesDir + '\Common Files'
+${env:CommonProgramFiles(x86)} = $script:ProgramFilesX86Dir + '\Common Files'
+# Утилиты движка (reg, auditpol, ipconfig, cmdkey, schtasks) — системные
+$env:PATH = ($script:SysDir + ';' + $script:WinDir + ';' + $script:SysDir + '\Wbem;' + $script:SysDir + '\WindowsPowerShell\v1.0\')
+# Program Files пишут только администраторы — там модули, поставленные для всех
+$env:PSModulePath = "$PSHOME\Modules;" + $script:ProgramFilesDir + '\WindowsPowerShell\Modules'
+if ($script:UserProfileDir) {
+    $env:USERPROFILE  = $script:UserProfileDir
+    $env:APPDATA      = $script:UserProfileDir + '\AppData\Roaming'
+    $env:LOCALAPPDATA = $script:UserProfileDir + '\AppData\Local'
+    $env:TEMP         = $script:UserProfileDir + '\AppData\Local\Temp'
+    $env:TMP          = $env:TEMP
 }
 
 # --------------------------------------------------------------------------- #
@@ -227,6 +317,9 @@ $script:RegTypes = @('reg', 'regif', 'regpol', 'regsvc')
 # пользователя.
 $script:OsBuild = 0
 try { $script:OsBuild = [int](Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'CurrentBuildNumber' -ErrorAction Stop).CurrentBuildNumber } catch { }
+# Сколько часов во временной папке не трогать свежие файлы: ими ещё
+# пользуются запущенные программы, а чистка однажды стёрла рабочие файлы.
+$script:TempKeepHours = 24
 $script:Changes = 0
 $script:Failures = 0
 $script:Already = 0
@@ -463,18 +556,23 @@ function Set-Reg {
 
     # Если параметр уже такой, как нужно — не трогаем его: часть значений
     # панели задач Windows защищает от перезаписи даже тем же самым числом.
+    # «Такой» — и по данным, и по виду: строка «1» вместо числа 1 раньше
+    # считалась настроенной, хотя Windows читает такой параметр как ошибку.
+    # Откату нужен прежний вид значения и данные как есть: раньше в журнал шёл
+    # вид нового значения, и строка «1» возвращалась числом. Есть ли значение
+    # вообще — тоже отсюда: пустое двоичное или многострочное Get-RegValue
+    # отдаёт как «нет», и откат удалил бы его вместо возврата. Этот же
+    # прочитанный вид решает, настроено ли уже: REG_SZ «1» на месте DWORD 1
+    # раньше считался настроенным, хотя Windows читает такой параметр иначе.
     $cur = Get-RegValue $Path $Name
-    if ($null -ne $cur -and (ConvertTo-RegComparable $cur $Type) -eq (ConvertTo-RegComparable $Value $Type)) { Write-Log "   [в] $label -- уже настроено"; $script:Already++; return }
+    $raw = Get-RegRaw $Path $Name
+    if ($raw.ok -and $raw.exists -and "$($raw.kind)" -eq $Type -and
+        (ConvertTo-RegComparable $raw.value $Type) -eq (ConvertTo-RegComparable $Value $Type)) { Write-Log "   [в] $label -- уже настроено"; $script:Already++; return }
 
     # Менять можно, только пока пишется журнал отката, — в том числе при
     # прямых вызовах (монитор, чистка), а не только из применения модулей.
     if (-not (Test-CanModify $label)) { return }
     Ensure-Backup          # копию делаем перед первым изменением, а не «всегда»
-    # Откату нужен прежний вид значения и данные как есть: раньше в журнал шёл
-    # вид нового значения, и строка «1» возвращалась числом. Есть ли значение
-    # вообще — тоже отсюда: пустое двоичное или многострочное Get-RegValue
-    # отдаёт как «нет», и откат удалил бы его вместо возврата.
-    $raw = Get-RegRaw $Path $Name
     if (-not $raw.ok -and $raw.denied -and $Policy) {
         # как и отказ в записи ниже: политику держит сама Windows
         Write-Log "   [-] $label -- Windows этой редакции не разрешает менять этот параметр"
@@ -605,18 +703,35 @@ function Get-FolderSizeMB {
 # PowerShell 5.1 проходит по junction и символическим ссылкам и удаляет то,
 # куда они ведут: ссылка во временной папке на «Документы» стёрла бы
 # документы. Здесь ссылка удаляется сама, как запись, — её цель не трогается.
-# $Stats — @{ deleted; failed; errors }: что удалено, что нет и почему.
+# $Stats — @{ deleted; failed; skipped; errors }: что удалено, что нет и почему.
+#
+# -TrustedOwnerOnly — для общих системных папок (C:\Windows\Temp,
+# ProgramData\...\WER), куда может писать любой пользователь: удаляется
+# только то, чей владелец доверенный ($script:ClearOwners), и только в такие
+# папки движок заходит. Остальное оставляется его хозяину.
+$script:ClearOwners = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-19', 'S-1-5-20',
+                        'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+function Test-TrustedOwner {
+    param([string]$Path)
+    try { return ($script:ClearOwners -contains (Get-Acl -LiteralPath $Path -ErrorAction Stop).GetOwner([Security.Principal.SecurityIdentifier]).Value) }
+    catch { return $false }
+}
+
 function Remove-TreeNoFollow {
-    param([string]$Path, $Stats)
+    param([string]$Path, $Stats, [switch]$TrustedOwnerOnly)
     try { $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop } catch { return }
     try {
+        # Общая системная папка: чужое не трогаем и внутрь не заходим. Ссылки
+        # пропускаются целиком: Get-Acl на ссылке отвечает про её ЦЕЛЬ, и по
+        # владельцу судить о самой ссылке нельзя.
+        if ($TrustedOwnerOnly -and (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or -not (Test-TrustedOwner $item.FullName))) { $Stats.skipped++; return }
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
             if ($item.PSIsContainer) { [IO.Directory]::Delete($item.FullName, $false) } else { [IO.File]::Delete($item.FullName) }
             $Stats.deleted++
             return
         }
         if ($item.PSIsContainer) {
-            foreach ($c in @(Get-ChildItem -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue)) { Remove-TreeNoFollow $c.FullName $Stats }
+            foreach ($c in @(Get-ChildItem -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue)) { Remove-TreeNoFollow $c.FullName $Stats -TrustedOwnerOnly:$TrustedOwnerOnly }
             # папка уходит, только если опустела: что внутри не удалилось, уже посчитано
             if (@(Get-ChildItem -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue).Count -eq 0) { [IO.Directory]::Delete($item.FullName, $false) }
             return
@@ -628,6 +743,47 @@ function Remove-TreeNoFollow {
         $Stats.failed++
         if ($Stats.errors.Count -lt 3) { $Stats.errors.Add(("{0}: {1}" -f $item.Name, $_.Exception.Message)) }
     }
+}
+
+# Сценарий для задачи от имени пользователя: очищает его папки тем же
+# способом — ссылки удаляются как записи, внутрь них не заходит. -MinAgeHours
+# оставляет свежие файлы (во временной папке ими ещё пользуются программы).
+function Get-ClearUserScript {
+    return @'
+param([string]$InputFile, [string]$ResultFile)
+$in = (Get-Content -LiteralPath $InputFile -Raw -Encoding UTF8) | ConvertFrom-Json
+function Clr($p, $s, $cut) {
+  try { $i = Get-Item -LiteralPath $p -Force -ErrorAction Stop } catch { return }
+  try {
+    if ($i.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+      if ($i.PSIsContainer) { [IO.Directory]::Delete($i.FullName, $false) } else { [IO.File]::Delete($i.FullName) }
+      $s.deleted++; return }
+    if ($i.PSIsContainer) {
+      foreach ($c in @(Get-ChildItem -LiteralPath $i.FullName -Force -ErrorAction SilentlyContinue)) { Clr $c.FullName $s $cut }
+      if (@(Get-ChildItem -LiteralPath $i.FullName -Force -ErrorAction SilentlyContinue).Count -eq 0) { [IO.Directory]::Delete($i.FullName, $false) }
+      return }
+    if ($cut -and ($i.LastWriteTime -gt $cut -or $i.CreationTime -gt $cut)) { $s.recent++; return }
+    $len = $i.Length
+    if ($i.Attributes -band [IO.FileAttributes]::ReadOnly) { $i.Attributes = $i.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly) }
+    [IO.File]::Delete($i.FullName); $s.deleted++; $s.bytes += $len
+  } catch { $s.failed++; if ($s.errors.Count -lt 3) { $s.errors += ('{0}: {1}' -f $i.Name, $_.Exception.Message) } }
+}
+$out = @()
+foreach ($t in @($in.targets)) {
+  $s = @{ path = "$($t.path)"; state = 'done'; deleted = 0; failed = 0; recent = 0; bytes = [int64]0; errors = @() }
+  $p = "$($t.path)"
+  if (-not (Test-Path -LiteralPath $p -PathType Container)) { $s.state = 'missing' }
+  elseif ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { $s.state = 'link' }
+  else {
+    $cut = $null; if ([double]$t.minAgeHours -gt 0) { $cut = (Get-Date).AddHours(-[double]$t.minAgeHours) }
+    $f = "$($t.filter)"
+    $items = $(if ($f) { @(Get-ChildItem -LiteralPath $p -Filter $f -File -Force -ErrorAction SilentlyContinue) } else { @(Get-ChildItem -LiteralPath $p -Force -ErrorAction SilentlyContinue) })
+    foreach ($c in $items) { Clr $c.FullName $s $cut }
+  }
+  $out += $s
+}
+ConvertTo-Json -InputObject @{ targets = $out } -Depth 5 -Compress | Set-Content -LiteralPath $ResultFile -Encoding UTF8
+'@
 }
 
 # Папки, которые очищать нельзя ни при каком пути: корень диска и системные корни
@@ -643,7 +799,7 @@ function Test-ClearForbidden {
 }
 
 function Clear-FolderContents {
-    param([string]$FolderPath, [string]$Label, [string]$Step = '')
+    param([string]$FolderPath, [string]$Label, [string]$Step = '', [switch]$TrustedOwnerOnly)
     if (-not (Test-Path -LiteralPath $FolderPath)) {
         if ($Step) { Write-Log ("   {0} {1} -- нечего чистить" -f $Step, $Label) }
         return 0.0
@@ -662,19 +818,80 @@ function Clear-FolderContents {
     if ($Step) { Write-Log ("   {0} {1}..." -f $Step, $Label) }
     $before = Get-FolderSizeMB $full
     if ($DryRun) { Write-Log ("   {0} [тест] {1} -- можно освободить ~{2} МБ" -f $Step, $Label, $before); return 0.0 }
-    $st = @{ deleted = 0; failed = 0; errors = (New-Object System.Collections.Generic.List[string]) }
-    foreach ($c in @(Get-ChildItem -LiteralPath $full -Force -ErrorAction SilentlyContinue)) { Remove-TreeNoFollow $c.FullName $st }
+    $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+    foreach ($c in @(Get-ChildItem -LiteralPath $full -Force -ErrorAction SilentlyContinue)) { Remove-TreeNoFollow $c.FullName $st -TrustedOwnerOnly:$TrustedOwnerOnly }
     $freed = [math]::Max(0, [math]::Round($before - (Get-FolderSizeMB $full), 1))
     if ($Step) { Write-Log ("   {0} {1} -- освобождено {2} МБ" -f $Step, $Label, $freed) }
     else { Write-Log ("   [+] {0} -- освобождено {1} МБ" -f $Label, $freed) }
     # Что не удалилось, называется: раньше ошибки глушились, и «освобождено»
     # выглядело полным. Занятые файлы — обычное дело, это сведения, а не сбой.
+    if ($st.skipped -gt 0) { Write-Log ("       оставлено файлов и папок других пользователей: {0}" -f $st.skipped) }
     if ($st.failed -gt 0) {
         Write-Log ("       не удалено (заняты или нет доступа): {0}" -f $st.failed)
         foreach ($e in $st.errors) { Write-Log ("       {0}" -f $e) }
     }
     $script:LastClear = $st
     return [double]$freed
+}
+
+# Системная ли папка: внутри Windows или ProgramData. Такие движок чистит сам
+# (с -TrustedOwnerOnly); всё прочее — папки пользователя, их чистит задача
+# от его имени.
+function Test-SystemClearPath {
+    param([string]$Full)
+    foreach ($root in @($script:WinDir, $script:ProgramDataDir)) {
+        if ($root -and $Full.StartsWith($root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
+# Папки пользователя — одной задачей от его имени. $Targets — список
+# @{ P; L; Age (часы, 0 — все); Filter (маска файлов в самой папке) }.
+# Возвращает освобождённые МБ.
+function Clear-UserFolders {
+    param([object[]]$Targets)
+    $send = @(); $total = 0.0
+    foreach ($t in $Targets) {
+        # папки того, кто сидит за компьютером (см. Convert-ToSessionPath)
+        $full = Convert-ToSessionPath ([IO.Path]::GetFullPath($t.P))
+        if (Test-ClearForbidden $full) { Write-Log ("   [!] {0} -- {1} чистить нельзя" -f $t.L, $full); $script:Failures++; continue }
+        $send += @{ path = $full; label = "$($t.L)"; minAgeHours = [double]$t.Age; filter = "$($t.Filter)" }
+    }
+    if ($send.Count -eq 0) { return 0.0 }
+    if ($DryRun) { foreach ($s in $send) { Write-Log ("   [тест] {0} -- очистит задача от вашего имени" -f $s.label) }; return 0.0 }
+    $r = Invoke-AsUser 'clear' (Get-ClearUserScript) @{ targets = $send } -Minutes 15
+    if (-not $r.ok) {
+        Write-Log ("   [!] папки профиля не очищены: {0}" -f $r.why); $script:Failures++
+        return 0.0
+    }
+    for ($i = 0; $i -lt $send.Count; $i++) {
+        $res = @($r.result.targets)[$i]
+        $lbl = $send[$i].label
+        if ($null -eq $res) { Write-Log ("   [!] {0} -- итога нет" -f $lbl); $script:Failures++; continue }
+        switch ("$($res.state)") {
+            'missing' { Write-Log ("   [-] {0} -- нечего чистить" -f $lbl) }
+            'link'    { Write-Log ("   [!] {0} -- папка оказалась ссылкой и не очищается" -f $lbl); $script:Failures++ }
+            default {
+                $mb = [math]::Round([double]$res.bytes / 1MB, 1); $total += $mb
+                Write-Log ("   [+] {0} -- освобождено {1} МБ" -f $lbl, $mb)
+                if ([int]$res.recent -gt 0) { Write-Log ("       оставлено свежих файлов (моложе {0} ч): {1}" -f $send[$i].minAgeHours, $res.recent) }
+                if ([int]$res.failed -gt 0) {
+                    Write-Log ("       не удалено (заняты или нет доступа): {0}" -f $res.failed)
+                    foreach ($e in @($res.errors)) { if ($e) { Write-Log ("       {0}" -f $e) } }
+                }
+            }
+        }
+    }
+    return [double]$total
+}
+
+# Одна папка — тем способом, который ей годится (см. Test-SystemClearPath)
+function Clear-Folder {
+    param([string]$FolderPath, [string]$Label, [string]$Step = '', [double]$MinAgeHours = 0)
+    $full = [IO.Path]::GetFullPath($FolderPath)
+    if (Test-SystemClearPath $full) { return (Clear-FolderContents $full $Label $Step -TrustedOwnerOnly) }
+    if ($Step) { Write-Log ("   {0} {1}..." -f $Step, $Label) }
+    return (Clear-UserFolders @(@{ P = $full; L = $Label; Age = $MinAgeHours }))
 }
 
 # Задачи по маске имени (OneDrive*, NvTm*) — только в своих папках
@@ -791,7 +1008,18 @@ function Protect-DataRoot {
                 Write-Log ("   [!] папку данных завёл не администратор -- она отложена как {0}" -f (Split-Path "$Dir.untrusted-$stamp" -Leaf))
             }
         }
-        if (-not (Test-Path -LiteralPath $Dir)) { New-Item -ItemType Directory -Path $Dir -Force | Out-Null }
+        $sec = New-Object System.Security.AccessControl.DirectorySecurity
+        $sec.SetAccessRuleProtection($true, $false)
+        $inh = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+        foreach ($p in @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @('S-1-5-32-545', 'ReadAndExecute'))) {
+            $sid = New-Object Security.Principal.SecurityIdentifier($p[0])
+            $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, $p[1], $inh, 'None', 'Allow')))
+        }
+        $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        # Новая папка — сразу с правами: раньше она создавалась с правами,
+        # унаследованными от ProgramData, и закрывалась вторым шагом, а между
+        # ними обычный пользователь успел бы завести в ней свой файл.
+        if (-not (Test-Path -LiteralPath $Dir)) { $null = [IO.Directory]::CreateDirectory($Dir, $sec) }
         if (Test-DirSecure $Dir) { return $true }
         # Папка прежних версий: права наследовались от ProgramData, и обычный
         # пользователь мог завести файлы и папки на любой глубине — раньше
@@ -806,14 +1034,6 @@ function Protect-DataRoot {
             if ($u.Item.PSIsContainer) { [IO.Directory]::Move($u.Item.FullName, $to) } else { [IO.File]::Move($u.Item.FullName, $to) }
             Write-Log ("   [!] в папке данных лежал чужой файл, он отложен: {0}" -f $u.Rel)
         }
-        $sec = New-Object System.Security.AccessControl.DirectorySecurity
-        $sec.SetAccessRuleProtection($true, $false)
-        $inh = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
-        foreach ($p in @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @('S-1-5-32-545', 'ReadAndExecute'))) {
-            $sid = New-Object Security.Principal.SecurityIdentifier($p[0])
-            $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, $p[1], $inh, 'None', 'Allow')))
-        }
-        $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
         [IO.Directory]::SetAccessControl($Dir, $sec)
         return (Test-DirSecure $Dir)
     } catch {
@@ -1107,10 +1327,16 @@ function Ensure-Backup {
     if (-not $NoBackup) {
         Write-Section 'Резервная копия реестра'
         $root = if ($BackupRoot) { $BackupRoot } else { [Environment]::GetFolderPath('Desktop') }
-        $dir = Join-Path $root ('Win11Privacy-Backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        # Папка лежит там, куда пишет любая программа пользователя, а reg.exe
+        # пишет в неё с правами администратора. Имя с случайным хвостом
+        # заранее не угадать — раньше по метке времени с точностью до секунды
+        # можно было подложить на её место ссылку на чужую папку.
+        $dir = Join-Path $root ('Win11Privacy-Backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
         $keys = @($script:Defs | Where-Object { $script:RegTypes -contains $_.T -and $Modules -contains $_.M } | ForEach-Object { $_.P } | Select-Object -Unique)
         try {
-            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            if (Test-Path -LiteralPath $dir) { throw 'папка копии уже есть -- её завёл не этот запуск' }
+            $null = [IO.Directory]::CreateDirectory($dir)
+            if ((Get-Item -LiteralPath $dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'на месте папки копии оказалась ссылка' }
             $saved = 0
             $missed = @()
             foreach ($k in $keys) {
@@ -1143,7 +1369,10 @@ function Ensure-Backup {
                     Write-Log ("   [-] копия не подписана ({0}) -- вернуть её кнопкой программы будет нельзя, только вручную" -f $_.Exception.Message)
                 }
             } else {
-                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+                # Remove-Item -Recurse в PowerShell 5.1 идёт по ссылкам: папку
+                # убираем тем же обходом без ссылок, что и при чистке
+                $rmStat = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+                Remove-TreeNoFollow $dir $rmStat
                 Write-Log '   [-] сохранять нечего: ни одна ветка не выгрузилась'
             }
             if ($missed.Count -gt 0) {
@@ -1183,23 +1412,88 @@ function Ensure-Backup {
 # путь назад. Общесистемный замок делает запись неделимой.
 # Не дождались замка — не пишем вовсе: раньше после 10 секунд ожидания тело
 # выполнялось без замка, и два запуска снова затирали друг другу журнал.
+#
+# Замок — файл journal.lock в защищённом корне ProgramData\Win11Privacy,
+# открытый без совместного доступа. Раньше это был именованный мьютекс
+# Global\Win11Privacy-Journal, а его может создать и держать любой процесс,
+# даже от имени службы без прав: пока он держал, не работали ни применение,
+# ни откат (проверено на VM). У файла права только для системы и
+# администраторов — ни на запись, ни на чтение, — так что занять его без прав
+# администратора нельзя ни как, в том числе открыв «просто на чтение».
+# Процесс завершился, не отпустив замок, — Windows закрывает файл сама.
+# Замок повторно входимый: запись, которая читает журнал под замком, не ждёт
+# сама себя.
+$script:JournalLockDepth = 0
+function Get-JournalLockPath { return (Join-Path $script:SafeRoot 'journal.lock') }
+
+function Open-JournalLockFile {
+    $p = Get-JournalLockPath
+    $dir = Split-Path $p -Parent
+    if (Test-Admin) {
+        # Корень заводится и проверяется до замка: корень, который успел
+        # завести кто-то другой, отложен в сторону вместе с его «замком»
+        if (-not (Assert-SafeRoot)) { throw 'папка ProgramData\Win11Privacy не защищена от подмены — замка журнала отката нет' }
+    } elseif (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+        # заводить корень без прав администратора нельзя: он был бы ничей
+        throw (New-Object System.UnauthorizedAccessException 'защищённой папки программы нет, а завести её может только администратор')
+    }
+    # ссылка на месте замка увела бы его открытие в чужой файл
+    if ((Test-Path -LiteralPath $p) -and ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'на месте замка журнала лежит ссылка'
+    }
+    if (-not (Test-Admin)) {
+        # без прав администратора замок не взять: файл закрыт и на запись, и
+        # на чтение (см. ниже), открытие кончится отказом в доступе
+        return [IO.File]::Open($p, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    }
+    # Права замка — только система и администраторы, на чтение тоже, и
+    # задаются при создании файла. Унаследованные от папки данных права
+    # («Пользователи: чтение») позволили бы любому процессу открыть замок на
+    # чтение без совместного доступа и держать: тогда ни применение, ни откат
+    # не получили бы замок — тот же отказ в работе, что был у общего мьютекса.
+    $sec = New-Object System.Security.AccessControl.FileSecurity
+    $sec.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+        $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'Allow')))
+    }
+    $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+    # права открытия включают смену прав и владельца: ими исправляется замок,
+    # оставшийся с широкими правами (SetAccessControl на открытом дескрипторе)
+    $fs = New-Object System.IO.FileStream($p, [IO.FileMode]::OpenOrCreate,
+                                          ([Security.AccessControl.FileSystemRights]'ReadData, WriteData, ReadPermissions, ChangePermissions, TakeOwnership'),
+                                          [IO.FileShare]::None, 4096, [IO.FileOptions]::None, $sec)
+    # замок, оставшийся с более широкими правами (создан до этой защиты),
+    # исправляется, пока он у нас в руках
+    if (-not (Test-KeyFileSecure $p)) {
+        try { $fs.SetAccessControl($sec) } catch { $fs.Dispose(); throw }
+    }
+    return $fs
+}
+
 function Use-JournalLock {
     param([scriptblock]$Body)
-    $mx = New-Object System.Threading.Mutex($false, 'Global\Win11Privacy-Journal')
-    $held = $false
-    try {
-        for ($i = 0; $i -lt $script:JournalLockTries -and -not $held; $i++) {
-            try { $held = $mx.WaitOne($script:JournalLockWaitMs) }
-            catch {
-                # прежний владелец завершился, не отпустив замок: замок наш
-                if ("$($_.Exception)" -match 'AbandonedMutex') { $held = $true } else { throw }
-            }
+    if ($script:JournalLockDepth -gt 0) {
+        $script:JournalLockDepth++
+        try { & $Body } finally { $script:JournalLockDepth-- }
+        return
+    }
+    $fs = $null
+    $until = (Get-Date).AddMilliseconds([double]$script:JournalLockTries * [double]$script:JournalLockWaitMs)
+    while ($null -eq $fs) {
+        try { $fs = Open-JournalLockFile }
+        catch [System.UnauthorizedAccessException] {
+            throw (New-Object System.UnauthorizedAccessException 'замок журнала отката открывается только с правами администратора')
+        } catch [System.IO.IOException] {
+            # занят другим запуском (или антивирус проверяет файл) — ждём
+            if ((Get-Date) -ge $until) { throw 'журнал отката занят другим запуском программы' }
+            Start-Sleep -Milliseconds 200
         }
-        if (-not $held) { throw 'журнал отката занят другим запуском программы' }
-        & $Body
-    } finally {
-        if ($held) { try { $mx.ReleaseMutex() } catch { } }
-        try { $mx.Dispose() } catch { }
+    }
+    $script:JournalLockDepth = 1
+    try { & $Body }
+    finally {
+        $script:JournalLockDepth = 0
+        try { $fs.Dispose() } catch { }
     }
 }
 
@@ -1295,13 +1589,14 @@ function Test-JournalEntryKnown {
             elseif ($d.T -eq 'task') { $k[(Get-JournalKey @{ kind = 'task'; path = $d.P })] = $true }
             elseif ($d.T -eq 'taskglob') { $globs.Add("$($d.P)") }
             elseif ($d.T -eq 'env') { $k[(Get-JournalKey @{ kind = 'env'; name = $d.P })] = $true }
+            elseif ($d.T -in @('vscode', 'firefox')) { $k[(Get-JournalKey @{ kind = 'appcfg'; app = $d.T; name = $d.P })] = $true }
         }
         $k[(Get-JournalKey @{ kind = 'audit'; guid = $script:AuditGuid })] = $true
         $script:KnownJournal = $k; $script:KnownTaskGlobs = $globs.ToArray()
     }
     $f = ConvertTo-Fields $Entry
     $kind = "$($f['kind'])"
-    if ($kind -notin @('reg', 'svc', 'task', 'env', 'audit')) { return $false }
+    if ($kind -notin @('reg', 'svc', 'task', 'env', 'audit', 'appcfg')) { return $false }
     if ($script:KnownJournal.ContainsKey((Get-JournalKey $f))) { return $true }
     if ($kind -eq 'task') {
         # по маске — только в её папках, а не любая задача с подходящим именем
@@ -1319,6 +1614,13 @@ function Read-JournalFile {
     param([switch]$ReadOnly)
     $box = @{ r = $null }
     try { Use-JournalLock { $box.r = Read-JournalFileUnlocked -ReadOnly:$ReadOnly } }
+    catch [System.UnauthorizedAccessException] {
+        # Без прав администратора замок не взять. Показать журнал можно и
+        # без него: чтение ничего не меняет, а миг подмены файла другим
+        # запуском Read-JournalFileUnlocked пережидает сам.
+        if ($ReadOnly) { return (Read-JournalFileUnlocked -ReadOnly) }
+        return @{ items = @(); legacy = $false; exists = $true; signed = $false; trusted = $false; state = 'unreadable'; updated = ''; dropped = 0 }
+    }
     catch {
         if (-not $ReadOnly) { Write-Log ("   [!] журнал отката сейчас не читается ({0}) -- файл не тронут, повторите позже" -f $_.Exception.Message) }
         return @{ items = @(); legacy = $false; exists = $true; signed = $false; trusted = $false; state = 'unreadable'; updated = ''; dropped = 0 }
@@ -1472,6 +1774,8 @@ function Get-JournalKey {
     if ($k -eq 'task') { return ("task|{0}" -f "$($F['path'])").ToLowerInvariant() }
     if ($k -eq 'env')  { return ("env|{0}" -f "$($F['name'])").ToLowerInvariant() }
     if ($k -eq 'audit') { return ("audit|{0}" -f "$($F['guid'])").ToLowerInvariant() }
+    # настройка сторонней программы: ключ в её файле (VS Code, Firefox)
+    if ($k -eq 'appcfg') { return ("appcfg|{0}|{1}" -f "$($F['app'])", "$($F['name'])").ToLowerInvariant() }
     return ("reg|{0}|{1}" -f "$($F['path'])", "$($F['name'])").ToLowerInvariant()
 }
 
@@ -1710,6 +2014,15 @@ function Test-JournalEntryShape {
             if ("$($f['old'])" -notmatch '^[0-3]$') { return 'недопустимое значение аудита' }
             return ''
         }
+        'appcfg' {
+            if ("$($f['app'])" -notin @('vscode', 'firefox')) { return 'неизвестная программа' }
+            # ключ настройки: буквы, цифры, точка, дефис, подчёркивание
+            if ("$($f['name'])" -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$') { return 'недопустимое имя настройки' }
+            # «как было» — одно значение JSON, а не произвольный текст: иначе
+            # дописанная запись подставила бы в файл настроек что угодно
+            if ("$($f['old'])" -and "$($f['old'])" -notmatch '^("[^"\\\x00-\x1f]*"|true|false|-?[0-9]+(\.[0-9]+)?)$') { return 'недопустимое прежнее значение' }
+            return ''
+        }
         'startup' {
             if (-not "$($f['id'])") { return 'пустая запись автозагрузки' }
             if ("$($f['old'])" -notin @('On', 'Off')) { return 'недопустимое состояние автозагрузки' }
@@ -1845,6 +2158,33 @@ function Restore-JournalEntry {
                 if ($r.ok) { return @{ ok = $true } }
                 return @{ ok = $false; error = ("auditpol (код {0}): {1}" -f $r.code, $r.out) }
             }
+            'appcfg' {
+                # Возвращается ровно наш ключ: было значение — то же самое
+                # слово в слово, не было — ключ убирается. Остальное в файле
+                # не трогается, даже если человек поменял его после нас.
+                $was = [bool]$e.existed
+                $tok = "$($e.old)"
+                if ("$($e.app)" -eq 'vscode') {
+                    if (-not (Test-Path -LiteralPath (Get-VsCodeSettingsPath) -PathType Leaf)) { return @{ ok = $true; note = 'файла настроек больше нет' } }
+                    $w = Write-VsCodeKey "$($e.name)" $(if ($was) { $tok } else { '' })
+                    if (-not $w.ok) { return @{ ok = $false; error = $w.why } }
+                    $now = Get-VsCodeRaw "$($e.name)"
+                    if ($was) {
+                        if (-not $now.exists) { return @{ ok = $false; error = 'ключ не вернулся' } }
+                        if ($now.token -ne $tok) { return @{ ok = $false; error = ("читается {0}, а было {1}" -f $now.token, $tok) } }
+                    } elseif ($now.exists) { return @{ ok = $false; error = 'ключ не убрался' } }
+                    return @{ ok = $true }
+                }
+                if (-not (Get-FirefoxPoliciesPath)) { return @{ ok = $true; note = 'Firefox больше не установлен' } }
+                $w = $(if ($was) { Write-FirefoxKey "$($e.name)" (ConvertFrom-JsonToken $tok) } else { Write-FirefoxKey "$($e.name)" $null -Remove })
+                if (-not $w.ok) { return @{ ok = $false; error = $w.why } }
+                if ($w.removedFile) { return @{ ok = $true; note = 'policies.json создала программа и он опустел -- удалён' } }
+                $nowF = Get-FirefoxPolicy "$($e.name)"
+                if ($was) {
+                    if ($null -eq $nowF) { return @{ ok = $false; error = 'политика не вернулась' } }
+                } elseif ($null -ne $nowF) { return @{ ok = $false; error = 'политика не убралась' } }
+                return @{ ok = $true }
+            }
             default {
                 return (Restore-RegValue "$($e.path)" "$($e.name)" ([bool]$e.existed) $e.old "$($e.type)")
             }
@@ -1866,6 +2206,72 @@ function Get-Edition {
 }
 
 function Test-Exe { param([string[]]$Paths) foreach ($p in $Paths) { if ($p -and (Test-Path -LiteralPath $p)) { return $true } } return $false }
+
+# --------------------------------------------------------------------------- #
+#  КТО СИДИТ ЗА КОМПЬЮТЕРОМ. Пароль администратора может ввести и обычный
+#  пользователь — тогда повышенный движок работает под администратором, а
+#  человек за компьютером другой. Настройки HKCU и задачи стража уходили при
+#  этом в профиль администратора: человек их не получал, а проверка читала
+#  тот же HKCU и показывала «применено».
+#  Владелец explorer.exe в этом сеансе — тот, кто вошёл в Windows.
+#  @{ sid; name; profile; isMe } или $null, если определить не удалось.
+# --------------------------------------------------------------------------- #
+$script:SessionUserCache = $null
+function Get-SessionUser {
+    if ($null -ne $script:SessionUserCache) { return $script:SessionUserCache.v }
+    $found = $null
+    try {
+        foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop)) {
+            $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue
+            $sid = $(if ($o) { "$($o.Sid)" } else { '' })
+            if ($sid -notlike 'S-1-5-21-*') { continue }
+            $name = ''
+            try { $name = (New-Object Security.Principal.SecurityIdentifier($sid)).Translate([Security.Principal.NTAccount]).Value } catch { }
+            $prof = Get-MachinePath ('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $sid) 'ProfileImagePath' $null
+            $found = @{ sid = $sid; name = $name; profile = $prof; isMe = ($sid -eq $script:UserSid) }
+            if ($found.isMe) { break }     # свой сеанс важнее чужого
+        }
+    } catch { }
+    $script:SessionUserCache = @{ v = $found }
+    return $found
+}
+
+# Повышение под другой учётной записью: за компьютером один человек, а движок
+# работает от имени другого. Пусто — всё в порядке (или определить не вышло).
+function Get-OtherSessionUser {
+    $s = Get-SessionUser
+    if ($null -eq $s -or $s.isMe) { return $null }
+    return $s
+}
+
+# Задачи стража и слежения идут с RunLevel Highest — то есть с повышением, а
+# оно есть только у администратора. Поэтому ставятся они на учётную запись
+# самого движка, а не на обычного пользователя, который вошёл в Windows: на
+# его входе повышения у них не было бы, и они молча ничего бы не делали.
+# Честно сказать об этом надо там, где человек их включает.
+function Write-SessionUserNote {
+    $s = Get-OtherSessionUser
+    if (-not $s) { return }
+    Write-Log ("   [i] в Windows вошёл {0}, а программа работает от имени {1}." -f $s.name, $script:RunAccount)
+    Write-Log ("       Задача ставится на {0}: повышение есть только у администратора, и она сработает, когда он войдёт в Windows." -f $script:RunAccount)
+    Write-Log '       Настройки пользователя (HKCU) дойдут и до вошедшего, но следить за ними в его сеансе эта задача не будет.'
+}
+
+# Папки «пользователя» — это папки того, кто сидит за компьютером. Если движок
+# работает от имени другого администратора, переменные APPDATA, TEMP и прочие
+# указывают на профиль администратора, а чистить и править надо профиль вошедшего:
+# именно он просил. Путь внутри профиля самого движка переносится в профиль
+# вошедшего; всё остальное остаётся как есть.
+function Convert-ToSessionPath {
+    param([string]$Path)
+    $s = Get-OtherSessionUser
+    if (-not $s -or -not $s.profile -or -not $script:UserProfileDir) { return $Path }
+    $own = $script:UserProfileDir.TrimEnd('\') + '\'
+    if ($Path.StartsWith($own, [StringComparison]::OrdinalIgnoreCase)) {
+        return ($s.profile.TrimEnd('\') + '\' + $Path.Substring($own.Length))
+    }
+    return $Path
+}
 
 function Detect-Apps {
     $pf   = $env:ProgramFiles
@@ -2477,7 +2883,8 @@ function Get-DefRisk {
 # =========================================================================== #
 #  Файлы конфигурации сторонних программ
 # =========================================================================== #
-function Get-VsCodeSettingsPath { return (Join-Path $env:APPDATA 'Code\User\settings.json') }
+# Файл настроек того, кто сидит за компьютером (см. Convert-ToSessionPath)
+function Get-VsCodeSettingsPath { return (Convert-ToSessionPath (Join-Path $env:APPDATA 'Code\User\settings.json')) }
 
 function Get-VsCodeValue {
     param([string]$Key)
@@ -2493,6 +2900,134 @@ function Get-VsCodeValue {
     return $m.Groups['n'].Value
 }
 
+# Значение ключа как оно написано в файле («off», true, 14) — его и вернёт
+# откат. @{ fileExists; exists; token }. Раньше откат возвращал не ключи, а
+# весь файл копией, снятой при первом применении: всё, что человек поменял в
+# настройках позже, пропадало (проверено на VM).
+function Get-VsCodeRaw {
+    param([string]$Key)
+    $p = Get-VsCodeSettingsPath
+    $out = @{ fileExists = $false; exists = $false; token = '' }
+    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return $out }
+    $out.fileExists = $true
+    $txt = Get-Content -LiteralPath $p -Raw -ErrorAction SilentlyContinue
+    if (-not $txt) { return $out }
+    $m = [regex]::Match($txt, '"' + [regex]::Escape($Key) + '"\s*:\s*("[^"]*"|true|false|-?[\d.]+)')
+    if ($m.Success) { $out.exists = $true; $out.token = $m.Groups[1].Value }
+    return $out
+}
+
+# Значение для JSON: строка — в кавычках, да/нет — словом, число — как есть
+function ConvertTo-JsonToken {
+    param($Value)
+    if ($Value -is [bool]) { return $Value.ToString().ToLowerInvariant() }
+    if ($Value -is [string]) { return ('"' + ($Value -replace '([\\"])', '\$1') + '"') }
+    return "$Value"
+}
+
+# Обратно: из записи журнала — значение того же вида, что было в файле
+function ConvertFrom-JsonToken {
+    param([string]$Token)
+    $t = "$Token".Trim()
+    if ($t -eq 'true') { return $true }
+    if ($t -eq 'false') { return $false }
+    if ($t.StartsWith('"')) { return ($t.Substring(1, [Math]::Max(0, $t.Length - 2)) -replace '\\([\\"])', '$1') }
+    $n = 0.0
+    if ([double]::TryParse($t, [ref]$n)) { if ($t -notmatch '\.') { return [int]$n }; return $n }
+    return $t
+}
+
+# Сценарий для задачи от имени пользователя: правит settings.json в его
+# профиле. Писать туда с правами администратора нельзя — в папку профиля
+# пишет любая его программа, и подменённый ссылкой settings.json увёл бы
+# запись с этими правами в чужой файл. token = '' — ключ убрать.
+# removeFileIfEmpty — если после этого в файле не осталось ни одного ключа и
+# файл завела сама программа, он удаляется.
+function Get-VsCodeWriteScript {
+    return @'
+param([string]$InputFile, [string]$ResultFile)
+$in = (Get-Content -LiteralPath $InputFile -Raw -Encoding UTF8) | ConvertFrom-Json
+$p = "$($in.path)"
+$res = @{ ok = $false; why = ''; removedFile = $false }
+try {
+  $dir = Split-Path $p -Parent
+  foreach ($d in @($dir, $p)) {
+    if ((Test-Path -LiteralPath $d) -and ((Get-Item -LiteralPath $d -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      throw 'на пути к файлу настроек стоит ссылка'
+    }
+  }
+  if (-not (Test-Path -LiteralPath $dir)) { $null = New-Item -ItemType Directory -Path $dir -Force }
+  $txt = $(if (Test-Path -LiteralPath $p -PathType Leaf) { Get-Content -LiteralPath $p -Raw -ErrorAction Stop } else { '' })
+  if (-not $txt -or $txt.Trim() -eq '') { $txt = "{`r`n}" }
+  $key = "$($in.key)"
+  if ($key -eq '') {
+    # без ключа — только «удалить файл, если он пуст»; ничего не переписывается
+    if ($in.removeFileIfEmpty -and (Test-Path -LiteralPath $p -PathType Leaf) -and (($txt -replace '\s', '') -eq '{}')) {
+      [IO.File]::Delete($p); $res.removedFile = $true
+    }
+    $res.ok = $true
+    ConvertTo-Json -InputObject $res -Depth 4 -Compress | Set-Content -LiteralPath $ResultFile -Encoding UTF8
+    return
+  }
+  $rx = '(\s*)"' + [regex]::Escape($key) + '"(\s*):(\s*)("[^"]*"|true|false|-?[\d.]+)(\s*,?)'
+  $tok = "$($in.token)"
+  if ($tok -eq '') {
+    $m = [regex]::Match($txt, $rx)
+    if ($m.Success) {
+      $before = $txt.Substring(0, $m.Index); $after = $txt.Substring($m.Index + $m.Length)
+      # наш ключ был последним (запятой после него нет) — запятая, оставшаяся
+      # на предыдущем, сделала бы файл негодным; больше ничего в файле не трогаем
+      $tail = $m.Groups[5].Value
+      if (-not $tail.Contains(',')) { $before = [regex]::Replace($before, ',(\s*)$', '$1'); $after = $tail + $after }
+      $txt = $before + $after
+    }
+  } elseif ([regex]::IsMatch($txt, $rx)) {
+    $txt = [regex]::Replace($txt, $rx, ('${1}"' + $key + '"${2}:${3}' + $tok.Replace('$', '$$') + '${5}'), 1)
+  } else {
+    $i = $txt.IndexOf('{')
+    if ($i -lt 0) { $txt = "{`r`n}"; $i = 0 }
+    $rest = $txt.Substring($i + 1)
+    $ins = "`r`n    `"$key`": $tok,"
+    if ($rest.Trim() -eq '}') { $ins = $ins.TrimEnd(',') + "`r`n" }
+    $txt = $txt.Substring(0, $i + 1) + $ins + $rest
+  }
+  $empty = ($txt -replace '\s', '') -eq '{}'
+  if ($empty -and $in.removeFileIfEmpty -and (Test-Path -LiteralPath $p -PathType Leaf)) {
+    [IO.File]::Delete($p); $res.removedFile = $true
+  } else {
+    [IO.File]::WriteAllText($p, $txt, (New-Object System.Text.UTF8Encoding($false)))
+  }
+  $res.ok = $true
+} catch { $res.why = "$($_.Exception.Message)" }
+ConvertTo-Json -InputObject $res -Depth 4 -Compress | Set-Content -LiteralPath $ResultFile -Encoding UTF8
+'@
+}
+
+# Правка settings.json: ключ ставится или убирается задачей от имени
+# пользователя. $Token — готовое значение для JSON, '' — убрать ключ.
+function Write-VsCodeKey {
+    param([string]$Key, [string]$Token, [switch]$RemoveFileIfEmpty)
+    $r = Invoke-AsUser 'vscode' (Get-VsCodeWriteScript) @{
+            path = (Get-VsCodeSettingsPath); key = $Key; token = $Token
+            removeFileIfEmpty = [bool]$RemoveFileIfEmpty } -Minutes 3
+    if (-not $r.ok) { return @{ ok = $false; why = $r.why } }
+    if (-not $r.result.ok) { return @{ ok = $false; why = "$($r.result.why)" } }
+    return @{ ok = $true; why = ''; removedFile = [bool]$r.result.removedFile }
+}
+
+# После отката всех ключей: файл настроек, который завела сама программа и в
+# котором ничего не осталось, удаляется. Решается один раз в конце, а не на
+# каждой записи: у первой записи файл ещё полон остальных наших ключей.
+function Remove-CreatedAppFile {
+    param([string]$App)
+    if ($App -eq 'vscode') {
+        if (-not (Test-Path -LiteralPath (Get-VsCodeSettingsPath) -PathType Leaf)) { return }
+        $w = Write-VsCodeKey '' '' -RemoveFileIfEmpty
+        if (-not $w.ok) { Write-Log ("   [i] файл настроек VS Code, созданный программой, не проверен на пустоту: {0}" -f $w.why); return }
+        if ($w.removedFile) { Write-Log '   [+] файл настроек VS Code создала программа и он опустел -- удалён' }
+    }
+}
+
 function Set-VsCodeValue {
     param([string]$Key, $Value, [string]$Comment)
     $p = Get-VsCodeSettingsPath
@@ -2502,29 +3037,29 @@ function Set-VsCodeValue {
     if ($null -ne $curVal -and "$curVal".ToLower() -eq "$Value".ToLower()) {
         Write-Log "   [в] $Comment -- уже настроено"; $script:Already++; return
     }
+    if (-not (Test-CanModify $Comment)) { return }
     Ensure-Backup
-    try {
-        $dir = Split-Path $p -Parent
-        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-        $txt = if (Test-Path -LiteralPath $p) { Get-Content -LiteralPath $p -Raw -ErrorAction Stop } else { '' }
-        if (-not $txt -or $txt.Trim() -eq '') { $txt = "{`n}" }
-        $bak = "$p.win11privacy.bak"
-        if (-not (Test-Path -LiteralPath $bak)) { Copy-Item -LiteralPath $p -Destination $bak -Force -ErrorAction SilentlyContinue }
-        $jsonVal = if ($Value -is [bool]) { $Value.ToString().ToLower() } elseif ($Value -is [string]) { '"' + $Value + '"' } else { "$Value" }
-        $rx = '("' + [regex]::Escape($Key) + '"\s*:\s*)("[^"]*"|true|false|-?[\d.]+)'
-        if ([regex]::IsMatch($txt, $rx)) {
-            $txt = [regex]::Replace($txt, $rx, ('${1}' + $jsonVal), 1)
-        } else {
-            $idx = $txt.IndexOf('{')
-            if ($idx -lt 0) { $txt = "{`n}"; $idx = 0 }
-            $insert = "`n    `"$Key`": $jsonVal,"
-            $rest = $txt.Substring($idx + 1)
-            if ($rest.Trim() -eq '}') { $insert = $insert.TrimEnd(',') + "`n" }
-            $txt = $txt.Substring(0, $idx + 1) + $insert + $rest
-        }
-        [IO.File]::WriteAllText($p, $txt, (New-Object System.Text.UTF8Encoding($false)))
-        Write-Log "   [+] $Comment"; $script:Changes++
-    } catch { Write-Log "   [!] не удалось: $Comment -- $($_.Exception.Message)"; $script:Failures++ }
+    # «Как было» — по ключу и в журнал, раньше самой правки: откат вернёт
+    # ровно этот ключ и не тронет того, что человек поменял потом сам.
+    $raw = Get-VsCodeRaw $Key
+    $entry = @{ kind = 'appcfg'; app = 'vscode'; name = $Key; existed = [bool]$raw.exists
+                old = "$($raw.token)"; newValue = (ConvertTo-JsonToken $Value)
+                created = [bool](-not $raw.fileExists) }
+    if (-not (Write-AheadEntry $entry)) {
+        Write-Log "   [!] $Comment -- не меняется: «как было» не легло в журнал отката"; $script:Failures++; return
+    }
+    $w = Write-VsCodeKey $Key $entry.newValue
+    if (-not $w.ok) {
+        Undo-AheadEntry $entry
+        Write-Log ("   [!] не удалось: {0} -- {1}" -f $Comment, $w.why); $script:Failures++; return
+    }
+    # «задача отработала» — ещё не «значение такое»: читаем обратно
+    $now = Get-VsCodeRaw $Key
+    if (-not $now.exists -or $now.token -ne $entry.newValue) {
+        Write-Log ("   [!] {0} -- записано, но читается другое: {1}" -f $Comment, $(if ($now.exists) { $now.token } else { 'ключа нет' }))
+        $script:Failures++; return
+    }
+    Write-Log "   [+] $Comment"; $script:Changes++
 }
 
 function Get-FirefoxPoliciesPath {
@@ -2550,23 +3085,64 @@ function Set-FirefoxPolicy {
     if ($null -ne $curVal -and "$curVal".ToLower() -eq "$Value".ToLower()) {
         Write-Log "   [в] $Comment -- уже настроено"; $script:Already++; return
     }
+    if (-not (Test-CanModify $Comment)) { return }
     Ensure-Backup
+    # policies.json лежит в Program Files — туда пишет только администратор,
+    # и записи по пути тут опасаться нечего. В журнал, как и у VS Code, идёт
+    # один ключ: откат вернёт его, а не весь файл копией.
+    $had = (Test-Path -LiteralPath $p -PathType Leaf)
+    $prev = Get-FirefoxPolicy $Key
+    $entry = @{ kind = 'appcfg'; app = 'firefox'; name = $Key; existed = [bool]($null -ne $prev)
+                old = $(if ($null -ne $prev) { ConvertTo-JsonToken $prev } else { '' })
+                newValue = (ConvertTo-JsonToken $Value); created = [bool](-not $had) }
+    if (-not (Write-AheadEntry $entry)) {
+        Write-Log "   [!] $Comment -- не меняется: «как было» не легло в журнал отката"; $script:Failures++; return
+    }
+    $w = Write-FirefoxKey $Key $Value
+    if (-not $w.ok) {
+        Undo-AheadEntry $entry
+        Write-Log ("   [!] не удалось: {0} -- {1}" -f $Comment, $w.why); $script:Failures++; return
+    }
+    $now = Get-FirefoxPolicy $Key
+    if ($null -eq $now -or "$now".ToLower() -ne "$Value".ToLower()) {
+        Write-Log ("   [!] {0} -- записано, но читается другое: {1}" -f $Comment, $(if ($null -eq $now) { 'ключа нет' } else { "$now" }))
+        $script:Failures++; return
+    }
+    Write-Log "   [+] $Comment"; $script:Changes++
+}
+
+# Ставит или убирает один ключ в policies.json. $Remove — убрать; если после
+# этого в policies ничего не осталось и файл завела программа, он удаляется.
+# Глубина JSON — 20: при 6 глубокие корпоративные политики обрезались.
+function Write-FirefoxKey {
+    param([string]$Key, $Value, [switch]$Remove)
+    $p = Get-FirefoxPoliciesPath
+    if (-not $p) { return @{ ok = $false; why = 'Firefox не найден' } }
     try {
         $dir = Split-Path $p -Parent
-        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        foreach ($d in @($dir, $p)) {
+            if ((Test-Path -LiteralPath $d) -and ((Get-Item -LiteralPath $d -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                return @{ ok = $false; why = 'на пути к policies.json стоит ссылка' }
+            }
+        }
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
         $obj = $null
-        if (Test-Path -LiteralPath $p) {
-            $bak = "$p.win11privacy.bak"
-            if (-not (Test-Path -LiteralPath $bak)) { Copy-Item -LiteralPath $p -Destination $bak -Force -ErrorAction SilentlyContinue }
-            try { $obj = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json } catch { $obj = $null }
+        if (Test-Path -LiteralPath $p -PathType Leaf) {
+            try { $obj = Get-Content -LiteralPath $p -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $obj = $null }
         }
         if (-not $obj) { $obj = New-Object PSObject }
         if (-not ($obj.PSObject.Properties.Name -contains 'policies')) { $obj | Add-Member -NotePropertyName 'policies' -NotePropertyValue (New-Object PSObject) }
-        if ($obj.policies.PSObject.Properties.Name -contains $Key) { $obj.policies.$Key = $Value }
+        if ($Remove) {
+            if ($obj.policies.PSObject.Properties.Name -contains $Key) { $obj.policies.PSObject.Properties.Remove($Key) }
+            if (@($obj.policies.PSObject.Properties).Count -eq 0 -and @($obj.PSObject.Properties).Count -eq 1) {
+                if (Test-Path -LiteralPath $p -PathType Leaf) { [IO.File]::Delete($p) }
+                return @{ ok = $true; why = ''; removedFile = $true }
+            }
+        } elseif ($obj.policies.PSObject.Properties.Name -contains $Key) { $obj.policies.$Key = $Value }
         else { $obj.policies | Add-Member -NotePropertyName $Key -NotePropertyValue $Value }
-        ($obj | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $p -Encoding UTF8
-        Write-Log "   [+] $Comment"; $script:Changes++
-    } catch { Write-Log "   [!] не удалось: $Comment -- $($_.Exception.Message)"; $script:Failures++ }
+        ($obj | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $p -Encoding UTF8 -ErrorAction Stop
+        return @{ ok = $true; why = '' }
+    } catch { return @{ ok = $false; why = $_.Exception.Message } }
 }
 
 # =========================================================================== #
@@ -2636,6 +3212,34 @@ function Stop-ServiceInstances {
     }
 }
 
+# Служба не отключилась. Отказ в доступе — решение Windows (часть служб она
+# не отдаёт даже администратору): это «не разрешает», как у политик, и
+# проверка его потом не считает «не применённым». Любая другая причина —
+# ошибка, и она видна в итоге.
+function Test-AccessDeniedError {
+    param($Err)
+    $ex = $(if ($Err -is [System.Management.Automation.ErrorRecord]) { $Err.Exception } else { $Err })
+    while ($null -ne $ex) {
+        if ($ex -is [System.UnauthorizedAccessException]) { return $true }
+        if ($ex -is [System.ComponentModel.Win32Exception] -and $ex.NativeErrorCode -eq 5) { return $true }
+        $ex = $ex.InnerException
+    }
+    return $false
+}
+
+function Write-SvcFailure {
+    param($Def, $Err)
+    $msg = "$($Err.Exception.Message)"
+    if (Test-AccessDeniedError $Err) {
+        Write-Log ("   [-] {0} -- Windows не даёт менять эту службу" -f $Def.C)
+        $script:Blocked++
+        if ($null -ne $script:BlockedIds) { $script:BlockedIds[$Def.Id] = $true }
+        return
+    }
+    Write-Log ("   [!] {0} -- не отключилась: {1}" -f $Def.C, $msg)
+    $script:Failures++
+}
+
 function Apply-Def {
     param($d)
     # журнал отката не пишется — больше ничего не меняем (причина уже в журнале работы)
@@ -2658,8 +3262,12 @@ function Apply-Def {
         }
         'svc' {
             if ($DryRun) { Write-Log "   [тест] $($d.C) -- отключить"; return }
+            # «Службы нет» и «служба не отключилась» — разное. Раньше любая
+            # ошибка называлась «недоступна» и в ошибки не шла: отказ при
+            # отключении выглядел как отсутствие службы, а итог — успехом.
+            $s = Get-Service -Name $d.P -ErrorAction SilentlyContinue
+            if (-not $s) { Write-Log "   [-] $($d.C) -- нет на этой системе"; return }
             try {
-                $s = Get-Service -Name $d.P -ErrorAction Stop
                 if ($s.StartType -eq 'Disabled' -and $s.Status -ne 'Running') {
                     Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
                 }
@@ -2677,7 +3285,8 @@ function Apply-Def {
                     throw
                 }
                 Write-Log "   [+] $($d.C) -- остановлена и отключена"; $script:Changes++
-            } catch { Write-Log "   [-] $($d.C) -- недоступна" }
+                if ($null -ne $script:UnblockedIds) { $script:UnblockedIds[$d.Id] = $true }
+            } catch { Write-SvcFailure $d $_ }
         }
         'svcopt' {
             $s = Get-Service -Name $d.P -ErrorAction SilentlyContinue
@@ -2700,7 +3309,8 @@ function Apply-Def {
                     throw
                 }
                 Write-Log "   [+] $($d.C) -- отключена"; $script:Changes++
-            } catch { Write-Log "   [-] $($d.C) -- не удалось" }
+                if ($null -ne $script:UnblockedIds) { $script:UnblockedIds[$d.Id] = $true }
+            } catch { Write-SvcFailure $d $_ }
         }
         'task' {
             $pp = Split-TaskPath $d.P
@@ -2775,6 +3385,20 @@ function Apply-Def {
     }
 }
 
+# Стоит ли параметр реестра так, как задумано: те же данные и тот же вид.
+# Раньше сравнивались только строки, и REG_SZ «1» на месте DWORD 1 шёл как
+# «применено», хотя Windows такой параметр не понимает.
+function Test-RegDefValue {
+    param($Def)
+    $raw = Get-RegRaw $Def.P $Def.N
+    if (-not $raw.ok) { return @{ ok = $false; actual = ("не читается: {0}" -f $raw.error) } }
+    if (-not $raw.exists) { return @{ ok = $false; actual = 'не задано' } }
+    $want = $(if ($Def.Type) { "$($Def.Type)" } else { 'DWord' })
+    $got = ConvertTo-RegComparable $raw.value $raw.kind
+    if ("$($raw.kind)" -ne $want) { return @{ ok = $false; actual = ("{0} (вид {1}, нужен {2})" -f $got, $raw.kind, $want) } }
+    return @{ ok = ($got -eq (ConvertTo-RegComparable $Def.V $want)); actual = $got }
+}
+
 # Настройки, которой на этой версии Windows не существует, не бывает
 # «не применённой»: помечаем na и не считаем ни в плюс, ни в минус.
 function Test-DefApplicable {
@@ -2801,25 +3425,15 @@ function Check-Def {
     switch ($d.T) {
         { $_ -in @('regif', 'regsvc') } {
             if (-not (Test-Path -LiteralPath $d.P)) { $ok = $true; $actual = 'нет на этой системе' }
-            else {
-                $v = Get-RegValue $d.P $d.N
-                $actual = if ($null -eq $v) { 'не задано' } else { "$v" }
-                $ok = ($null -ne $v) -and ("$v" -eq "$($d.V)")
-            }
+            else { $rc = Test-RegDefValue $d; $ok = $rc.ok; $actual = $rc.actual }
         }
         'regpol' {
             # Проверяем как обычный параметр. «Windows не разрешает» — это факт,
             # известный только после неудачной записи, и подставляется он в
             # -Audit по журналу отказов; здесь догадок не строим.
-            $v = Get-RegValue $d.P $d.N
-            $actual = if ($null -eq $v) { 'не задано' } else { "$v" }
-            $ok = ($null -ne $v) -and ("$v" -eq "$($d.V)")
+            $rc = Test-RegDefValue $d; $ok = $rc.ok; $actual = $rc.actual
         }
-        'reg' {
-            $v = Get-RegValue $d.P $d.N
-            $actual = if ($null -eq $v) { 'не задано' } else { "$v" }
-            $ok = ($null -ne $v) -and ("$v" -eq "$($d.V)")
-        }
+        'reg' { $rc = Test-RegDefValue $d; $ok = $rc.ok; $actual = $rc.actual }
         'svc' {
             $s = Get-Service -Name $d.P -ErrorAction SilentlyContinue
             if (-not $s) { $ok = $true; $actual = 'нет службы' }
@@ -2916,7 +3530,13 @@ $script:HostsDomains = @(
     'us4-v20.events.data.microsoft.com','us5-v20.events.data.microsoft.com',
     'au.vortex-win.data.microsoft.com','uk.vortex-win.data.microsoft.com','web.vortex.data.microsoft.com',
     'settings.data.microsoft.com','evrsettings-win.data.microsoft.com',
-    'activity.windows.com','licensing.mp.microsoft.com',
+    'activity.windows.com',
+    # licensing.mp.microsoft.com здесь больше нет: DNS ведёт его на общий
+    # вход frontdoor.licensing.commerce.microsoft.com, через который идут и
+    # лицензии приложений Магазина. Закрыв его, программа ломала бы платные
+    # приложения, а человек не связал бы это с настройкой приватности.
+    # В наблюдении за сетью это имя осталось (TelemetryDnsRegex): видно, что
+    # обращение было, но блокировка его не касается.
     # Найдено записью Windows 11 с программой на максимуме: эти адреса всё ещё
     # получали данные. bat.bing.com — рекламный счётчик Bing в Магазине;
     # nelreports.net — отчёты Edge и других программ о сетевых ошибках
@@ -2924,6 +3544,14 @@ $script:HostsDomains = @(
     # приложениям («Фотографии», VS Code). Без них всё работает как прежде.
     'bat.bing.com','deff.nelreports.net','aefd.nelreports.net','default.exp-tas.com')
 $script:HostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+
+# Имена, адреса которых делят с чужими службами: по IP их блокировать нельзя
+# (см. Get-TelemetryIpList). Проверено запросами DNS: watcab-узлы отвечают
+# адресом общего хранилища Azure, default.exp-tas.com — края e-msedge.
+$script:FwIpSharedRx = '\.blob\.core\.windows\.net$|^default\.exp-tas\.com$|^bat\.bing\.com$|\.nelreports\.net$|' +
+                       '^telemetry\.appex\.bing\.net$|officeapps\.live\.com$|\.data\.msn\.com$|' +
+                       '^activity\.windows\.com$|^choice\.microsoft\.com$|\.v0cdn\.net$|\.gammacdn\.net$|' +
+                       '^licensing\.mp\.microsoft\.com$'
 
 # Серверы, через которые компьютер регистрируется в каталоге устройств Microsoft
 # и сообщает номер устройства. login.live.com здесь нет и быть не должно: без
@@ -3170,7 +3798,18 @@ function Get-TelemetryIpList {
     param([int]$TimeoutMs = 10000)
     $set = @{}
     foreach ($ip in $script:TelemetryIps) { $set[$ip] = $true }
-    $names = @($script:HostsDomains | Select-Object -Unique)
+    # Правило брандмауэра закрывает адреса для ВСЕХ программ, а часть имён
+    # сбора живёт на общих узлах: ceuswatcab01.blob.core.windows.net — это
+    # общий узел Azure Storage, default.exp-tas.com — общий край e-msedge,
+    # nexus.officeapps.live.com — общий вход Office (проверено запросами DNS).
+    # Закрыв такой адрес, программа закрыла бы вместе с ним чужие службы —
+    # чьи-то файлы в облаке, обновления, лицензии. По IP эти имена не
+    # блокируются; в hosts они остаются, и там блокировка точная, по имени.
+    $shared = @($script:HostsDomains | Where-Object { $_ -match $script:FwIpSharedRx } | Select-Object -Unique)
+    $names = @($script:HostsDomains | Where-Object { $_ -notmatch $script:FwIpSharedRx } | Select-Object -Unique)
+    if ($shared.Count -gt 0) {
+        Write-Log ("   имён на общих узлах (их адреса делят чужие службы) не блокируется по IP: {0} -- в hosts они закрыты" -f $shared.Count)
+    }
     $pool = [runspacefactory]::CreateRunspacePool(1, 32)
     $pool.Open()
     $jobs = New-Object System.Collections.Generic.List[object]
@@ -3602,7 +4241,9 @@ function Stop-ServiceWait {
 # запустила бы — а потом и удалила — чужую. После регистрации задача
 # сверяется (та ли команда и от чьего имени) и без этого не запускается.
 function Test-OneShotTaskMine {
-    param([string]$TaskName, [string]$Exe, [string]$Arguments, [bool]$AsSystem)
+    # -UserSid — чья это задача, если не от имени самого движка (вошедший
+    # пользователь, см. Invoke-AsUser)
+    param([string]$TaskName, [string]$Exe, [string]$Arguments, [bool]$AsSystem, [string]$UserSid = '')
     $t = Get-ScheduledTask -TaskPath '\' -TaskName $TaskName -ErrorAction SilentlyContinue
     if (-not $t) { return $false }
     $acts = @($t.Actions)
@@ -3612,7 +4253,8 @@ function Test-OneShotTaskMine {
     # («СИСТЕМА» на русской), и по имени своя задача выглядела чужой.
     $sid = ConvertTo-SidValue "$($t.Principal.UserId)"
     if ($AsSystem) { return ($sid -eq 'S-1-5-18') }
-    return ($sid -ne '' -and $sid -eq ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value)
+    $want = $(if ($UserSid) { $UserSid } else { ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value })
+    return ($sid -ne '' -and $sid -eq $want)
 }
 
 function ConvertTo-SidValue {
@@ -3629,7 +4271,14 @@ function Invoke-OneShotTask {
     # cmd (-CmdLine) идут только постоянные строки программы, которым нужны
     # его «&&», «|», «>nul»; в них не пропускаются % (cmd раскрыл бы его как
     # переменную) и переводы строк (они разорвали бы команду).
-    param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem, [int]$Minutes = 2, [string]$Execute = '', [string]$Arguments = '')
+    # -StartSeconds — сколько ждать, что задача вообще начнётся: задача от имени
+    # пользователя, который сейчас не вошёл в Windows, не начнётся никогда, и
+    # ждать её всё отведённое время незачем
+    # -Account/-AccountSid — не от имени самого движка, а от имени другого
+    # пользователя (вошедшего в Windows, когда движок работает от имени
+    # администратора, чей пароль он ввёл)
+    param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem, [int]$Minutes = 2, [string]$Execute = '', [string]$Arguments = '',
+          [int]$StartSeconds = 0, [string]$Account = '', [string]$AccountSid = '')
     $TaskName = '{0} {1}' -f $TaskName, [guid]::NewGuid().ToString('N').Substring(0, 12)
     if ($Execute) { $exe = $Execute; $arg = $Arguments }
     else {
@@ -3639,19 +4288,25 @@ function Invoke-OneShotTask {
     $registered = $false
     try {
         $act = New-ScheduledTaskAction -Execute $exe -Argument $arg
+        # учётная запись — из маркера самого процесса, а не из USERNAME
         $who = $(if ($AsSystem) { New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest }
-                 else { New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited })
+                 else { New-ScheduledTaskPrincipal -UserId $(if ($Account) { $Account } else { $script:RunAccount }) -LogonType Interactive -RunLevel Limited })
         $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes $Minutes)
         # имя новое — задачу с ним никто завести не мог, поэтому без -Force
         Register-ScheduledTask -TaskPath '\' -TaskName $TaskName -Action $act -Principal $who -Settings $set -ErrorAction Stop | Out-Null
         $registered = $true
-        if (-not (Test-OneShotTaskMine $TaskName $exe $arg ([bool]$AsSystem))) { return $false }
+        if (-not (Test-OneShotTaskMine $TaskName $exe $arg ([bool]$AsSystem) $AccountSid)) { return $false }
         Start-ScheduledTask -TaskPath '\' -TaskName $TaskName -ErrorAction Stop
         # 267011 — ещё не запускалась, 267009 — выполняется
         $until = (Get-Date).AddSeconds(60 * $Minutes + 15)
+        $startBy = $(if ($StartSeconds -gt 0) { (Get-Date).AddSeconds($StartSeconds) } else { $until })
         do {
             Start-Sleep -Milliseconds 400
             $res = (Get-ScheduledTaskInfo -TaskPath '\' -TaskName $TaskName -ErrorAction SilentlyContinue).LastTaskResult
+            if ($res -eq 267011 -and (Get-Date) -ge $startBy) {
+                Write-Log '   [!] короткая задача не начала работу: пользователь, от имени которого она идёт, сейчас не вошёл в Windows'
+                return $false
+            }
         } while (($res -eq 267009 -or $res -eq 267011) -and (Get-Date) -lt $until)
         # Успех — только если команда задачи завершилась с кодом 0. Раньше «да»
         # возвращалось, едва задача запустилась, и сбой команды выглядел успехом.
@@ -3676,6 +4331,60 @@ function Invoke-OneShotTask {
                 $script:Failures++
             }
         }
+    }
+}
+
+# --------------------------------------------------------------------------- #
+#  Действия в папках самого пользователя — от его имени и без повышения.
+#  Профиль (TEMP, AppData) открыт на запись любой программе этого
+#  пользователя, а движок работает с правами администратора. Удаление или
+#  запись там по пути с правами администратора нельзя привязать к тому, что
+#  проверено: путь можно подменить между проверкой и действием. Поэтому
+#  такие действия делает короткая задача от имени того же пользователя с
+#  обычными правами — она может ровно то, что он может и сам.
+#  Сценарий — постоянный текст движка; он и его данные кладутся в защищённую
+#  папку (читать их пользователь может, менять — нет). Итог задача пишет в
+#  свою временную папку, и движок берёт из него только числа и строки.
+#  Ответ: ok — задача отработала и оставила итог; result — разобранный итог.
+# --------------------------------------------------------------------------- #
+function Invoke-AsUser {
+    param([string]$Name, [string]$Script, $Data, [int]$Minutes = 5)
+    if (-not (Test-Admin)) { return @{ ok = $false; result = $null; why = 'нужны права администратора' } }
+    if (-not (Assert-SafeRoot)) { return @{ ok = $false; result = $null; why = 'папка ProgramData\Win11Privacy не защищена' } }
+    # Чьи папки: того, кто сидит за компьютером. Если пароль администратора
+    # ввёл обычный пользователь, это он, а не учётная запись движка.
+    $account = $script:RunAccount; $accountSid = $script:UserSid; $profileDir = $script:UserProfileDir
+    $other = Get-OtherSessionUser
+    if ($other) {
+        if (-not $other.name -or -not $other.profile) { return @{ ok = $false; result = $null; why = 'профиль вошедшего в Windows пользователя определить не удалось' } }
+        $account = $other.name; $accountSid = $other.sid; $profileDir = $other.profile
+    }
+    if (-not $profileDir -or -not $account) { return @{ ok = $false; result = $null; why = 'папку профиля пользователя Windows не назвала' } }
+    $id = [guid]::NewGuid().ToString('N')
+    $sf = Join-Path $script:SafeRoot ('asuser-' + $id + '.ps1')
+    $inf = Join-Path $script:SafeRoot ('asuser-' + $id + '.json')
+    $rf = Join-Path $profileDir ('AppData\Local\Temp\w11p-asuser-' + $id + '.json')
+    try {
+        Set-Content -LiteralPath $sf -Value $Script -Encoding UTF8 -ErrorAction Stop
+        Set-Content -LiteralPath $inf -Value (ConvertTo-Json -InputObject $Data -Depth 6 -Compress) -Encoding UTF8 -ErrorAction Stop
+        $argLine = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -InputFile "{1}" -ResultFile "{2}"' -f $sf, $inf, $rf
+        $null = Invoke-OneShotTask ('Win11Privacy ' + $Name) -Execute $script:PsExe -Arguments $argLine -Minutes $Minutes -StartSeconds 30 -Account $account -AccountSid $accountSid
+        if (-not (Test-Path -LiteralPath $rf -PathType Leaf)) { return @{ ok = $false; result = $null; why = 'задача от имени пользователя не оставила итога' } }
+        if ((Get-Item -LiteralPath $rf -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            return @{ ok = $false; result = $null; why = 'на месте итога задачи лежит ссылка' }
+        }
+        $txt = Read-TextShared $rf
+        $res = $null
+        try { $res = $txt | ConvertFrom-Json -ErrorAction Stop } catch { }
+        if ($null -eq $res) { return @{ ok = $false; result = $null; why = 'итог задачи от имени пользователя не читается' } }
+        return @{ ok = $true; result = $res; why = '' }
+    } catch {
+        return @{ ok = $false; result = $null; why = $_.Exception.Message }
+    } finally {
+        foreach ($f in @($sf, $inf)) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+        # итог лежит в папке пользователя: удаляется сама запись (File.Delete
+        # не идёт по ссылке)
+        try { if (Test-Path -LiteralPath $rf) { [IO.File]::Delete($rf) } } catch { }
     }
 }
 
@@ -3805,7 +4514,7 @@ function Invoke-GdidWipe {
     # 3. кэш платформы подключённых устройств: в нём регистрация в каталоге.
     # Чистка удаляет «что сможет» и называет освобождённый объём — это ещё не
     # значит, что кэш пуст. Поэтому после неё проверяется, что в нём осталось.
-    $null = Clear-FolderContents $script:CdpCache 'кэш платформы подключённых устройств'
+    $null = Clear-Folder $script:CdpCache 'кэш платформы подключённых устройств'
     if (Test-Path -LiteralPath $script:CdpCache) {
         $cev = $null
         $cdpLeft = @(Get-ChildItem -LiteralPath $script:CdpCache -Force -Recurse -File -ErrorAction SilentlyContinue -ErrorVariable cev)
@@ -4868,6 +5577,7 @@ function Find-NewStartup {
 if ($InstallGuard) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Страж приватности'
+    Write-SessionUserNote
     try {
         Ensure-DataDir
         $engineDst = Install-TaskEngine
@@ -4876,7 +5586,7 @@ if ($InstallGuard) {
         # то, что человек оставил нарочно, — например, DoSvc ради Магазина.
         Save-Json 'profile.json' @{ version=1; modules=$mods; skip=@($SkipItems); created=(Get-Date).ToString('s') }
         $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -Guard' + $script:DataArg)
-        $t1 = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+        $t1 = New-ScheduledTaskTrigger -AtLogOn -User $script:RunAccount
         $t1.Delay = 'PT3M'
         # по умолчанию раз в неделю; -GuardDaily — каждый день в то же время
         $t2 = if ($GuardDaily) { New-ScheduledTaskTrigger -Daily -At 12:00 }
@@ -4892,7 +5602,7 @@ if ($InstallGuard) {
             $triggers += $t3
         } catch { }
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
-        $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+        $principal = New-ScheduledTaskPrincipal -UserId $script:RunAccount -LogonType Interactive -RunLevel Highest
         Register-ScheduledTask -TaskName $script:GuardTask -Action $action -Trigger $triggers -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
         Write-Log ("   [+] страж установлен: проверка через 3 минуты после входа в систему и {0}" -f $(if ($GuardDaily) { 'каждый день в 12:00' } else { 'по воскресеньям в 12:00' }))
         if ($triggers.Count -gt 2) { Write-Log '   [+] и через 5 минут после каждого установленного обновления Windows' }
@@ -5528,6 +6238,7 @@ $script:WatcherTask = 'Win11Privacy Watcher'
 if ($InstallWatcher) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Живые уведомления'
+    Write-SessionUserNote
     try {
         Ensure-DataDir
         $engineDst = Install-TaskEngine
@@ -5541,7 +6252,7 @@ if ($InstallWatcher) {
         $trigger.Enabled = $true
         $trigger.Delay = 'PT5S'
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 3)
-        $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+        $principal = New-ScheduledTaskPrincipal -UserId $script:RunAccount -LogonType Interactive -RunLevel Highest
         Register-ScheduledTask -TaskName $script:WatcherTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
         Write-Log '   [+] уведомления включены: всплывашка при перехвате отправки телеметрии'
         Write-Log '   [+] чтобы не мешать, одно уведомление не чаще чем раз в 10 минут'
@@ -5912,7 +6623,7 @@ function Invoke-FootprintWipe {
                 # потом запускаем обратно. Раньше оставались остановленными.
                 $cdpRun = @(Get-Service -Name 'cdp*' -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Running' } | ForEach-Object { $_.Name })
                 foreach ($n in $cdpRun) { if (-not $DryRun) { Stop-Service -Name $n -Force -ErrorAction SilentlyContinue } }
-                $null = Clear-FolderContents (Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform') 'база истории активности'
+                $null = Clear-Folder (Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform') 'база истории активности'
                 foreach ($n in $cdpRun) {
                     if ($DryRun) { continue }
                     try { Start-Service -Name $n -ErrorAction Stop }
@@ -5920,7 +6631,7 @@ function Invoke-FootprintWipe {
                 }
             }
             'recent' {
-                $null = Clear-FolderContents ([Environment]::GetFolderPath('Recent')) 'недавние документы'
+                $null = Clear-Folder ([Environment]::GetFolderPath('Recent')) 'недавние документы'
                 if (-not $DryRun) {
                     try { Remove-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs' -Recurse -Force -ErrorAction Stop; Write-Log '   [+] список RecentDocs в реестре очищен' } catch [System.Management.Automation.ItemNotFoundException] { } catch { Write-Log ("   [!] список RecentDocs в реестре не очищен -- {0}" -f $_.Exception.Message); $script:Failures++ }
                 }
@@ -5934,15 +6645,15 @@ function Invoke-FootprintWipe {
                 try { Remove-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths' -Recurse -Force -ErrorAction Stop; Write-Log '   [+] введённые пути очищены'; $script:Changes++ } catch { Write-Log '   [-] введённых путей нет' }
             }
             'clipboard' {
-                $null = Clear-FolderContents (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Clipboard') 'история буфера обмена'
+                $null = Clear-Folder (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Clipboard') 'история буфера обмена'
             }
             'wer' {
-                $null = Clear-FolderContents (Join-Path $env:ProgramData 'Microsoft\Windows\WER\ReportArchive') 'архив отчётов об ошибках'
-                $null = Clear-FolderContents (Join-Path $env:ProgramData 'Microsoft\Windows\WER\ReportQueue') 'очередь отчётов об ошибках'
-                $null = Clear-FolderContents (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\WER') 'локальные отчёты об ошибках'
+                $null = Clear-Folder (Join-Path $env:ProgramData 'Microsoft\Windows\WER\ReportArchive') 'архив отчётов об ошибках'
+                $null = Clear-Folder (Join-Path $env:ProgramData 'Microsoft\Windows\WER\ReportQueue') 'очередь отчётов об ошибках'
+                $null = Clear-Folder (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\WER') 'локальные отчёты об ошибках'
             }
             'inputpers' {
-                $null = Clear-FolderContents (Join-Path $env:APPDATA 'Microsoft\InputPersonalization') 'личный словарь набора'
+                $null = Clear-Folder (Join-Path $env:APPDATA 'Microsoft\InputPersonalization') 'личный словарь набора'
             }
             'dnscache' {
                 if ($DryRun) { Write-Log '   [тест] кэш DNS — очистить'; break }
@@ -6037,6 +6748,7 @@ $script:SensorCapNames = @{
 if ($InstallSensorGuard) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Слежение за датчиками'
+    Write-SessionUserNote
     try {
         Ensure-DataDir
         $engineDst = Install-TaskEngine
@@ -6051,7 +6763,7 @@ if ($InstallSensorGuard) {
         $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -SensorGuard' + $script:DataArg)
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 3650)
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-        $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+        $principal = New-ScheduledTaskPrincipal -UserId $script:RunAccount -LogonType Interactive -RunLevel Highest
         Register-ScheduledTask -TaskName $script:SensorTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
         Write-Log '   [+] слежение включено: сверка журнала каждые 30 минут'
         Write-Log '   [+] новая программа получит доступ к камере, микрофону или геолокации — придёт уведомление'
@@ -6065,6 +6777,7 @@ if ($InstallSensorGuard) {
 if ($InstallNetGuard) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Слежение за сетью'
+    Write-SessionUserNote
     try {
         Ensure-DataDir
         $engineDst = Install-TaskEngine
@@ -6082,7 +6795,7 @@ if ($InstallNetGuard) {
         $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -NetGuard' + $script:DataArg)
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Days 3650)
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-        $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+        $principal = New-ScheduledTaskPrincipal -UserId $script:RunAccount -LogonType Interactive -RunLevel Highest
         Register-ScheduledTask -TaskName $script:NetTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
         Write-Log '   [+] слежение включено: сверка журнала брандмауэра каждые 15 минут'
         Write-Log ("   [+] известных программ: {0}; первый час слежение учится и молчит" -f $known.Count)
@@ -6577,12 +7290,16 @@ if ($SelfTest) {
     $root = if ($BackupRoot) { $BackupRoot } else { [Environment]::GetFolderPath('Desktop') }
     Write-Log ("   папка для копий       : {0}" -f $root)
     try {
-        $probeDir = Join-Path $root ('Win11Privacy-SelfTest-' + (Get-Date -Format 'HHmmss'))
-        New-Item -ItemType Directory -Path $probeDir -Force -ErrorAction Stop | Out-Null
+        # имя с случайным хвостом и без Remove-Item -Recurse: папка на рабочем
+        # столе, куда пишет любая программа пользователя (см. Ensure-Backup)
+        $probeDir = Join-Path $root ('Win11Privacy-SelfTest-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        $null = [IO.Directory]::CreateDirectory($probeDir)
+        if ((Get-Item -LiteralPath $probeDir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'на месте пробной папки оказалась ссылка' }
         $probeFile = Join-Path $probeDir 'probe.reg'
         $null = & reg.exe export 'HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo' "$probeFile" /y 2>&1
         $r.backup = (Test-Path -LiteralPath $probeDir)
-        Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue
+        $rmProbe = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+        Remove-TreeNoFollow $probeDir $rmProbe
     } catch { Write-Log ("   [!] {0}" -f $_.Exception.Message) }
     Write-Log ("   [{0}] создание папки резервной копии" -f $(if ($r.backup) { '+' } else { '!' }))
 
@@ -6779,12 +7496,18 @@ function Use-ProfileHive {
     return $true
 }
 
+# $Only — вместо всех профилей взять ровно эти (по SID): так настройки
+# пользователя доходят до того, кто вошёл в Windows, когда пароль
+# администратора ввёл он, а работает движок от имени администратора.
 function Apply-ProfilesHives {
+    param([object[]]$Only)
     $defs = @($script:Defs | Where-Object { ($Modules -contains $_.M) -and ($SkipItems -notcontains $_.Id) -and
                                             ($script:RegTypes -contains $_.T) -and "$($_.P)" -like 'HKCU:\*' -and (Test-DefApplicable $_) })
     if ($defs.Count -eq 0) { return }
-    Write-Section 'Другие пользователи и профиль по умолчанию'
-    foreach ($pr in @(Get-OtherProfiles)) {
+    $profiles = $(if ($null -ne $Only) { @($Only) } else { @(Get-OtherProfiles) })
+    if ($profiles.Count -eq 0) { return }
+    if ($null -eq $Only) { Write-Section 'Другие пользователи и профиль по умолчанию' }
+    foreach ($pr in $profiles) {
         if ($DryRun) { Write-Log ("   [тест] профиль {0}: настроек {1}" -f $pr.name, $defs.Count); continue }
         if ($script:JournalFailed) { Write-Log ("   [!] профиль {0}: не меняется -- журнал отката сейчас не пишется" -f $pr.name); $script:Failures++; continue }
         $cnt = @{ changed = 0; failed = 0; refused = $false; notes = (New-Object System.Collections.Generic.List[string]) }
@@ -6885,6 +7608,8 @@ function Restore-Journal {
     $failed = New-Object System.Collections.Generic.List[object]
     $hiveGroups = [ordered]@{}
     $createdKeys = New-Object System.Collections.Generic.List[string]
+    # программы, чей файл настроек завела сама программа (appcfg, created)
+    $createdApps = New-Object 'System.Collections.Generic.HashSet[string]'
     # Записи, с которыми откат закончил (вернул или отбросил как негодные).
     # Из журнала уходят только они: что дописал другой запуск, пока шёл
     # откат, остаётся. Раньше журнал переписывался списком неудач целиком.
@@ -6922,6 +7647,7 @@ function Restore-Journal {
         if (-not $r.ok) { $failed.Add($e); Write-Log ("   [!] не вернулось: {0} -- {1}" -f $key, $r.error); continue }
         $null = $handled.Add((Get-JournalEntryId $e))
         if ($kind -eq 'reg' -and "$($e.createdKey)") { $createdKeys.Add("$($e.createdKey)") }
+        if ($kind -eq 'appcfg' -and $e.created) { $null = $createdApps.Add("$($e.app)") }
         if ($r.note) { Write-Log ("   [i] {0} -- {1}" -f $key, $r.note) }
         if ($kind -eq 'reg') { $ok++ } else { $svcBack++ }
     }
@@ -6937,6 +7663,8 @@ function Restore-Journal {
     }
     # ключи, которых не было до программы, — после всех значений
     if ($createdKeys.Count -gt 0) { Remove-CreatedKeys $createdKeys.ToArray() }
+    # файлы настроек сторонних программ, которые завела программа, — после всех ключей
+    foreach ($app in @($createdApps)) { Remove-CreatedAppFile $app }
     if ($malformed -gt 0) { $script:Failures++ }
     $bad = $failed.Count
     Write-Log ("   [+] возвращено параметров реестра: {0}" -f $ok)
@@ -7345,9 +8073,15 @@ if ($Revert) {
             try { [Environment]::SetEnvironmentVariable($d.P, $null, 'User'); Write-Log "   [+] переменная $($d.P) удалена" } catch { Write-Log ("   [!] переменная {0} не удалена -- {1}" -f $d.P, $_.Exception.Message); $script:Failures++ }
         }
     }
+    # Настройки VS Code и Firefox возвращает журнал — по одному ключу (выше).
+    # Раньше здесь поверх файла копировалась копия, снятая при первом
+    # применении: всё, что человек поменял в настройках после, пропадало
+    # (проверено на VM). Копии прежних версий не трогаем и не применяем —
+    # только говорим, где они лежат.
     foreach ($f in @((Get-VsCodeSettingsPath), (Get-FirefoxPoliciesPath))) {
         if ($f -and (Test-Path -LiteralPath "$f.win11privacy.bak")) {
-            try { Copy-Item -LiteralPath "$f.win11privacy.bak" -Destination $f -Force -ErrorAction Stop; Remove-Item -LiteralPath "$f.win11privacy.bak" -Force -ErrorAction SilentlyContinue; Write-Log "   [+] восстановлен: $f" } catch { Write-Log ("   [!] не восстановлен: {0} -- {1}" -f $f, $_.Exception.Message); $script:Failures++ }
+            Write-Log ("   [i] копия файла настроек от прежней версии программы оставлена как есть: {0}.win11privacy.bak" -f $f)
+            Write-Log '       Нужные из неё значения перенесите вручную: поверх нынешних настроек она не копируется.'
         }
     }
     # Политики Chrome, Office и Visual Studio раньше удалялись целыми ветками —
@@ -7417,6 +8151,8 @@ if ($Revert) {
     }
     Write-Log 'Готово. Перезагрузите компьютер.'
     Write-Log '###DONE###'
+    # 2 — откат прошёл не весь или журналу нельзя было верить (см. выше)
+    if ($script:Failures -gt 0) { exit 2 }
     exit 0
 }
 
@@ -7532,6 +8268,25 @@ if ((Use-Module 'oem') -and -not $script:JournalFailed) {
     Save-JournalEntries -Quiet
 }
 
+# --- Тот, кто вошёл в Windows, если это не мы ------------------------------- #
+#  Пароль администратора мог ввести обычный пользователь: тогда настройки
+#  HKCU легли бы в профиль администратора, а человек за компьютером не
+#  получил бы ничего — и проверка, читая тот же HKCU, сказала бы «применено».
+if (-not $script:JournalFailed) {
+    $sessUser = Get-OtherSessionUser
+    if ($sessUser) {
+        Write-Section 'Пользователь, который вошёл в Windows'
+        Write-Log ("   программа работает от имени {0}, а за компьютером {1}" -f $script:RunAccount, $sessUser.name)
+        if (-not $sessUser.profile) {
+            Write-Log '   [!] папку его профиля Windows не назвала -- настройки пользователя до него не дойдут'
+            $script:Failures++
+        } else {
+            Write-Log '   настройки пользователя ложатся и в его профиль, а страж и слежение ставятся на его вход'
+            Apply-ProfilesHives -Only @(@{ name = $sessUser.name; sid = $sessUser.sid; file = (Join-Path $sessUser.profile 'NTUSER.DAT') })
+        }
+    }
+}
+
 # --- Другие пользователи и профиль по умолчанию ----------------------------- #
 if ($AllProfiles -and -not $script:JournalFailed) { Apply-ProfilesHives }
 
@@ -7545,37 +8300,48 @@ if ((Use-Module 'cleanup') -and -not $script:JournalFailed) {
     $wu = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
     $wuWasRunning = ($wu -and $wu.Status -eq 'Running')
     if ($wuWasRunning -and -not $DryRun) { Stop-Service wuauserv -Force -ErrorAction SilentlyContinue }
-    $targets = @(
-        @{ P = $env:TEMP;                                            L = 'временные файлы пользователя' },
+    # Системные папки движок чистит сам, но только то, чей владелец
+    # доверенный: в C:\Windows\Temp может завести папку любой пользователь, и
+    # подложенная им ссылка увела бы удаление с правами администратора в
+    # защищённую папку. Папки профиля чистит задача от имени самого
+    # пользователя — там повышения, которым можно злоупотребить, нет вовсе
+    # (см. Clear-UserFolders). Во временной папке свежие файлы остаются: ими
+    # ещё пользуются запущенные программы.
+    $sysTargets = @(
         @{ P = "$env:SystemRoot\Temp";                               L = 'временные файлы Windows' },
         @{ P = "$env:SystemRoot\SoftwareDistribution\Download";      L = 'кэш загруженных обновлений' },
         @{ P = "$env:SystemRoot\Logs\CBS";                           L = 'логи обслуживания компонентов' },
-        @{ P = "$env:LOCALAPPDATA\Microsoft\Windows\WER";            L = 'локальные отчёты об ошибках' },
-        @{ P = "$env:ProgramData\Microsoft\Windows\WER\ReportQueue"; L = 'очередь отчётов об ошибках' },
-        @{ P = "$env:LOCALAPPDATA\CrashDumps";                       L = 'дампы аварийных завершений' },
-        @{ P = "$env:LOCALAPPDATA\Microsoft\Windows\INetCache";      L = 'кэш интернет-файлов' },
-        @{ P = "$env:LOCALAPPDATA\D3DSCache";                        L = 'кэш шейдеров DirectX' }
+        @{ P = "$env:ProgramData\Microsoft\Windows\WER\ReportQueue"; L = 'очередь отчётов об ошибках' }
     )
-    $steps = $targets.Count + 3
+    $userTargets = @(
+        @{ P = "$env:TEMP";                                      L = 'временные файлы пользователя'; Age = $script:TempKeepHours },
+        @{ P = "$env:LOCALAPPDATA\Microsoft\Windows\WER";         L = 'локальные отчёты об ошибках';  Age = 0 },
+        @{ P = "$env:LOCALAPPDATA\CrashDumps";                    L = 'дампы аварийных завершений';   Age = 0 },
+        @{ P = "$env:LOCALAPPDATA\Microsoft\Windows\INetCache";   L = 'кэш интернет-файлов';          Age = 0 },
+        @{ P = "$env:LOCALAPPDATA\D3DSCache";                     L = 'кэш шейдеров DirectX';         Age = 0 },
+        @{ P = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer";    L = 'кэш эскизов';                  Age = 0; Filter = 'thumbcache_*.db' }
+    )
+    $steps = $sysTargets.Count + 2 + [int][bool]$EmptyRecycleBin
     $n = 0
     Write-Log ("   шагов всего: {0}" -f $steps)
-    foreach ($t in $targets) {
+    foreach ($t in $sysTargets) {
         $n++
         $tag = '[{0,3}%] ({1}/{2})' -f [int](100.0 * $n / $steps), $n, $steps
-        $total += (Clear-FolderContents -FolderPath $t.P -Label $t.L -Step $tag)
+        $total += (Clear-FolderContents -FolderPath $t.P -Label $t.L -Step $tag -TrustedOwnerOnly)
     }
+    $n++
+    Write-Log ('[{0,3}%] ({1}/{2}) папки профиля -- чистит задача от вашего имени, без прав администратора' -f [int](100.0 * $n / $steps), $n, $steps)
+    $total += (Clear-UserFolders $userTargets)
     if (-not $DryRun) {
-        $thumbs = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
-        if (Test-Path -LiteralPath $thumbs) {
-            $before = Get-FolderSizeMB $thumbs
-            Get-ChildItem -LiteralPath $thumbs -Filter 'thumbcache_*.db' -Force -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-            $f = [math]::Max(0, [math]::Round($before - (Get-FolderSizeMB $thumbs), 1)); $total += $f
-            Write-Log ("   {0} кэш эскизов -- освобождено {1} МБ" -f ('[{0,3}%] ({1}/{2})' -f [int](100.0 * ($n + 1) / $steps), ($n + 1), $steps), $f)
+        # Корзина — только по отдельному согласию: вернуть из неё уже ничего
+        # нельзя, а раньше она очищалась вместе с кэшами, заодно.
+        if ($EmptyRecycleBin) {
+            $n++
+            $tag = '[{0,3}%] ({1}/{2})' -f [int](100.0 * $n / $steps), $n, $steps
+            try { Clear-RecycleBin -Force -ErrorAction Stop; Write-Log ("   {0} корзина очищена" -f $tag) } catch { Write-Log ("   {0} корзина уже пуста" -f $tag) }
+        } else {
+            Write-Log '   [-] корзина не тронута: очистить её можно, только отметив это отдельно'
         }
-        $n++   # шаг «кэш эскизов» засчитан
-        $n++   # следующий шаг — корзина
-        $tag = '[{0,3}%] ({1}/{2})' -f [int](100.0 * $n / $steps), $n, $steps
-        try { Clear-RecycleBin -Force -ErrorAction Stop; Write-Log ("   {0} корзина очищена" -f $tag) } catch { Write-Log ("   {0} корзина уже пуста" -f $tag) }
         $n++
         $tag = '[{0,3}%] ({1}/{2})' -f [int](100.0 * $n / $steps), $n, $steps
         try { Delete-DeliveryOptimizationCache -Force -ErrorAction Stop | Out-Null; Write-Log ("   {0} кэш Delivery Optimization очищен" -f $tag) } catch { Write-Log ("   {0} кэш Delivery Optimization пропущен" -f $tag) }
@@ -7634,3 +8400,8 @@ else { Write-Log 'Менять было нечего — всё уже наст�
 Emit-Json @{ changes=$script:Changes; already=$script:Already; failures=$script:Failures
              blocked=$script:Blocked; backup=$script:BackupDir }
 Write-Log '###DONE###'
+# Код выхода — итог для тихого режима и сценариев: 0 — всё прошло, 2 — работа
+# закончена, но с ошибками (какими — в журнале выше). Раньше применение
+# всегда заканчивалось нулём, и «успех или неудача профиля» не различались.
+if ($script:JournalFailed -or $script:Failures -gt 0) { exit 2 }
+exit 0

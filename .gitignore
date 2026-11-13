@@ -18,3 +18,6 @@ desktop.ini
 
 # Манифест winget собирается под релиз командой tools/make_winget.py
 packaging/winget/
+
+# Кэш Python от tools/*.py
+__pycache__/

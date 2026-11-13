@@ -22,6 +22,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -81,6 +82,22 @@ def ensure_fork():
     return fork
 
 
+def run_winget_validate(src):
+    """winget validate для собранного манифеста: True — проверка прошла."""
+    exe = shutil.which('winget')
+    if not exe:
+        print('winget на этой машине нет — проверка манифеста не запускалась')
+        return False
+    p = subprocess.run([exe, 'validate', '--manifest', src],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out = p.stdout.decode('utf-8', 'replace').strip()
+    if p.returncode == 0:
+        print('winget validate: манифест в порядке')
+        return True
+    print('winget validate не прошёл (код %d):\n%s' % (p.returncode, out))
+    sys.exit('манифест не отправляется: сначала исправьте то, на что указал winget validate')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--version', help='версия пакета (по умолчанию — из AppInfo.cs)')
@@ -92,6 +109,11 @@ def main():
     src = build_manifest(version, args.sums)
     files = sorted(n for n in os.listdir(src) if n.endswith('.yaml'))
     print('манифест собран: %s (%d файла)' % (src, len(files)))
+
+    # Галочку «проверил манифест локально» раньше ставили, не запуская
+    # проверку. Теперь она ставится, только если winget validate правда
+    # прошёл здесь; нет winget (сборка, другая ОС) — галочки не будет.
+    validated = run_winget_validate(src)
 
     if args.dry_run:
         print('пробный запуск — ничего не отправляем')
@@ -138,23 +160,30 @@ def main():
         print('  загружен ' + name)
 
     title = 'New version: %s version %s' % (PKG, version)
+    # Галочка стоит, только если winget validate правда прошёл (см. run_winget_validate)
+    validate_line = (
+        '- [x] Have you validated your manifest locally with `winget validate --manifest <path>`?\n' if validated else
+        '- [ ] Have you validated your manifest locally with `winget validate --manifest <path>`? '
+        '(`winget` was not available where this pull request was prepared)\n')
     body = (
         '### Publisher and package name\n\n'
         'N0deZ3r0 / Windows 11 Privacy (`%s`)\n\n'
         '### What this package does\n\n'
         'Turns off Microsoft data collection on Windows 10 and 11, then reads the real state of the\n'
-        'system back instead of ticking boxes. Every change is journalled and can be reverted.\n'
+        'system back instead of ticking boxes. Settings changes are journalled and can be reverted\n'
+        'one at a time; what the optional cleanup deletes (temporary files, the telemetry buffer,\n'
+        'removed apps) cannot be brought back.\n'
         'Open source (MIT): https://github.com/N0deZ3r0/Win11Privacy\n\n'
         '### Checklist\n\n'
         '- [x] Have you signed the [Contributor License Agreement](https://cla.opensource.microsoft.com/microsoft/winget-pkgs)?\n'
         '- [x] Have you checked that there aren\'t other open [pull requests](https://github.com/microsoft/winget-pkgs/pulls) '
         'for the same manifest update/change?\n'
-        '- [x] Have you validated your manifest locally with `winget validate --manifest <path>`?\n'
+        '%s'
         '- [x] Does your manifest conform to the [1.28 schema](https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest/schema/1.28.0)?\n\n'
         'A single portable executable published in the project\'s GitHub release; the SHA256 above\n'
         'matches `SHA256SUMS.txt` of that release. The program changes system settings and asks for\n'
         'administrator rights itself, hence `ElevationRequirement: elevatesSelf`.\n'
-    ) % PKG
+    ) % (PKG, validate_line)
 
     code, out, err = gh(['pr', 'create', '--repo', UPSTREAM, '--base', 'master',
                          '--head', '%s:%s' % (OWNER, branch), '--title', title, '--body', body], check=False)

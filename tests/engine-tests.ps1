@@ -133,6 +133,53 @@ $log = Get-EngineJson @('-ChangeLog')
 Check 'журнал отката отвечает' ($null -ne $log)
 
 # --------------------------------------------------------------------------- #
+#  Окружение движка. Он работает с правами администратора, а модули
+#  PowerShell и системные пути пришли бы из окружения того, кто его запустил:
+#  первой в PSModulePath стоит папка «Документы» пользователя, ProgramData и
+#  TEMP можно переопределить в HKCU\Environment. Движок первой же строкой
+#  сводит всё это к системным значениям.
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Окружение движка: модули и пути — только системные'
+$envAst = [System.Management.Automation.Language.Parser]::ParseFile($engine, [ref]$null, [ref]$null)
+$firstStmt = @($envAst.EndBlock.Statements)[0]
+Check 'первая команда движка задаёт PSModulePath' ("$($firstStmt.Extent.Text)" -match '^\$env:PSModulePath\s*=\s*"\$PSHOME\\Modules"$') `
+      ("первая команда: " + "$($firstStmt.Extent.Text)".Split("`n")[0])
+$envRoot = Join-Path $env:TEMP ('w11p-env-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$fakeMods = Join-Path $envRoot 'Modules'
+$fakeTask = Join-Path $fakeMods 'ScheduledTasks'
+New-Item -ItemType Directory -Force $fakeTask | Out-Null
+$envMarker = Join-Path $envRoot 'loaded.txt'
+# модуль с именем системного: если движок его загрузит, появится метка
+Set-Content -LiteralPath (Join-Path $fakeTask 'ScheduledTasks.psm1') -Encoding ASCII -Value (
+    "Set-Content -LiteralPath '$envMarker' -Value 1`r`nfunction Get-ScheduledTask { }`r`nExport-ModuleMember -Function Get-ScheduledTask")
+Set-Content -LiteralPath (Join-Path $fakeTask 'ScheduledTasks.psd1') -Encoding ASCII -Value (
+    "@{ RootModule = 'ScheduledTasks.psm1'; ModuleVersion = '99.0'; FunctionsToExport = @('Get-ScheduledTask') }")
+$envPsi = New-Object System.Diagnostics.ProcessStartInfo
+$envPsi.FileName = (Get-Command powershell.exe).Source
+$envPsi.UseShellExecute = $false
+$envPsi.RedirectStandardOutput = $true; $envPsi.RedirectStandardError = $true
+$envPsi.StandardOutputEncoding = [Text.Encoding]::UTF8
+$envPsi.EnvironmentVariables['PSModulePath'] = $fakeMods + ';' + $env:PSModulePath
+$envPsi.EnvironmentVariables['ProgramData'] = (Join-Path $envRoot 'pd')
+$envJson = @{}
+foreach ($cmd in @('-ListStartup', '-Detect')) {
+    $envPsi.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $engine + '" ' + $cmd
+    $p = [System.Diagnostics.Process]::Start($envPsi)
+    $o = $p.StandardOutput.ReadToEnd(); $null = $p.StandardError.ReadToEnd(); $p.WaitForExit()
+    foreach ($line in ($o -split "`n")) {
+        $t = $line.TrimStart()
+        if ($t.StartsWith('###JSON###')) { try { $envJson[$cmd] = ($t.Substring(10).Trim() | ConvertFrom-Json) } catch { } }
+    }
+}
+Check 'модуль из пользовательской папки не загружается' (-not (Test-Path -LiteralPath $envMarker))
+Check 'с подменённым PSModulePath автозагрузка отвечает' ($null -ne $envJson['-ListStartup'] -and $null -ne $envJson['-ListStartup'].items)
+$realPd = [Environment]::GetFolderPath('CommonApplicationData')
+$seenPd = $(if ($envJson['-Detect']) { "$($envJson['-Detect'].buffer.path)" } else { '' })
+Check 'ProgramData берётся у системы, а не из окружения' ($seenPd -like ($realPd + '\*')) ("путь буфера: " + $seenPd)
+Remove-Item -LiteralPath $envRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+# --------------------------------------------------------------------------- #
 Write-Host ''
 Write-Host 'Автозагрузка'
 $start = Get-EngineJson @('-ListStartup')
@@ -236,10 +283,20 @@ foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automat
 }
 Check 'разбор адресов телеметрии найден в движке' ($ipFound.Count -eq $ipFns.Count) ("найдено: " + ($ipFound -join ','))
 if ($ipFound.Count -eq $ipFns.Count) {
+    # настоящий шаблон «общих узлов» — из движка, а не копия в тесте
+    foreach ($a in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+        $lt = $a.Left -as [System.Management.Automation.Language.VariableExpressionAst]
+        if ($null -ne $lt -and $lt.VariablePath.UserPath -eq 'script:FwIpSharedRx') { Invoke-Expression $a.Extent.Text }
+    }
+    function Write-Log { param([string]$Message = '') }
     $script:TelemetryIps = @('13.64.90.137')
     # адрес вместо имени отвечает сразу и без сети; localhost — частный и в
-    # правило попасть не должен; несуществующее имя не должно задерживать
-    $script:HostsDomains = @('8.8.8.8', 'localhost', '8.8.8.8', 'win11privacy-test.invalid')
+    # правило попасть не должен; несуществующее имя не должно задерживать.
+    # Имена на общих узлах (общее хранилище Azure, края e-msedge, вход Office,
+    # общий вход лицензий) по IP не блокируются — их адреса делят чужие службы.
+    $script:HostsDomains = @('8.8.8.8', 'localhost', '8.8.8.8', 'win11privacy-test.invalid',
+                             'ceuswatcab01.blob.core.windows.net', 'default.exp-tas.com', 'nexus.officeapps.live.com',
+                             'licensing.mp.microsoft.com', 'bat.bing.com')
     $ipSw = [Diagnostics.Stopwatch]::StartNew()
     $ipRes = Get-TelemetryIpList -TimeoutMs 3000
     $ipSw.Stop()
@@ -248,6 +305,10 @@ if ($ipFound.Count -eq $ipFns.Count) {
     Check 'адрес из списка имён попадает в правило' ($ipGot -contains '8.8.8.8') ("получено: " + ($ipGot -join ', '))
     Check 'частные адреса в правило не попадают' (-not ($ipGot | Where-Object { $_ -like '127.*' }))
     Check 'повторы в списке имён спрашиваются один раз' ($ipRes.asked -eq 3) ("спрошено: $($ipRes.asked)")
+    Check 'имена на общих узлах в правило по IP не идут и не спрашиваются' (
+          ($ipRes.asked -eq 3) -and ($script:HostsDomains | Where-Object { $_ -match $script:FwIpSharedRx }).Count -eq 5)
+    # и в самом списке hosts общие узлы остаются: там блокировка точная, по имени
+    Check 'licensing.mp.microsoft.com больше не в списке hosts' ($engineText -notmatch "(?m)^\s*'[^']*licensing\.mp\.microsoft\.com'")
     Check 'разбор имён укладывается в отведённое время' ($ipSw.Elapsed.TotalSeconds -lt 6) ("заняло: {0:N1} с" -f $ipSw.Elapsed.TotalSeconds)
     # публичный адрес — по диапазонам: общие адреса провайдеров, тестовые и
     # зарезервированные сети, многоадресные IPv6, IPv4 внутри IPv6, не-адреса
@@ -965,7 +1026,13 @@ Check 'в журнал пишут только Write-AheadEntry и Apply-Profile
 Write-Host ''
 Write-Host 'Журнал отката: замок и схлопывание'
 Check 'запись журнала под общим замком' ($engineText -match 'Use-JournalLock\s*\{')
-Check 'замок общесистемный' ($engineText -match "Mutex\(\`$false, 'Global")
+# Замок — файл в защищённом корне без совместного доступа. Именованный
+# мьютекс Global\... мог занять любой процесс без прав, и тогда не работали
+# ни применение, ни откат (проверено на VM): его в движке быть не должно.
+Check 'замок — файл в защищённом корне, без совместного доступа' (
+      ($engineText -match "Join-Path \`$script:SafeRoot 'journal\.lock'") -and
+      ($engineText -match '\[IO\.FileShare\]::None'))
+Check 'общего мьютекса журнала, который мог занять кто угодно, больше нет' ($engineText -notmatch "Mutex\(\`$false, 'Global\\Win11Privacy-Journal")
 if (Get-Command Compress-Journal -ErrorAction SilentlyContinue) {
     # Записи бывают двух видов: свежие — хэш-таблицы, прочитанные из файла —
     # объекты. Проверяем оба: на хэш-таблицах поля однажды уже терялись, и
@@ -1203,7 +1270,7 @@ if ($wipeFound.Count -eq $wipeFns.Count) {
     $locks = @("$gtRel\User\Immersive\production\Property", "$gtRel\System\DeviceIdentities\production\S-1-5-18\02lockedidentity")
     function Invoke-OneShotTask { param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem) $script:wipeCalls.Add("task $CmdLine"); return $true }
     function cmdkey.exe { $script:wipeCalls.Add("cmdkey $args") }
-    function Clear-FolderContents { $script:wipeCalls.Add('clear-cdp'); return 0.0 }
+    function Clear-Folder { $script:wipeCalls.Add('clear-cdp'); return 0.0 }
     function Write-Log { param([string]$Message = '') }
     $DryRun = $false; $script:Changes = 0; $script:Failures = 0
     $dev = '0018ABCDEF012345'; $usr = '0003AAAAAAAAAAAA'
@@ -1286,7 +1353,7 @@ if ($wipeFound.Count -eq $wipeFns.Count) {
         foreach ($lk in $locks) { try { Set-TestKeyLock $lk $false } catch { } }
         Remove-Item -LiteralPath $gt -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $script:CdpCache -Recurse -Force -ErrorAction SilentlyContinue
-        foreach ($f in @('Get-ManagedReason', 'Stop-ServiceWait', 'Get-Service', 'Set-Service', 'Start-Service', 'Invoke-OneShotTask', 'cmdkey.exe', 'Clear-FolderContents', 'Get-IdCrlRoots', 'Set-TestKeyLock')) {
+        foreach ($f in @('Get-ManagedReason', 'Stop-ServiceWait', 'Get-Service', 'Set-Service', 'Start-Service', 'Invoke-OneShotTask', 'cmdkey.exe', 'Clear-Folder', 'Get-IdCrlRoots', 'Set-TestKeyLock')) {
             Remove-Item -Path ("Function:\" + $f) -ErrorAction SilentlyContinue
         }
     }
@@ -1500,6 +1567,280 @@ $script:Failures = 0
 $null = Clear-FolderContents $jr0 'проверка ссылки'
 Check 'папка-ссылка не очищается вовсе' ((Test-Path (Join-Path $tg 'keep.txt')) -and $script:Failures -eq 1)
 Check 'корень диска и профиль очищать нельзя, временную папку — можно' ((Test-ClearForbidden 'C:\') -and (Test-ClearForbidden $env:USERPROFILE) -and -not (Test-ClearForbidden $env:TEMP))
+
+# --------------------------------------------------------------------------- #
+#  Кто чистит какую папку. В C:\Windows\Temp может завести папку любой
+#  пользователь, и подложенная им ссылка увела бы удаление с правами
+#  администратора в защищённую папку. Поэтому в системных папках движок
+#  трогает только объекты доверенного владельца, а папки профиля чистит
+#  задача от имени самого пользователя — там повышения нет вовсе.
+# --------------------------------------------------------------------------- #
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Test-TrustedOwner', 'Test-SystemClearPath', 'Get-ClearUserScript') }, $true)) { Invoke-Expression $fn.Extent.Text }
+$script:ClearOwners = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-19', 'S-1-5-20',
+                        'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+$script:WinDir = $env:SystemRoot
+$script:ProgramDataDir = $env:ProgramData
+$own = Join-Path $env:TEMP ('w11p-own-' + $clId)
+New-Item -ItemType Directory -Force (Join-Path $own 'mine') | Out-Null
+Set-Content (Join-Path $own 'mine\inside.txt') 'x'
+Set-Content (Join-Path $own 'mine.txt') 'x'
+$script:Failures = 0
+$ownSt = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+foreach ($c in @(Get-ChildItem -LiteralPath $own -Force)) { Remove-TreeNoFollow $c.FullName $ownSt -TrustedOwnerOnly }
+# файлы здесь завёл сам пользователь: доверенного владельца у них нет
+$ownMine = (Get-Acl (Join-Path $own 'mine.txt')).GetOwner([Security.Principal.SecurityIdentifier]).Value
+if ($script:ClearOwners -notcontains $ownMine) {
+    Check 'в системной папке чужое не удаляется и внутрь не заходит' (
+          (Test-Path (Join-Path $own 'mine.txt')) -and (Test-Path (Join-Path $own 'mine\inside.txt')) -and
+          $ownSt.deleted -eq 0 -and $ownSt.skipped -eq 2) ("удалено $($ownSt.deleted), оставлено $($ownSt.skipped)")
+}
+# ссылка в общей папке пропускается при любом владельце цели: Get-Acl на
+# ссылке отвечает про её цель, и судить по нему о самой ссылке нельзя
+$ownTarget = Join-Path $env:TEMP ('w11p-ownlnk-' + $clId)
+New-Item -ItemType Directory -Force $ownTarget | Out-Null
+Set-Content (Join-Path $ownTarget 'keep.txt') 'x'
+$ownLink = Join-Path $own 'planted-link'
+New-Item -ItemType Directory -Force $own | Out-Null
+$null = & cmd.exe /c ('mklink /J "' + $ownLink + '" "' + $ownTarget + '"')
+$lnkSt = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+Remove-TreeNoFollow $ownLink $lnkSt -TrustedOwnerOnly
+Check 'в общей папке ссылка пропускается, цель цела' (
+      (Test-Path -LiteralPath $ownLink) -and (Test-Path (Join-Path $ownTarget 'keep.txt')) -and $lnkSt.skipped -eq 1 -and $lnkSt.deleted -eq 0)
+& cmd.exe /c ('rmdir "' + $ownLink + '"') | Out-Null
+& cmd.exe /c ('rmdir /s /q "' + $ownTarget + '"') | Out-Null
+Check 'папки Windows и ProgramData чистит движок, профиль — задача пользователя' (
+      (Test-SystemClearPath (Join-Path $env:SystemRoot 'Temp')) -and
+      (Test-SystemClearPath (Join-Path $env:ProgramData 'Microsoft\Windows\WER\ReportQueue')) -and
+      -not (Test-SystemClearPath $env:TEMP) -and
+      -not (Test-SystemClearPath (Join-Path $env:LOCALAPPDATA 'D3DSCache')))
+& cmd.exe /c ('rmdir /s /q "' + $own + '"') | Out-Null
+
+# Сценарий, который выполняет задача от имени пользователя: ссылки не
+# раскрываются, свежие файлы остаются, маска берёт только свои файлы.
+$cuRoot = Join-Path $env:TEMP ('w11p-cuser-' + $clId)
+$cuBox = Join-Path $cuRoot 'box'; $cuOut = Join-Path $cuRoot 'target'
+New-Item -ItemType Directory -Force (Join-Path $cuBox 'sub'), $cuOut | Out-Null
+Set-Content (Join-Path $cuBox 'old.txt') 'x'; Set-Content (Join-Path $cuBox 'sub\deep.txt') 'x'
+Set-Content (Join-Path $cuBox 'fresh.txt') 'x'; Set-Content (Join-Path $cuOut 'keep.txt') 'x'
+Set-Content (Join-Path $cuBox 'thumbcache_1.db') 'x'; Set-Content (Join-Path $cuBox 'other.db') 'x'
+foreach ($p in @((Join-Path $cuBox 'old.txt'), (Join-Path $cuBox 'sub\deep.txt'))) {
+    (Get-Item $p).LastWriteTime = (Get-Date).AddDays(-5); (Get-Item $p).CreationTime = (Get-Date).AddDays(-5)
+}
+$null = & cmd.exe /c ('mklink /J "' + (Join-Path $cuBox 'link') + '" "' + $cuOut + '"')
+$cuScript = Join-Path $cuRoot 'clear.ps1'
+Set-Content -LiteralPath $cuScript -Value (Get-ClearUserScript) -Encoding UTF8
+$cuIn = Join-Path $cuRoot 'in.json'; $cuRes = Join-Path $cuRoot 'res.json'
+$cuRun = {
+    param($Targets)
+    @{ targets = $Targets } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $cuIn -Encoding UTF8
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $cuScript -InputFile $cuIn -ResultFile $cuRes | Out-Null
+    return ((Get-Content -LiteralPath $cuRes -Raw -Encoding UTF8) | ConvertFrom-Json)
+}
+$cu = & $cuRun @(@{ path = $cuBox; label = 'box'; minAgeHours = 24; filter = '' },
+                 @{ path = (Join-Path $cuRoot 'missing'); label = 'none'; minAgeHours = 0; filter = '' })
+$cu0 = @($cu.targets)[0]
+Check 'чистка от имени пользователя: ссылка убрана, цель цела' (
+      (Test-Path (Join-Path $cuOut 'keep.txt')) -and -not (Test-Path (Join-Path $cuBox 'link')))
+Check 'чистка от имени пользователя: свежие файлы остаются, старые уходят' (
+      (Test-Path (Join-Path $cuBox 'fresh.txt')) -and -not (Test-Path (Join-Path $cuBox 'old.txt')) -and
+      -not (Test-Path (Join-Path $cuBox 'sub\deep.txt')) -and [int]$cu0.recent -gt 0) `
+      ("удалено $($cu0.deleted), свежих $($cu0.recent)")
+Check 'чистка от имени пользователя: папки нет — так и сказано' (("$(@($cu.targets)[1].state)" -eq 'missing'))
+$cu = & $cuRun @(@{ path = $cuBox; label = 'thumbs'; minAgeHours = 0; filter = 'thumbcache_*.db' })
+Check 'чистка по маске берёт только свои файлы' (
+      -not (Test-Path (Join-Path $cuBox 'thumbcache_1.db')) -and (Test-Path (Join-Path $cuBox 'other.db')))
+# папка-ссылка целиком: не очищается вовсе
+$cu = & $cuRun @(@{ path = (Join-Path $cuRoot 'jlink'); label = 'link-root'; minAgeHours = 0; filter = '' })
+$null = & cmd.exe /c ('mklink /J "' + (Join-Path $cuRoot 'jlink') + '" "' + $cuOut + '"')
+$cu = & $cuRun @(@{ path = (Join-Path $cuRoot 'jlink'); label = 'link-root'; minAgeHours = 0; filter = '' })
+Check 'чистка от имени пользователя: папка-ссылка не очищается' (
+      ("$(@($cu.targets)[0].state)" -eq 'link') -and (Test-Path (Join-Path $cuOut 'keep.txt')))
+& cmd.exe /c ('rmdir "' + (Join-Path $cuRoot 'jlink') + '"') | Out-Null
+& cmd.exe /c ('rmdir /s /q "' + $cuRoot + '"') | Out-Null
+
+# Чистка в применении: системные папки — только доверенное, профиль — задачей
+# от имени пользователя, корзина — лишь по отдельному согласию.
+$cleanBlock = [regex]::Match($engineText, "(?s)if \(\(Use-Module 'cleanup'\).*?\n\}").Value
+Check 'чистка: системные папки — только объекты доверенного владельца' ($cleanBlock -match 'Clear-FolderContents[^\r\n]*-TrustedOwnerOnly')
+Check 'чистка: папки профиля — задачей от имени пользователя' ($cleanBlock -match 'Clear-UserFolders \$userTargets')
+Check 'чистка: во временной папке свежие файлы остаются' ($cleanBlock -match 'Age = \$script:TempKeepHours')
+Check 'чистка: корзина — только по отдельному согласию' (
+      ($cleanBlock -match 'if \(\$EmptyRecycleBin\) \{') -and
+      ([regex]::Matches($engineText, 'Clear-RecycleBin').Count -eq 1))
+$cleanupCs = Join-Path (Split-Path $engine) 'MainForm.cs'
+if (Test-Path $cleanupCs) {
+    Check 'чистка выключена по умолчанию' ((Get-Content $cleanupCs -Raw -Encoding UTF8) -match '"cleanup",L\.T\("Чистка временных файлов"\),[^\r\n]*,GDelete,false,')
+}
+$actionsCleanCs = Join-Path (Split-Path $engine) 'Actions.cs'
+if (Test-Path $actionsCleanCs) {
+    Check 'окно спрашивает про корзину отдельно' ((Get-Content $actionsCleanCs -Raw -Encoding UTF8) -match '-EmptyRecycleBin')
+}
+
+# --------------------------------------------------------------------------- #
+#  Настройки сторонних программ (VS Code, Firefox): в журнал идёт один ключ,
+#  и откат возвращает его, а не весь файл копией. Раньше при первом
+#  применении снималась копия settings.json, а откат копировал её поверх —
+#  и всё, что человек поменял в настройках потом, пропадало (проверено на VM).
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Настройки сторонних программ: откат по ключам'
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-VsCodeWriteScript', 'ConvertTo-JsonToken', 'ConvertFrom-JsonToken') }, $true)) { Invoke-Expression $fn.Extent.Text }
+$vsRoot = Join-Path $env:TEMP ('w11p-vsc-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force $vsRoot | Out-Null
+$vsScript = Join-Path $vsRoot 'w.ps1'
+Set-Content -LiteralPath $vsScript -Value (Get-VsCodeWriteScript) -Encoding UTF8
+$vsCfg = Join-Path $vsRoot 'settings.json'
+$vsIn = Join-Path $vsRoot 'in.json'; $vsRes = Join-Path $vsRoot 'res.json'
+$vsRun = {
+    param([string]$Path, [string]$Key, [string]$Token, [bool]$RemoveEmpty)
+    @{ path = $Path; key = $Key; token = $Token; removeFileIfEmpty = $RemoveEmpty } |
+        ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $vsIn -Encoding UTF8
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $vsScript -InputFile $vsIn -ResultFile $vsRes | Out-Null
+    return ((Get-Content -LiteralPath $vsRes -Raw -Encoding UTF8) | ConvertFrom-Json)
+}
+Set-Content -LiteralPath $vsCfg -Encoding UTF8 -Value "{`r`n    `"editor.fontSize`": 14,`r`n    `"telemetry.telemetryLevel`": `"all`",`r`n    `"user.addedByHand`": true`r`n}"
+$null = & $vsRun $vsCfg 'telemetry.telemetryLevel' '"off"' $false
+$vsTxt = Get-Content -LiteralPath $vsCfg -Raw
+Check 'правка ключа VS Code не трогает остальные настройки' (
+      ($vsTxt -match '"telemetry\.telemetryLevel"\s*:\s*"off"') -and ($vsTxt -match '"user\.addedByHand"\s*:\s*true') -and
+      ($vsTxt -match '"editor\.fontSize"\s*:\s*14') -and [bool]($vsTxt | ConvertFrom-Json))
+$null = & $vsRun $vsCfg 'workbench.enableExperiments' 'false' $false
+# правка человека ПОСЛЕ применения — её откат обязан сохранить
+$vsTxt = (Get-Content -LiteralPath $vsCfg -Raw) -replace '"editor\.fontSize"\s*:\s*14', '"editor.fontSize": 20'
+Set-Content -LiteralPath $vsCfg -Value $vsTxt -Encoding UTF8
+$null = & $vsRun $vsCfg 'telemetry.telemetryLevel' '"all"' $false
+$null = & $vsRun $vsCfg 'workbench.enableExperiments' '' $false
+$vsTxt = Get-Content -LiteralPath $vsCfg -Raw
+Check 'откат вернул наш ключ и сохранил правку, сделанную после применения' (
+      ($vsTxt -match '"telemetry\.telemetryLevel"\s*:\s*"all"') -and ($vsTxt -notmatch 'enableExperiments') -and
+      ($vsTxt -match '"editor\.fontSize"\s*:\s*20') -and ($vsTxt -match '"user\.addedByHand"\s*:\s*true') -and
+      [bool]($vsTxt | ConvertFrom-Json))
+# наш ключ — последний в файле: запятая на предыдущем уходит вместе с ним, а
+# завершающая запятая в чужом вложенном блоке (VS Code её допускает) остаётся
+Set-Content -LiteralPath $vsCfg -Encoding UTF8 -Value "{`r`n    `"a`": { `"x`": 1, },`r`n    `"workbench.enableExperiments`": false`r`n}"
+$null = & $vsRun $vsCfg 'workbench.enableExperiments' '' $false
+$vsTxt = Get-Content -LiteralPath $vsCfg -Raw
+Check 'удаление нашего последнего ключа не оставляет запятой и не трогает чужое' (
+      ($vsTxt -notmatch 'enableExperiments') -and ($vsTxt -match '"x": 1, \}\r?\n\}\s*$') -and ($vsTxt -notmatch '\},\s*\}'))
+Remove-Item -LiteralPath $vsCfg -Force
+$null = & $vsRun $vsCfg 'telemetry.telemetryLevel' '"off"' $false
+$vsMade = Test-Path -LiteralPath $vsCfg
+$vsGone = & $vsRun $vsCfg 'telemetry.telemetryLevel' '' $true
+Check 'файл настроек, который завела программа, после отката опустел и удалён' (
+      $vsMade -and [bool]$vsGone.removedFile -and -not (Test-Path -LiteralPath $vsCfg))
+# Удаление созданного файла решается один раз после отката всех ключей
+# (режим «ключа нет»): пустой файл уходит, непустой остаётся байт в байт
+$vsBom = [byte[]](0xEF, 0xBB, 0xBF)
+[IO.File]::WriteAllBytes($vsCfg, [byte[]]($vsBom + [Text.Encoding]::UTF8.GetBytes("{`r`n    // user comment`r`n    `"a`": 1`r`n}")))
+$vsBefore = [IO.File]::ReadAllBytes($vsCfg)
+$vsKeep = & $vsRun $vsCfg '' '' $true
+$vsAfter = [IO.File]::ReadAllBytes($vsCfg)
+Check 'пустой ключ: непустой файл не удаляется и не переписывается (даже метка BOM)' (
+      $vsKeep.ok -and -not $vsKeep.removedFile -and ([Convert]::ToBase64String($vsBefore) -eq [Convert]::ToBase64String($vsAfter)))
+Set-Content -LiteralPath $vsCfg -Value "{`r`n}" -Encoding UTF8
+$vsEmpty = & $vsRun $vsCfg '' '' $true
+Check 'пустой ключ: пустой файл удаляется' ($vsEmpty.ok -and $vsEmpty.removedFile -and -not (Test-Path -LiteralPath $vsCfg))
+$vsNone = & $vsRun $vsCfg '' '' $true
+Check 'пустой ключ: файла нет — ничего не создаётся' ($vsNone.ok -and -not (Test-Path -LiteralPath $vsCfg))
+# ссылка на пути: запись с правами администратора ушла бы в чужой файл
+$vsVictim = Join-Path $vsRoot 'victim'
+New-Item -ItemType Directory -Force $vsVictim | Out-Null
+Set-Content -LiteralPath (Join-Path $vsVictim 'settings.json') -Value 'SECRET' -Encoding UTF8
+$vsUserDir = Join-Path $vsRoot 'User'
+$null = & cmd.exe /c ('mklink /J "' + $vsUserDir + '" "' + $vsVictim + '"')
+$vsLink = & $vsRun (Join-Path $vsUserDir 'settings.json') 'telemetry.telemetryLevel' '"off"' $false
+Check 'ссылка на пути к файлу настроек: отказ, чужой файл цел' (
+      (-not $vsLink.ok) -and ("$($vsLink.why)" -match 'ссылка') -and
+      ((Get-Content -LiteralPath (Join-Path $vsVictim 'settings.json') -Raw).Trim() -eq 'SECRET'))
+Check 'значение «как было» переводится в журнал и обратно без потерь' (
+      ((ConvertFrom-JsonToken (ConvertTo-JsonToken 'off')) -eq 'off') -and
+      ((ConvertFrom-JsonToken (ConvertTo-JsonToken $false)) -eq $false) -and
+      ((ConvertFrom-JsonToken (ConvertTo-JsonToken 14)) -eq 14))
+& cmd.exe /c ('rmdir "' + $vsUserDir + '"') | Out-Null
+& cmd.exe /c ('rmdir /s /q "' + $vsRoot + '"') | Out-Null
+# статически: откат не копирует .bak поверх файла, правка идёт через журнал и
+# задачу от имени пользователя, а Firefox не обрезает глубокие политики
+Check 'откат не копирует копию прежней версии поверх файла настроек' (
+      ($engineText -notmatch 'Copy-Item -LiteralPath "\$f\.win11privacy\.bak"') -and
+      ($engineText -match 'копия файла настроек от прежней версии'))
+Check 'правка VS Code пишется в журнал заранее и идёт задачей от имени пользователя' (
+      ([regex]::Match($engineText, "(?s)function Set-VsCodeValue \{.*?\n\}").Value -match "(?s)Write-AheadEntry \`$entry.*Write-VsCodeKey") -and
+      ($engineText -match "Invoke-AsUser 'vscode'"))
+Check 'политики Firefox не обрезаются по глубине' (
+      ([regex]::Match($engineText, "(?s)function Write-FirefoxKey \{.*?\n\}").Value -match 'ConvertTo-Json -Depth 20'))
+Check 'запись настройки сторонней программы попадает в журнал как appcfg' (
+      ($engineText -match "if \(\`$k -eq 'appcfg'\)") -and ($engineText -match "'appcfg' \{"))
+
+# --------------------------------------------------------------------------- #
+#  Коды выхода, службы, вид значения, вошедший пользователь
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Коды выхода, отказ службы, вид значения, вошедший пользователь'
+# применение и откат заканчиваются честным кодом: 0 — всё прошло, 2 — с ошибками
+Check 'применение заканчивается кодом 2, если были ошибки' (
+      $engineText -match "(?s)Write-Log '###DONE###'\s+#[^\n]*\n(#[^\n]*\n)*if \(\`$script:JournalFailed -or \`$script:Failures -gt 0\) \{ exit 2 \}\s+exit 0")
+Check 'откат заканчивается кодом 2, если были ошибки' ($engineText -match "(?s)if \(\`$script:Failures -gt 0\) \{ exit 2 \}\s+exit 0\s+\}")
+$silentCs = Join-Path (Split-Path $engine) 'Program.cs'
+if (Test-Path $silentCs) {
+    Check 'негодный профиль тихого режима — код 4, не путается с кодом 2 движка' ((Get-Content $silentCs -Raw -Encoding UTF8) -match 'return 4;')
+}
+
+# отказ при отключении службы: «не дала Windows» и «ошибка» считаются, а не молчат
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Test-AccessDeniedError', 'Write-SvcFailure') }, $true)) { Invoke-Expression $fn.Extent.Text }
+$script:Blocked = 0; $script:Failures = 0; $script:BlockedIds = @{}
+$svcLog = New-Object System.Collections.Generic.List[string]
+function Write-Log { param([string]$Message = '') $svcLog.Add($Message) }
+$svcDef = @{ Id = 'services#0'; C = 'DiagTrack' }
+$deniedErr = $null; try { throw (New-Object System.UnauthorizedAccessException 'denied') } catch { $deniedErr = $_ }
+$otherErr = $null; try { throw (New-Object System.InvalidOperationException 'не вышло') } catch { $otherErr = $_ }
+Write-SvcFailure $svcDef $deniedErr
+Check 'отказ в доступе при отключении службы — «Windows не даёт», а не ошибка' ($script:Blocked -eq 1 -and $script:Failures -eq 0 -and $script:BlockedIds.ContainsKey('services#0'))
+Write-SvcFailure $svcDef $otherErr
+Check 'другая причина отказа службы — ошибка, она попадает в итог' ($script:Failures -eq 1 -and $script:Blocked -eq 1)
+Check 'служба, которой нет, больше не называется «недоступна»' (($engineText -notmatch '-- недоступна"') -and ($engineText -match 'нет на этой системе'))
+
+# вид значения: строка «1» на месте числа 1 не считается применённой
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Test-RegDefValue', 'Get-RegRaw', 'Open-RegKeyRead', 'ConvertTo-RegComparable') }, $true)) { Invoke-Expression $fn.Extent.Text }
+$kindKey = 'HKCU:\Software\W11PKind-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
+New-Item -Path $kindKey -Force | Out-Null
+New-ItemProperty -LiteralPath $kindKey -Name 'V' -Value '1' -PropertyType String -Force | Out-Null
+$kindDef = @{ P = $kindKey; N = 'V'; V = 1; Type = 'DWord' }
+$kindStr = Test-RegDefValue $kindDef
+New-ItemProperty -LiteralPath $kindKey -Name 'V' -Value 1 -PropertyType DWord -Force | Out-Null
+$kindDw = Test-RegDefValue $kindDef
+Check 'REG_SZ «1» на месте DWORD 1 — не применено, с указанием вида' (-not $kindStr.ok -and "$($kindStr.actual)" -match 'String')
+Check 'DWORD 1 — применено' ([bool]$kindDw.ok)
+Remove-Item -LiteralPath $kindKey -Recurse -Force -ErrorAction SilentlyContinue
+Check 'быстрый путь Set-Reg сверяет и вид значения' ($engineText -match '"\$\(\$raw\.kind\)" -eq \$Type -and')
+
+# вошедший пользователь: тот же, что работает движок, или другой (на заглушках)
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-SessionUser', 'Get-OtherSessionUser', 'Write-SessionUserNote', 'Convert-ToSessionPath') }, $true)) { Invoke-Expression $fn.Extent.Text }
+$script:UserSid = 'S-1-5-21-1-2-3-1000'; $script:RunAccount = 'PC\admin'
+function Get-MachinePath { param($Key, $Name, $Default) 'C:\Users\victim' }
+function Get-CimInstance { param($ClassName, $Filter, $ErrorAction) [pscustomobject]@{ ProcessId = 4 } }
+$script:FakeOwner = 'S-1-5-21-1-2-3-1001'
+function Invoke-CimMethod { param($InputObject, $MethodName, $ErrorAction) [pscustomobject]@{ Sid = $script:FakeOwner } }
+$script:SessionUserCache = $null
+$sessOther = Get-OtherSessionUser
+Check 'за компьютером другой человек — он определяется по владельцу explorer' ($null -ne $sessOther -and $sessOther.sid -eq 'S-1-5-21-1-2-3-1001' -and $sessOther.profile -eq 'C:\Users\victim')
+$svcLog.Clear(); Write-SessionUserNote
+Check 'о другом вошедшем пользователе сказано при включении стража' (($svcLog -join ' ') -match 'PC\\admin' -and @($svcLog).Count -ge 2)
+$script:FakeOwner = 'S-1-5-21-1-2-3-1000'; $script:SessionUserCache = $null
+Check 'вошёл тот же, что работает движок — ничего особого' ($null -eq (Get-OtherSessionUser))
+# папки «пользователя» — вошедшего, а не учётной записи движка
+$script:UserProfileDir = 'C:\Users\admin'
+$script:FakeOwner = 'S-1-5-21-1-2-3-1001'; $script:SessionUserCache = $null
+Check 'путь в профиле движка переносится в профиль вошедшего' ((Convert-ToSessionPath 'C:\Users\admin\AppData\Local\Temp') -eq 'C:\Users\victim\AppData\Local\Temp')
+Check 'путь вне профиля не переносится' ((Convert-ToSessionPath 'C:\Windows\Temp') -eq 'C:\Windows\Temp')
+Check 'чужая папка с тем же началом имени не переносится' ((Convert-ToSessionPath 'C:\Users\admin2\x') -eq 'C:\Users\admin2\x')
+$script:FakeOwner = 'S-1-5-21-1-2-3-1000'; $script:SessionUserCache = $null
+Check 'вошёл тот же — пути остаются' ((Convert-ToSessionPath 'C:\Users\admin\AppData\Local\Temp') -eq 'C:\Users\admin\AppData\Local\Temp')
+$script:FakeOwner = 'S-1-5-18'; $script:SessionUserCache = $null
+Check 'owner не из учётных записей людей (SYSTEM) — не вошедший пользователь' ($null -eq (Get-OtherSessionUser))
+Remove-Item Function:\Get-MachinePath, Function:\Get-CimInstance, Function:\Invoke-CimMethod -ErrorAction SilentlyContinue
+Check 'применение пишет профиль вошедшего, если он не тот, кто работает' ($engineText -match 'Apply-ProfilesHives -Only')
+Check 'задачи стража и слежения ставятся на учётную запись из маркера, не из USERNAME' (
+      ($engineText -notmatch 'USERDOMAIN\\\$env:USERNAME') -and ([regex]::Matches($engineText, 'New-ScheduledTaskPrincipal -UserId \$script:RunAccount').Count -ge 4))
 & cmd.exe /c ('rmdir "' + $jr0 + '"') | Out-Null
 & cmd.exe /c ('rmdir /s /q "' + $cf + '"') | Out-Null
 & cmd.exe /c ('rmdir /s /q "' + $tg + '"') | Out-Null
@@ -1525,7 +1866,7 @@ New-Item -ItemType Directory -Force $jRoot | Out-Null
 $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     param($EnginePath, $Root, $Admin)
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
-    $want = @('ConvertTo-Fields', 'Get-JournalKey', 'Compress-Journal', 'Use-JournalLock', 'Read-JournalFile', 'Read-JournalFileUnlocked', 'Read-TextShared', 'Write-JournalFile',
+    $want = @('ConvertTo-Fields', 'Get-JournalKey', 'Compress-Journal', 'Use-JournalLock', 'Get-JournalLockPath', 'Open-JournalLockFile', 'Read-JournalFile', 'Read-JournalFileUnlocked', 'Read-TextShared', 'Write-JournalFile',
               'Save-JournalEntries', 'Save-Json', 'Load-Json', 'Ensure-DataDir', 'Test-DataTrusted', 'Assert-SafeRoot', 'Test-DirSecure',
               'Protect-DataRoot', 'Get-OwnerSid', 'Get-StartName', 'Restore-JournalEntry', 'Test-JournalWritable',
               'Get-RegRaw', 'Test-RegKind', 'Restore-RegValue', 'Get-JournalEntryId', 'Remove-JournalEntries',
@@ -1547,7 +1888,7 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     function Test-Admin { $Admin }
     $DryRun = $false; $script:Failures = 0
     $script:Journal = New-Object System.Collections.Generic.List[object]
-    $script:SafeRoot = Join-Path $Root 'safe'
+    $script:SafeRoot = Join-Path $Root 'safe'; New-Item -ItemType Directory -Force $script:SafeRoot | Out-Null
     $script:DataDir = Join-Path $Root 'data'          # «переносимый» режим: проверка прав не мешает
     $script:RootState = $null; $script:JournalFailed = $false
     $script:JournalLockTries = 1; $script:JournalLockWaitMs = 300
@@ -1661,10 +2002,43 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     $r.broken = @(Get-ChildItem $script:DataDir -Filter 'changes.broken-*.json').Count
     $r.afterBroken = @((Get-Content (Join-Path $script:DataDir 'changes.json') -Raw | ConvertFrom-Json).items).Count
 
-    # замок занят другим процессом: запись не идёт без него, ошибка видна
+    # Прежний замок — именованный мьютекс Global\Win11Privacy-Journal — мог
+    # занять любой процесс без прав (проверено на VM), и тогда не работали ни
+    # применение, ни откат. Теперь его держатель ничему не мешает.
+    $squat = Join-Path $Root 'squat.txt'
+    $squatter = Start-Process -FilePath powershell.exe -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-Command',
+        "`$m = New-Object System.Threading.Mutex(`$false, 'Global\Win11Privacy-Journal'); `$null = `$m.WaitOne(); Set-Content '$squat' 1; Start-Sleep 20")
+    $t0 = Get-Date
+    while (-not (Test-Path $squat) -and ((Get-Date) - $t0).TotalSeconds -lt 15) { Start-Sleep -Milliseconds 200 }
+    $r.squatHeld = Test-Path $squat
+    $r.squatLock = $false
+    try { Use-JournalLock { $r.squatLock = $true } } catch { }
+    try { $squatter.Kill(); $null = $squatter.WaitForExit(5000) } catch { }
+    # замок повторно входимый: запись под замком читает журнал, не дожидаясь себя
+    $r.reentrant = $false
+    try { Use-JournalLock { Use-JournalLock { $r.reentrant = $true } } } catch { }
+    # права самого замка: только система и администраторы, в том числе на
+    # чтение — иначе любой процесс открыл бы его «на чтение» без совместного
+    # доступа и держал (тот же отказ в работе, что был у общего мьютекса)
+    if ($Admin) {
+        $lp = Get-JournalLockPath
+        $lacl = Get-Acl -LiteralPath $lp
+        $r.lockSecure = [bool](Test-KeyFileSecure $lp)
+        $r.lockOnlyAdmins = (@($lacl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object { @('S-1-5-18', 'S-1-5-32-544') -notcontains $_.IdentityReference.Value }).Count -eq 0)
+        # замок, оставшийся с унаследованными правами, исправляется при открытии
+        $wide = New-Object System.Security.AccessControl.FileSecurity
+        $wide.SetAccessRuleProtection($false, $false)
+        [IO.File]::SetAccessControl($lp, $wide)
+        $r.lockWideBefore = -not (Test-KeyFileSecure $lp)
+        Use-JournalLock { $null }
+        $r.lockRepaired = [bool](Test-KeyFileSecure $lp)
+    }
+
+    # замок занят другим запуском программы: запись не идёт без него, ошибка видна
     $flag = Join-Path $Root 'held.txt'
+    $lockPath = Get-JournalLockPath
     $holder = Start-Process -FilePath powershell.exe -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-Command',
-        "`$m = New-Object System.Threading.Mutex(`$false, 'Global\Win11Privacy-Journal'); `$null = `$m.WaitOne(); Set-Content '$flag' 1; Start-Sleep 8; `$m.ReleaseMutex()")
+        "`$f = [IO.File]::Open('$lockPath', 'OpenOrCreate', 'ReadWrite', 'None'); Set-Content '$flag' 1; Start-Sleep 8; `$f.Dispose()")
     $t0 = Get-Date
     while (-not (Test-Path $flag) -and ((Get-Date) - $t0).TotalSeconds -lt 15) { Start-Sleep -Milliseconds 200 }
     $r.held = Test-Path $flag
@@ -1975,6 +2349,15 @@ if ($jr) {
     Check 'журнал прежней версии узнаётся' ([bool]$jr.legacyRead)
     Check 'пометка «прежняя версия» не теряется при дописывании' ([bool]$jr.legacyKept -and $jr.legacyItems -eq 2) ("записей: " + $jr.legacyItems)
     Check 'повреждённый журнал откладывается, а не затирается' ($jr.broken -eq 1 -and $jr.afterBroken -eq 1)
+    Check 'прежний общий мьютекс занят посторонним процессом' ([bool]$jr.squatHeld)
+    Check 'посторонний держатель мьютекса журналу не мешает' ([bool]$jr.squatLock)
+    Check 'замок журнала повторно входимый' ([bool]$jr.reentrant)
+    if ($isAdmin) {
+        Check 'права замка — только система и администраторы, без чтения для пользователей' ([bool]$jr.lockSecure -and [bool]$jr.lockOnlyAdmins)
+        Check 'замок с унаследованными правами исправляется при открытии' ([bool]$jr.lockWideBefore -and [bool]$jr.lockRepaired)
+    }
+    Check 'замок создаётся сразу с защищёнными правами, а не наследует права папки' (
+          [regex]::Match($engineText, '(?s)function Open-JournalLockFile \{.*?\n\}').Value -match '(?s)System\.IO\.FileStream\(\$p.*?\$sec\)')
     Check 'замок держит другой процесс' ([bool]$jr.held)
     Check 'журнал читается только под замком: занят — «не читается», а не пуст' ($jr.readWhileHeld -eq 'unreadable') ("состояние: " + $jr.readWhileHeld)
     Check 'без замка журнал не пишется' ([bool]$jr.lockThrows)
@@ -2159,7 +2542,7 @@ $ErrorActionPreference = 'Continue'
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
 foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) { Invoke-Expression $fn.Extent.Text }
 $script:SignKey = [Convert]::FromBase64String($KeyB64)
-$script:DataDir = $DataDir; $script:SafeRoot = Join-Path $DataDir 'not-the-safe-root'; $script:TaskRun = $false
+$script:DataDir = $DataDir; $script:SafeRoot = Join-Path $DataDir 'not-the-safe-root'; $null = New-Item -ItemType Directory -Force $script:SafeRoot; $script:TaskRun = $false
 $script:RootState = $null; $script:PortableTaskState = $null; $script:KnownJournal = $null
 $script:JournalFailed = $false; $script:JournalLockTries = 100; $script:JournalLockWaitMs = 200
 $script:Journal = New-Object System.Collections.Generic.List[object]; $script:JournalRetract = New-Object 'System.Collections.Generic.HashSet[string]'
@@ -2265,7 +2648,7 @@ $crJob = Start-Job -ArgumentList $engine, $crashChild -ScriptBlock {
     $r = @{}
     foreach ($mode in @('after-wal', 'after-change', 'in-verify', 'in-journal-write', 'in-cleanup')) {
         $data = Join-Path $root ('data-' + $mode); New-Item -ItemType Directory -Force $data | Out-Null
-        $script:DataDir = $data; $script:SafeRoot = Join-Path $data 'not-the-safe-root'
+        $script:DataDir = $data; $script:SafeRoot = Join-Path $data 'not-the-safe-root'; $null = New-Item -ItemType Directory -Force $script:SafeRoot
         $probe = 'HKCU:\Software\W11PCrash-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
         New-Item -Path $probe -Force | Out-Null
         New-ItemProperty -LiteralPath $probe -Name 'V' -Value 'orig' -PropertyType String -Force | Out-Null
@@ -2294,7 +2677,7 @@ $crJob = Start-Job -ArgumentList $engine, $crashChild -ScriptBlock {
     # монитор: обрыв до и после auditpol /set — откат возвращает прежнюю политику (1)
     foreach ($mode in @('monitor-before-set', 'monitor-after-set')) {
         $data = Join-Path $root ('data-' + $mode); New-Item -ItemType Directory -Force $data | Out-Null
-        $script:DataDir = $data; $script:SafeRoot = Join-Path $data 'not-the-safe-root'
+        $script:DataDir = $data; $script:SafeRoot = Join-Path $data 'not-the-safe-root'; $null = New-Item -ItemType Directory -Force $script:SafeRoot
         Set-Content $script:AuditFile '1'
         $code = & $runChild $data 'HKCU:\Software\W11PCrash-none' $mode
         $afterCrash = "$(Get-Content $script:AuditFile)"
@@ -2323,7 +2706,7 @@ $crJob = Start-Job -ArgumentList $engine, $crashChild -ScriptBlock {
     # Два процесса: писатель дописывает 100 записей, а здесь в это время 15 раз
     # подряд идёт уборка после отката (перечитать под замком, убрать своё).
     $data = Join-Path $root 'data-conc'; New-Item -ItemType Directory -Force $data | Out-Null
-    $script:DataDir = $data; $script:SafeRoot = Join-Path $data 'not-the-safe-root'
+    $script:DataDir = $data; $script:SafeRoot = Join-Path $data 'not-the-safe-root'; $null = New-Item -ItemType Directory -Force $script:SafeRoot
     for ($i = 1; $i -le 5; $i++) { $script:Journal.Add(@{ kind = 'env'; name = ('W11PPre{0}' -f $i); existed = $false; old = ''; newValue = '1'; time = '2026-01-01T00:00:00'; run = 'setup' }) }
     # якорь: его уборка не трогает, поэтому журнал законно пустым не бывает
     $script:Journal.Add(@{ kind = 'env'; name = 'W11PKeep'; existed = $false; old = ''; newValue = '1'; time = '2026-01-01T00:00:00'; run = 'setup' })
@@ -2558,6 +2941,8 @@ $gdJob = Start-Job -ArgumentList $engine -ScriptBlock {
     # зарегистрировано, то и отдаётся обратно — если не подменили
     function Write-Log { param([string]$Message = '') }
     $script:Tasks = @{}; $script:Started = New-Object System.Collections.Generic.List[string]; $script:Removed = New-Object System.Collections.Generic.List[string]
+    # движок берёт учётную запись для задач из маркера процесса (см. шапку)
+    $script:RunAccount = ([Security.Principal.WindowsIdentity]::GetCurrent()).Name
     $script:Swap = $false
     function New-ScheduledTaskAction { param($Execute, $Argument) [pscustomobject]@{ Execute = $Execute; Arguments = $Argument } }
     function New-ScheduledTaskPrincipal { param($UserId, $LogonType, $RunLevel) [pscustomobject]@{ UserId = $UserId } }

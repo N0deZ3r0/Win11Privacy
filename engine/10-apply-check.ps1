@@ -66,6 +66,34 @@ function Stop-ServiceInstances {
     }
 }
 
+# Служба не отключилась. Отказ в доступе — решение Windows (часть служб она
+# не отдаёт даже администратору): это «не разрешает», как у политик, и
+# проверка его потом не считает «не применённым». Любая другая причина —
+# ошибка, и она видна в итоге.
+function Test-AccessDeniedError {
+    param($Err)
+    $ex = $(if ($Err -is [System.Management.Automation.ErrorRecord]) { $Err.Exception } else { $Err })
+    while ($null -ne $ex) {
+        if ($ex -is [System.UnauthorizedAccessException]) { return $true }
+        if ($ex -is [System.ComponentModel.Win32Exception] -and $ex.NativeErrorCode -eq 5) { return $true }
+        $ex = $ex.InnerException
+    }
+    return $false
+}
+
+function Write-SvcFailure {
+    param($Def, $Err)
+    $msg = "$($Err.Exception.Message)"
+    if (Test-AccessDeniedError $Err) {
+        Write-Log ("   [-] {0} -- Windows не даёт менять эту службу" -f $Def.C)
+        $script:Blocked++
+        if ($null -ne $script:BlockedIds) { $script:BlockedIds[$Def.Id] = $true }
+        return
+    }
+    Write-Log ("   [!] {0} -- не отключилась: {1}" -f $Def.C, $msg)
+    $script:Failures++
+}
+
 function Apply-Def {
     param($d)
     # журнал отката не пишется — больше ничего не меняем (причина уже в журнале работы)
@@ -88,8 +116,12 @@ function Apply-Def {
         }
         'svc' {
             if ($DryRun) { Write-Log "   [тест] $($d.C) -- отключить"; return }
+            # «Службы нет» и «служба не отключилась» — разное. Раньше любая
+            # ошибка называлась «недоступна» и в ошибки не шла: отказ при
+            # отключении выглядел как отсутствие службы, а итог — успехом.
+            $s = Get-Service -Name $d.P -ErrorAction SilentlyContinue
+            if (-not $s) { Write-Log "   [-] $($d.C) -- нет на этой системе"; return }
             try {
-                $s = Get-Service -Name $d.P -ErrorAction Stop
                 if ($s.StartType -eq 'Disabled' -and $s.Status -ne 'Running') {
                     Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return
                 }
@@ -107,7 +139,8 @@ function Apply-Def {
                     throw
                 }
                 Write-Log "   [+] $($d.C) -- остановлена и отключена"; $script:Changes++
-            } catch { Write-Log "   [-] $($d.C) -- недоступна" }
+                if ($null -ne $script:UnblockedIds) { $script:UnblockedIds[$d.Id] = $true }
+            } catch { Write-SvcFailure $d $_ }
         }
         'svcopt' {
             $s = Get-Service -Name $d.P -ErrorAction SilentlyContinue
@@ -130,7 +163,8 @@ function Apply-Def {
                     throw
                 }
                 Write-Log "   [+] $($d.C) -- отключена"; $script:Changes++
-            } catch { Write-Log "   [-] $($d.C) -- не удалось" }
+                if ($null -ne $script:UnblockedIds) { $script:UnblockedIds[$d.Id] = $true }
+            } catch { Write-SvcFailure $d $_ }
         }
         'task' {
             $pp = Split-TaskPath $d.P
@@ -205,6 +239,20 @@ function Apply-Def {
     }
 }
 
+# Стоит ли параметр реестра так, как задумано: те же данные и тот же вид.
+# Раньше сравнивались только строки, и REG_SZ «1» на месте DWORD 1 шёл как
+# «применено», хотя Windows такой параметр не понимает.
+function Test-RegDefValue {
+    param($Def)
+    $raw = Get-RegRaw $Def.P $Def.N
+    if (-not $raw.ok) { return @{ ok = $false; actual = ("не читается: {0}" -f $raw.error) } }
+    if (-not $raw.exists) { return @{ ok = $false; actual = 'не задано' } }
+    $want = $(if ($Def.Type) { "$($Def.Type)" } else { 'DWord' })
+    $got = ConvertTo-RegComparable $raw.value $raw.kind
+    if ("$($raw.kind)" -ne $want) { return @{ ok = $false; actual = ("{0} (вид {1}, нужен {2})" -f $got, $raw.kind, $want) } }
+    return @{ ok = ($got -eq (ConvertTo-RegComparable $Def.V $want)); actual = $got }
+}
+
 # Настройки, которой на этой версии Windows не существует, не бывает
 # «не применённой»: помечаем na и не считаем ни в плюс, ни в минус.
 function Test-DefApplicable {
@@ -231,25 +279,15 @@ function Check-Def {
     switch ($d.T) {
         { $_ -in @('regif', 'regsvc') } {
             if (-not (Test-Path -LiteralPath $d.P)) { $ok = $true; $actual = 'нет на этой системе' }
-            else {
-                $v = Get-RegValue $d.P $d.N
-                $actual = if ($null -eq $v) { 'не задано' } else { "$v" }
-                $ok = ($null -ne $v) -and ("$v" -eq "$($d.V)")
-            }
+            else { $rc = Test-RegDefValue $d; $ok = $rc.ok; $actual = $rc.actual }
         }
         'regpol' {
             # Проверяем как обычный параметр. «Windows не разрешает» — это факт,
             # известный только после неудачной записи, и подставляется он в
             # -Audit по журналу отказов; здесь догадок не строим.
-            $v = Get-RegValue $d.P $d.N
-            $actual = if ($null -eq $v) { 'не задано' } else { "$v" }
-            $ok = ($null -ne $v) -and ("$v" -eq "$($d.V)")
+            $rc = Test-RegDefValue $d; $ok = $rc.ok; $actual = $rc.actual
         }
-        'reg' {
-            $v = Get-RegValue $d.P $d.N
-            $actual = if ($null -eq $v) { 'не задано' } else { "$v" }
-            $ok = ($null -ne $v) -and ("$v" -eq "$($d.V)")
-        }
+        'reg' { $rc = Test-RegDefValue $d; $ok = $rc.ok; $actual = $rc.actual }
         'svc' {
             $s = Get-Service -Name $d.P -ErrorAction SilentlyContinue
             if (-not $s) { $ok = $true; $actual = 'нет службы' }
@@ -346,7 +384,13 @@ $script:HostsDomains = @(
     'us4-v20.events.data.microsoft.com','us5-v20.events.data.microsoft.com',
     'au.vortex-win.data.microsoft.com','uk.vortex-win.data.microsoft.com','web.vortex.data.microsoft.com',
     'settings.data.microsoft.com','evrsettings-win.data.microsoft.com',
-    'activity.windows.com','licensing.mp.microsoft.com',
+    'activity.windows.com',
+    # licensing.mp.microsoft.com здесь больше нет: DNS ведёт его на общий
+    # вход frontdoor.licensing.commerce.microsoft.com, через который идут и
+    # лицензии приложений Магазина. Закрыв его, программа ломала бы платные
+    # приложения, а человек не связал бы это с настройкой приватности.
+    # В наблюдении за сетью это имя осталось (TelemetryDnsRegex): видно, что
+    # обращение было, но блокировка его не касается.
     # Найдено записью Windows 11 с программой на максимуме: эти адреса всё ещё
     # получали данные. bat.bing.com — рекламный счётчик Bing в Магазине;
     # nelreports.net — отчёты Edge и других программ о сетевых ошибках
@@ -354,6 +398,14 @@ $script:HostsDomains = @(
     # приложениям («Фотографии», VS Code). Без них всё работает как прежде.
     'bat.bing.com','deff.nelreports.net','aefd.nelreports.net','default.exp-tas.com')
 $script:HostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+
+# Имена, адреса которых делят с чужими службами: по IP их блокировать нельзя
+# (см. Get-TelemetryIpList). Проверено запросами DNS: watcab-узлы отвечают
+# адресом общего хранилища Azure, default.exp-tas.com — края e-msedge.
+$script:FwIpSharedRx = '\.blob\.core\.windows\.net$|^default\.exp-tas\.com$|^bat\.bing\.com$|\.nelreports\.net$|' +
+                       '^telemetry\.appex\.bing\.net$|officeapps\.live\.com$|\.data\.msn\.com$|' +
+                       '^activity\.windows\.com$|^choice\.microsoft\.com$|\.v0cdn\.net$|\.gammacdn\.net$|' +
+                       '^licensing\.mp\.microsoft\.com$'
 
 # Серверы, через которые компьютер регистрируется в каталоге устройств Microsoft
 # и сообщает номер устройства. login.live.com здесь нет и быть не должно: без
@@ -600,7 +652,18 @@ function Get-TelemetryIpList {
     param([int]$TimeoutMs = 10000)
     $set = @{}
     foreach ($ip in $script:TelemetryIps) { $set[$ip] = $true }
-    $names = @($script:HostsDomains | Select-Object -Unique)
+    # Правило брандмауэра закрывает адреса для ВСЕХ программ, а часть имён
+    # сбора живёт на общих узлах: ceuswatcab01.blob.core.windows.net — это
+    # общий узел Azure Storage, default.exp-tas.com — общий край e-msedge,
+    # nexus.officeapps.live.com — общий вход Office (проверено запросами DNS).
+    # Закрыв такой адрес, программа закрыла бы вместе с ним чужие службы —
+    # чьи-то файлы в облаке, обновления, лицензии. По IP эти имена не
+    # блокируются; в hosts они остаются, и там блокировка точная, по имени.
+    $shared = @($script:HostsDomains | Where-Object { $_ -match $script:FwIpSharedRx } | Select-Object -Unique)
+    $names = @($script:HostsDomains | Where-Object { $_ -notmatch $script:FwIpSharedRx } | Select-Object -Unique)
+    if ($shared.Count -gt 0) {
+        Write-Log ("   имён на общих узлах (их адреса делят чужие службы) не блокируется по IP: {0} -- в hosts они закрыты" -f $shared.Count)
+    }
     $pool = [runspacefactory]::CreateRunspacePool(1, 32)
     $pool.Open()
     $jobs = New-Object System.Collections.Generic.List[object]

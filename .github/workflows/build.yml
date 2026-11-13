@@ -13,13 +13,20 @@ jobs:
     name: Проверка и сборка
     runs-on: windows-latest
 
-    # нужно, чтобы шаг «Выложить в релиз» мог создать релиз и приложить файлы
+    # Сборка и проверки только читают репозиторий. Право писать (релиз) и секрет
+    # каталога winget есть только у отдельного задания «release» ниже, которое
+    # запускается лишь для тегов: раньше оно было у всего задания, включая
+    # запуск тестов и проверок.
     permissions:
-      contents: write
+      contents: read
 
     steps:
+      # Сторонние действия закреплены хешем коммита, а не тегом: тег можно
+      # переставить на другой коммит. Версия — в комментарии; обновлять — осознанно.
       - name: Получить исходники
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Сверить движок со сборкой из частей
         shell: pwsh
@@ -287,7 +294,7 @@ jobs:
           Get-ChildItem $dir | ForEach-Object { Write-Host $_.Name }
 
       - name: Сохранить сборку
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Win11Privacy
           path: |
@@ -296,19 +303,85 @@ jobs:
             check-engine.cmd
           retention-days: 30
 
-      - name: Выложить в релиз
+      # Для тега — то, что уйдёт в релиз, передаётся заданию «release» как есть.
+      # Описание релиза — раздел версии из CHANGELOG.md плюс как запустить и
+      # какие файлы приложены (собирает tools/release_notes.py на шаге «Сверить
+      # версии»); раньше у всех версий оно было одно и то же.
+      - name: Передать файлы релиза
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-files
+          path: |
+            Win11Privacy.exe
+            Win11-Privacy-Engine.ps1
+            SHA256SUMS.txt
+            winget-manifest.zip
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  # --------------------------------------------------------------------------- #
+  #  Публикация. Только для тегов, отдельным заданием: право писать в
+  #  репозиторий, секрет каталога winget и подпись происхождения (аттестация)
+  #  есть только здесь, а не у задания, где идут тесты. Файлы берутся из
+  #  задания «build» и сверяются с SHA256SUMS.txt перед публикацией.
+  #  Аттестация — не подпись Authenticode (её для exe пока нет: нужен
+  #  сертификат), но она привязывает файл к этому запуску сборки: проверить,
+  #  что он собран здесь из этого коммита, можно командой
+  #      gh attestation verify Win11Privacy.exe --repo <владелец>/Win11Privacy
+  # --------------------------------------------------------------------------- #
+  release:
+    name: Публикация релиза
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    permissions:
+      contents: write        # создать релиз и приложить файлы
+      id-token: write        # подпись происхождения (аттестация)
+      attestations: write
+
+    steps:
+      - name: Получить исходники
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Получить файлы релиза
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-files
+
+      - name: Сверить файлы с контрольными суммами
+        shell: pwsh
+        run: |
+          # между заданиями файлы лежат как артефакт: перед публикацией
+          # убеждаемся, что их хеши — те, что посчитала сборка
+          $bad = 0
+          foreach ($line in Get-Content SHA256SUMS.txt) {
+              if ($line -notmatch '^([0-9a-f]{64})\s+(\S+)$') { throw "непонятная строка в SHA256SUMS.txt: $line" }
+              $want = $Matches[1]; $file = $Matches[2]
+              $got = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLower()
+              if ($got -ne $want) { Write-Host "::error::хеш $file не совпал: $got вместо $want"; $bad++ }
+              else { Write-Host "$got  $file" }
+          }
+          if ($bad -gt 0) { throw "файлы релиза не совпали с контрольными суммами" }
+
+      - name: Подтвердить происхождение файлов
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            Win11Privacy.exe
+            Win11-Privacy-Engine.ps1
+
+      - name: Выложить в релиз
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           files: |
             Win11Privacy.exe
             Win11-Privacy-Engine.ps1
             SHA256SUMS.txt
             winget-manifest.zip
-          # Раньше описание у всех версий было одно и то же — только «как
-          # запустить», без слова о том, что изменилось. Теперь это раздел
-          # версии из CHANGELOG.md плюс как запустить и какие файлы приложены
-          # (собирает tools/release_notes.py на шаге «Сверить версии»).
           body_path: release-notes.md
 
       # Каталог winget за релизами не следит: на каждую версию нужен свой

@@ -75,12 +75,18 @@ function Use-ProfileHive {
     return $true
 }
 
+# $Only — вместо всех профилей взять ровно эти (по SID): так настройки
+# пользователя доходят до того, кто вошёл в Windows, когда пароль
+# администратора ввёл он, а работает движок от имени администратора.
 function Apply-ProfilesHives {
+    param([object[]]$Only)
     $defs = @($script:Defs | Where-Object { ($Modules -contains $_.M) -and ($SkipItems -notcontains $_.Id) -and
                                             ($script:RegTypes -contains $_.T) -and "$($_.P)" -like 'HKCU:\*' -and (Test-DefApplicable $_) })
     if ($defs.Count -eq 0) { return }
-    Write-Section 'Другие пользователи и профиль по умолчанию'
-    foreach ($pr in @(Get-OtherProfiles)) {
+    $profiles = $(if ($null -ne $Only) { @($Only) } else { @(Get-OtherProfiles) })
+    if ($profiles.Count -eq 0) { return }
+    if ($null -eq $Only) { Write-Section 'Другие пользователи и профиль по умолчанию' }
+    foreach ($pr in $profiles) {
         if ($DryRun) { Write-Log ("   [тест] профиль {0}: настроек {1}" -f $pr.name, $defs.Count); continue }
         if ($script:JournalFailed) { Write-Log ("   [!] профиль {0}: не меняется -- журнал отката сейчас не пишется" -f $pr.name); $script:Failures++; continue }
         $cnt = @{ changed = 0; failed = 0; refused = $false; notes = (New-Object System.Collections.Generic.List[string]) }
@@ -181,6 +187,8 @@ function Restore-Journal {
     $failed = New-Object System.Collections.Generic.List[object]
     $hiveGroups = [ordered]@{}
     $createdKeys = New-Object System.Collections.Generic.List[string]
+    # программы, чей файл настроек завела сама программа (appcfg, created)
+    $createdApps = New-Object 'System.Collections.Generic.HashSet[string]'
     # Записи, с которыми откат закончил (вернул или отбросил как негодные).
     # Из журнала уходят только они: что дописал другой запуск, пока шёл
     # откат, остаётся. Раньше журнал переписывался списком неудач целиком.
@@ -218,6 +226,7 @@ function Restore-Journal {
         if (-not $r.ok) { $failed.Add($e); Write-Log ("   [!] не вернулось: {0} -- {1}" -f $key, $r.error); continue }
         $null = $handled.Add((Get-JournalEntryId $e))
         if ($kind -eq 'reg' -and "$($e.createdKey)") { $createdKeys.Add("$($e.createdKey)") }
+        if ($kind -eq 'appcfg' -and $e.created) { $null = $createdApps.Add("$($e.app)") }
         if ($r.note) { Write-Log ("   [i] {0} -- {1}" -f $key, $r.note) }
         if ($kind -eq 'reg') { $ok++ } else { $svcBack++ }
     }
@@ -233,6 +242,8 @@ function Restore-Journal {
     }
     # ключи, которых не было до программы, — после всех значений
     if ($createdKeys.Count -gt 0) { Remove-CreatedKeys $createdKeys.ToArray() }
+    # файлы настроек сторонних программ, которые завела программа, — после всех ключей
+    foreach ($app in @($createdApps)) { Remove-CreatedAppFile $app }
     if ($malformed -gt 0) { $script:Failures++ }
     $bad = $failed.Count
     Write-Log ("   [+] возвращено параметров реестра: {0}" -f $ok)

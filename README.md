@@ -251,7 +251,7 @@ Because of that the engine is fully testable separately from the interface.
 
 | Command | What it does |
 |---|---|
-| `-Modules a,b,c` | apply the selected modules |
+| `-Modules a,b,c` | apply the selected modules; exit code 0 — everything went through, 2 — finished with errors (`-Revert` the same); `-Modules ...,cleanup -EmptyRecycleBin` also empties the recycle bin (never by default) |
 | `-DryRun` | show what would be done, changing nothing |
 | `-Detect` | identify the system, edition, installed programs, vendor tracking |
 | `-Audit` | read the real state of every setting, return the index |
@@ -387,6 +387,14 @@ The program is not signed with a certificate, so Windows will show a SmartScreen
 warning the first time you run the downloaded file: right-click the file →
 Properties → tick "Unblock". The administrator-rights prompt stays — it is needed
 because the program changes system settings.
+
+A release file can be checked in two ways. `SHA256SUMS.txt` in the release protects
+against a damaged download. The release build also carries a **build attestation**
+(GitHub provenance, not a certificate): `gh attestation verify Win11Privacy.exe
+--repo N0deZ3r0/Win11Privacy` confirms that the file was built by this repository's
+workflow from the tagged commit. Two builds of the same sources do not give the same
+exe hash (the in-box compiler is not deterministic), but the engine file is
+reproducible: `python tools/build_engine.py --check` rebuilds it from `engine/`.
 
 ---
 

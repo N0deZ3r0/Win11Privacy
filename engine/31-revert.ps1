@@ -91,9 +91,15 @@ if ($Revert) {
             try { [Environment]::SetEnvironmentVariable($d.P, $null, 'User'); Write-Log "   [+] переменная $($d.P) удалена" } catch { Write-Log ("   [!] переменная {0} не удалена -- {1}" -f $d.P, $_.Exception.Message); $script:Failures++ }
         }
     }
+    # Настройки VS Code и Firefox возвращает журнал — по одному ключу (выше).
+    # Раньше здесь поверх файла копировалась копия, снятая при первом
+    # применении: всё, что человек поменял в настройках после, пропадало
+    # (проверено на VM). Копии прежних версий не трогаем и не применяем —
+    # только говорим, где они лежат.
     foreach ($f in @((Get-VsCodeSettingsPath), (Get-FirefoxPoliciesPath))) {
         if ($f -and (Test-Path -LiteralPath "$f.win11privacy.bak")) {
-            try { Copy-Item -LiteralPath "$f.win11privacy.bak" -Destination $f -Force -ErrorAction Stop; Remove-Item -LiteralPath "$f.win11privacy.bak" -Force -ErrorAction SilentlyContinue; Write-Log "   [+] восстановлен: $f" } catch { Write-Log ("   [!] не восстановлен: {0} -- {1}" -f $f, $_.Exception.Message); $script:Failures++ }
+            Write-Log ("   [i] копия файла настроек от прежней версии программы оставлена как есть: {0}.win11privacy.bak" -f $f)
+            Write-Log '       Нужные из неё значения перенесите вручную: поверх нынешних настроек она не копируется.'
         }
     }
     # Политики Chrome, Office и Visual Studio раньше удалялись целыми ветками —
@@ -163,5 +169,7 @@ if ($Revert) {
     }
     Write-Log 'Готово. Перезагрузите компьютер.'
     Write-Log '###DONE###'
+    # 2 — откат прошёл не весь или журналу нельзя было верить (см. выше)
+    if ($script:Failures -gt 0) { exit 2 }
     exit 0
 }

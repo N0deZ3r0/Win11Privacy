@@ -222,7 +222,9 @@ function Stop-ServiceWait {
 # запустила бы — а потом и удалила — чужую. После регистрации задача
 # сверяется (та ли команда и от чьего имени) и без этого не запускается.
 function Test-OneShotTaskMine {
-    param([string]$TaskName, [string]$Exe, [string]$Arguments, [bool]$AsSystem)
+    # -UserSid — чья это задача, если не от имени самого движка (вошедший
+    # пользователь, см. Invoke-AsUser)
+    param([string]$TaskName, [string]$Exe, [string]$Arguments, [bool]$AsSystem, [string]$UserSid = '')
     $t = Get-ScheduledTask -TaskPath '\' -TaskName $TaskName -ErrorAction SilentlyContinue
     if (-not $t) { return $false }
     $acts = @($t.Actions)
@@ -232,7 +234,8 @@ function Test-OneShotTaskMine {
     # («СИСТЕМА» на русской), и по имени своя задача выглядела чужой.
     $sid = ConvertTo-SidValue "$($t.Principal.UserId)"
     if ($AsSystem) { return ($sid -eq 'S-1-5-18') }
-    return ($sid -ne '' -and $sid -eq ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value)
+    $want = $(if ($UserSid) { $UserSid } else { ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value })
+    return ($sid -ne '' -and $sid -eq $want)
 }
 
 function ConvertTo-SidValue {
@@ -249,7 +252,14 @@ function Invoke-OneShotTask {
     # cmd (-CmdLine) идут только постоянные строки программы, которым нужны
     # его «&&», «|», «>nul»; в них не пропускаются % (cmd раскрыл бы его как
     # переменную) и переводы строк (они разорвали бы команду).
-    param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem, [int]$Minutes = 2, [string]$Execute = '', [string]$Arguments = '')
+    # -StartSeconds — сколько ждать, что задача вообще начнётся: задача от имени
+    # пользователя, который сейчас не вошёл в Windows, не начнётся никогда, и
+    # ждать её всё отведённое время незачем
+    # -Account/-AccountSid — не от имени самого движка, а от имени другого
+    # пользователя (вошедшего в Windows, когда движок работает от имени
+    # администратора, чей пароль он ввёл)
+    param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem, [int]$Minutes = 2, [string]$Execute = '', [string]$Arguments = '',
+          [int]$StartSeconds = 0, [string]$Account = '', [string]$AccountSid = '')
     $TaskName = '{0} {1}' -f $TaskName, [guid]::NewGuid().ToString('N').Substring(0, 12)
     if ($Execute) { $exe = $Execute; $arg = $Arguments }
     else {
@@ -259,19 +269,25 @@ function Invoke-OneShotTask {
     $registered = $false
     try {
         $act = New-ScheduledTaskAction -Execute $exe -Argument $arg
+        # учётная запись — из маркера самого процесса, а не из USERNAME
         $who = $(if ($AsSystem) { New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest }
-                 else { New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited })
+                 else { New-ScheduledTaskPrincipal -UserId $(if ($Account) { $Account } else { $script:RunAccount }) -LogonType Interactive -RunLevel Limited })
         $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes $Minutes)
         # имя новое — задачу с ним никто завести не мог, поэтому без -Force
         Register-ScheduledTask -TaskPath '\' -TaskName $TaskName -Action $act -Principal $who -Settings $set -ErrorAction Stop | Out-Null
         $registered = $true
-        if (-not (Test-OneShotTaskMine $TaskName $exe $arg ([bool]$AsSystem))) { return $false }
+        if (-not (Test-OneShotTaskMine $TaskName $exe $arg ([bool]$AsSystem) $AccountSid)) { return $false }
         Start-ScheduledTask -TaskPath '\' -TaskName $TaskName -ErrorAction Stop
         # 267011 — ещё не запускалась, 267009 — выполняется
         $until = (Get-Date).AddSeconds(60 * $Minutes + 15)
+        $startBy = $(if ($StartSeconds -gt 0) { (Get-Date).AddSeconds($StartSeconds) } else { $until })
         do {
             Start-Sleep -Milliseconds 400
             $res = (Get-ScheduledTaskInfo -TaskPath '\' -TaskName $TaskName -ErrorAction SilentlyContinue).LastTaskResult
+            if ($res -eq 267011 -and (Get-Date) -ge $startBy) {
+                Write-Log '   [!] короткая задача не начала работу: пользователь, от имени которого она идёт, сейчас не вошёл в Windows'
+                return $false
+            }
         } while (($res -eq 267009 -or $res -eq 267011) -and (Get-Date) -lt $until)
         # Успех — только если команда задачи завершилась с кодом 0. Раньше «да»
         # возвращалось, едва задача запустилась, и сбой команды выглядел успехом.
@@ -296,6 +312,60 @@ function Invoke-OneShotTask {
                 $script:Failures++
             }
         }
+    }
+}
+
+# --------------------------------------------------------------------------- #
+#  Действия в папках самого пользователя — от его имени и без повышения.
+#  Профиль (TEMP, AppData) открыт на запись любой программе этого
+#  пользователя, а движок работает с правами администратора. Удаление или
+#  запись там по пути с правами администратора нельзя привязать к тому, что
+#  проверено: путь можно подменить между проверкой и действием. Поэтому
+#  такие действия делает короткая задача от имени того же пользователя с
+#  обычными правами — она может ровно то, что он может и сам.
+#  Сценарий — постоянный текст движка; он и его данные кладутся в защищённую
+#  папку (читать их пользователь может, менять — нет). Итог задача пишет в
+#  свою временную папку, и движок берёт из него только числа и строки.
+#  Ответ: ok — задача отработала и оставила итог; result — разобранный итог.
+# --------------------------------------------------------------------------- #
+function Invoke-AsUser {
+    param([string]$Name, [string]$Script, $Data, [int]$Minutes = 5)
+    if (-not (Test-Admin)) { return @{ ok = $false; result = $null; why = 'нужны права администратора' } }
+    if (-not (Assert-SafeRoot)) { return @{ ok = $false; result = $null; why = 'папка ProgramData\Win11Privacy не защищена' } }
+    # Чьи папки: того, кто сидит за компьютером. Если пароль администратора
+    # ввёл обычный пользователь, это он, а не учётная запись движка.
+    $account = $script:RunAccount; $accountSid = $script:UserSid; $profileDir = $script:UserProfileDir
+    $other = Get-OtherSessionUser
+    if ($other) {
+        if (-not $other.name -or -not $other.profile) { return @{ ok = $false; result = $null; why = 'профиль вошедшего в Windows пользователя определить не удалось' } }
+        $account = $other.name; $accountSid = $other.sid; $profileDir = $other.profile
+    }
+    if (-not $profileDir -or -not $account) { return @{ ok = $false; result = $null; why = 'папку профиля пользователя Windows не назвала' } }
+    $id = [guid]::NewGuid().ToString('N')
+    $sf = Join-Path $script:SafeRoot ('asuser-' + $id + '.ps1')
+    $inf = Join-Path $script:SafeRoot ('asuser-' + $id + '.json')
+    $rf = Join-Path $profileDir ('AppData\Local\Temp\w11p-asuser-' + $id + '.json')
+    try {
+        Set-Content -LiteralPath $sf -Value $Script -Encoding UTF8 -ErrorAction Stop
+        Set-Content -LiteralPath $inf -Value (ConvertTo-Json -InputObject $Data -Depth 6 -Compress) -Encoding UTF8 -ErrorAction Stop
+        $argLine = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -InputFile "{1}" -ResultFile "{2}"' -f $sf, $inf, $rf
+        $null = Invoke-OneShotTask ('Win11Privacy ' + $Name) -Execute $script:PsExe -Arguments $argLine -Minutes $Minutes -StartSeconds 30 -Account $account -AccountSid $accountSid
+        if (-not (Test-Path -LiteralPath $rf -PathType Leaf)) { return @{ ok = $false; result = $null; why = 'задача от имени пользователя не оставила итога' } }
+        if ((Get-Item -LiteralPath $rf -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            return @{ ok = $false; result = $null; why = 'на месте итога задачи лежит ссылка' }
+        }
+        $txt = Read-TextShared $rf
+        $res = $null
+        try { $res = $txt | ConvertFrom-Json -ErrorAction Stop } catch { }
+        if ($null -eq $res) { return @{ ok = $false; result = $null; why = 'итог задачи от имени пользователя не читается' } }
+        return @{ ok = $true; result = $res; why = '' }
+    } catch {
+        return @{ ok = $false; result = $null; why = $_.Exception.Message }
+    } finally {
+        foreach ($f in @($sf, $inf)) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+        # итог лежит в папке пользователя: удаляется сама запись (File.Delete
+        # не идёт по ссылке)
+        try { if (Test-Path -LiteralPath $rf) { [IO.File]::Delete($rf) } } catch { }
     }
 }
 
@@ -425,7 +495,7 @@ function Invoke-GdidWipe {
     # 3. кэш платформы подключённых устройств: в нём регистрация в каталоге.
     # Чистка удаляет «что сможет» и называет освобождённый объём — это ещё не
     # значит, что кэш пуст. Поэтому после неё проверяется, что в нём осталось.
-    $null = Clear-FolderContents $script:CdpCache 'кэш платформы подключённых устройств'
+    $null = Clear-Folder $script:CdpCache 'кэш платформы подключённых устройств'
     if (Test-Path -LiteralPath $script:CdpCache) {
         $cev = $null
         $cdpLeft = @(Get-ChildItem -LiteralPath $script:CdpCache -Force -Recurse -File -ErrorAction SilentlyContinue -ErrorVariable cev)

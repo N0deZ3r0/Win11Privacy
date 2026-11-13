@@ -191,7 +191,7 @@ namespace Win11Privacy
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = PowerShellExe(); psi.Arguments = args;
             psi.UseShellExecute = false; psi.CreateNoWindow = true;
-            psi.WorkingDirectory = Path.GetTempPath();
+            EngineFile.Harden(psi);             // модули, ProgramData, PATH — из системы
             psi.RedirectStandardOutput = true; psi.RedirectStandardError = true;
             psi.StandardOutputEncoding = Encoding.UTF8; psi.StandardErrorEncoding = Encoding.UTF8;
             return psi;
@@ -238,7 +238,8 @@ namespace Win11Privacy
             Action<int> onExit = delegate(int code)
             {
                 bool stopped = run.Cancelled;
-                SettleBusy(stopped ? L.T("Прервано.") : (code == 0 ? L.T("Готово.") : L.T("Завершено с ошибкой.")));
+                SettleBusy(stopped ? L.T("Прервано.") : (code == 0 ? L.T("Готово.") :
+                           code == 2 ? L.T("Готово, с ошибками.") : L.T("Завершено с ошибкой.")));
                 LogLine(new string('─', 58), Theme.TextFaint);
                 if (stopped)
                 {
@@ -246,6 +247,11 @@ namespace Win11Privacy
                     if (run.Writes) LogLine(L.T("Что движок успел изменить — записано на странице «Изменения»."), Theme.TextDim);
                 }
                 else if (code == 0) LogLine(L.T("Готово."), Theme.Text);
+                else if (code == 2)
+                {
+                    // движок дошёл до конца, но что-то не удалось — сказано выше
+                    LogLine(L.T("Готово, но не всё прошло: что именно — в строках [!] выше."), Theme.Err);
+                }
                 else if (code == 3)
                 {
                     // движок сам объяснил причину строкой выше

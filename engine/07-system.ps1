@@ -14,6 +14,72 @@ function Get-Edition {
 
 function Test-Exe { param([string[]]$Paths) foreach ($p in $Paths) { if ($p -and (Test-Path -LiteralPath $p)) { return $true } } return $false }
 
+# --------------------------------------------------------------------------- #
+#  КТО СИДИТ ЗА КОМПЬЮТЕРОМ. Пароль администратора может ввести и обычный
+#  пользователь — тогда повышенный движок работает под администратором, а
+#  человек за компьютером другой. Настройки HKCU и задачи стража уходили при
+#  этом в профиль администратора: человек их не получал, а проверка читала
+#  тот же HKCU и показывала «применено».
+#  Владелец explorer.exe в этом сеансе — тот, кто вошёл в Windows.
+#  @{ sid; name; profile; isMe } или $null, если определить не удалось.
+# --------------------------------------------------------------------------- #
+$script:SessionUserCache = $null
+function Get-SessionUser {
+    if ($null -ne $script:SessionUserCache) { return $script:SessionUserCache.v }
+    $found = $null
+    try {
+        foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop)) {
+            $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue
+            $sid = $(if ($o) { "$($o.Sid)" } else { '' })
+            if ($sid -notlike 'S-1-5-21-*') { continue }
+            $name = ''
+            try { $name = (New-Object Security.Principal.SecurityIdentifier($sid)).Translate([Security.Principal.NTAccount]).Value } catch { }
+            $prof = Get-MachinePath ('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $sid) 'ProfileImagePath' $null
+            $found = @{ sid = $sid; name = $name; profile = $prof; isMe = ($sid -eq $script:UserSid) }
+            if ($found.isMe) { break }     # свой сеанс важнее чужого
+        }
+    } catch { }
+    $script:SessionUserCache = @{ v = $found }
+    return $found
+}
+
+# Повышение под другой учётной записью: за компьютером один человек, а движок
+# работает от имени другого. Пусто — всё в порядке (или определить не вышло).
+function Get-OtherSessionUser {
+    $s = Get-SessionUser
+    if ($null -eq $s -or $s.isMe) { return $null }
+    return $s
+}
+
+# Задачи стража и слежения идут с RunLevel Highest — то есть с повышением, а
+# оно есть только у администратора. Поэтому ставятся они на учётную запись
+# самого движка, а не на обычного пользователя, который вошёл в Windows: на
+# его входе повышения у них не было бы, и они молча ничего бы не делали.
+# Честно сказать об этом надо там, где человек их включает.
+function Write-SessionUserNote {
+    $s = Get-OtherSessionUser
+    if (-not $s) { return }
+    Write-Log ("   [i] в Windows вошёл {0}, а программа работает от имени {1}." -f $s.name, $script:RunAccount)
+    Write-Log ("       Задача ставится на {0}: повышение есть только у администратора, и она сработает, когда он войдёт в Windows." -f $script:RunAccount)
+    Write-Log '       Настройки пользователя (HKCU) дойдут и до вошедшего, но следить за ними в его сеансе эта задача не будет.'
+}
+
+# Папки «пользователя» — это папки того, кто сидит за компьютером. Если движок
+# работает от имени другого администратора, переменные APPDATA, TEMP и прочие
+# указывают на профиль администратора, а чистить и править надо профиль вошедшего:
+# именно он просил. Путь внутри профиля самого движка переносится в профиль
+# вошедшего; всё остальное остаётся как есть.
+function Convert-ToSessionPath {
+    param([string]$Path)
+    $s = Get-OtherSessionUser
+    if (-not $s -or -not $s.profile -or -not $script:UserProfileDir) { return $Path }
+    $own = $script:UserProfileDir.TrimEnd('\') + '\'
+    if ($Path.StartsWith($own, [StringComparison]::OrdinalIgnoreCase)) {
+        return ($s.profile.TrimEnd('\') + '\' + $Path.Substring($own.Length))
+    }
+    return $Path
+}
+
 function Detect-Apps {
     $pf   = $env:ProgramFiles
     $pf86 = ${env:ProgramFiles(x86)}

@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
+using Microsoft.Win32;
 
 namespace Win11Privacy
 {
@@ -223,7 +224,7 @@ namespace Win11Privacy
         // «нет прав», а что-то не так с папкой. Тогда движок не запускается.
         private static string Dir()
         {
-            string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Win11Privacy");
+            string root = Path.Combine(ProgramDataDir(), "Win11Privacy");
             string safe = Path.Combine(root, "bin");
             try
             {
@@ -242,6 +243,70 @@ namespace Win11Privacy
                 throw new InvalidOperationException(L.T("Не удалось подготовить защищённую папку для движка:\n") + safe + "\n\n" + ex.Message +
                                                     L.T("\n\nБез неё движок не запускается: из незащищённой папки его могла бы подменить любая программа. Перезапустите компьютер и попробуйте снова; если не поможет — проверьте, не блокирует ли антивирус папку ProgramData\\Win11Privacy."), ex);
             }
+        }
+
+        // --- окружение: из системы, а не из переменных среды -------------- //
+        //  Переменные среды повышенного процесса складываются и из
+        //  HKCU\Environment, а туда пишет любая программа пользователя без
+        //  прав администратора. ProgramData, указанная там на свою папку,
+        //  увела бы защищённую папку движка туда, где его можно подменить;
+        //  PSModulePath — модули PowerShell, которые движок загружает с
+        //  правами администратора. Пути берутся у Windows и из HKLM.
+        internal static string SystemDrive() { return Path.GetPathRoot(Environment.SystemDirectory).TrimEnd('\\'); }
+
+        private static string ReplaceNoCase(string s, string what, string with)
+        {
+            int i;
+            while ((i = s.IndexOf(what, StringComparison.OrdinalIgnoreCase)) >= 0)
+                s = s.Substring(0, i) + with + s.Substring(i + what.Length);
+            return s;
+        }
+
+        // Путь из HKLM; %SystemDrive% и %SystemRoot% раскрываются по самой
+        // системе, другие переменные не годятся — тогда запасной путь.
+        internal static string MachinePath(string key, string name, string fallback)
+        {
+            try
+            {
+                using (RegistryKey b = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+                using (RegistryKey k = b.OpenSubKey(key, false))
+                {
+                    string v = k == null ? null : k.GetValue(name, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
+                    if (!string.IsNullOrEmpty(v))
+                    {
+                        v = ReplaceNoCase(v, "%SystemDrive%", SystemDrive());
+                        v = ReplaceNoCase(v, "%SystemRoot%", Path.GetDirectoryName(Environment.SystemDirectory));
+                        if (v.IndexOf('%') < 0 && Path.IsPathRooted(v)) return v.TrimEnd('\\');
+                    }
+                }
+            }
+            catch { }
+            return fallback;
+        }
+
+        internal static string ProgramDataDir()
+        {
+            return MachinePath(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList", "ProgramData", SystemDrive() + "\\ProgramData");
+        }
+
+        // Окружение запуска движка. Движок первой же строкой переустанавливает
+        // всё это сам (у задач стража окна нет), здесь — для самого PowerShell
+        // с первого мгновения и для рабочей папки, которая была во временной
+        // папке пользователя.
+        internal static void Harden(ProcessStartInfo psi)
+        {
+            string sys = Environment.SystemDirectory;
+            string win = Path.GetDirectoryName(sys);
+            string pf = MachinePath(@"SOFTWARE\Microsoft\Windows\CurrentVersion", "ProgramFilesDir", SystemDrive() + "\\Program Files");
+            string pshome = Path.Combine(sys, "WindowsPowerShell\\v1.0");
+            psi.EnvironmentVariables["PSModulePath"] = Path.Combine(pshome, "Modules") + ";" + Path.Combine(pf, "WindowsPowerShell\\Modules");
+            psi.EnvironmentVariables["SystemRoot"] = win;
+            psi.EnvironmentVariables["windir"] = win;
+            psi.EnvironmentVariables["SystemDrive"] = SystemDrive();
+            psi.EnvironmentVariables["ProgramData"] = ProgramDataDir();
+            psi.EnvironmentVariables["ComSpec"] = Path.Combine(sys, "cmd.exe");
+            psi.EnvironmentVariables["PATH"] = sys + ";" + win + ";" + Path.Combine(sys, "Wbem") + ";" + pshome + "\\";
+            psi.WorkingDirectory = sys;
         }
 
         // --- PowerShell: только системный, по полному пути ------------------ //

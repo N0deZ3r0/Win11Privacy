@@ -88,10 +88,16 @@ function Ensure-Backup {
     if (-not $NoBackup) {
         Write-Section 'Резервная копия реестра'
         $root = if ($BackupRoot) { $BackupRoot } else { [Environment]::GetFolderPath('Desktop') }
-        $dir = Join-Path $root ('Win11Privacy-Backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        # Папка лежит там, куда пишет любая программа пользователя, а reg.exe
+        # пишет в неё с правами администратора. Имя с случайным хвостом
+        # заранее не угадать — раньше по метке времени с точностью до секунды
+        # можно было подложить на её место ссылку на чужую папку.
+        $dir = Join-Path $root ('Win11Privacy-Backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
         $keys = @($script:Defs | Where-Object { $script:RegTypes -contains $_.T -and $Modules -contains $_.M } | ForEach-Object { $_.P } | Select-Object -Unique)
         try {
-            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            if (Test-Path -LiteralPath $dir) { throw 'папка копии уже есть -- её завёл не этот запуск' }
+            $null = [IO.Directory]::CreateDirectory($dir)
+            if ((Get-Item -LiteralPath $dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'на месте папки копии оказалась ссылка' }
             $saved = 0
             $missed = @()
             foreach ($k in $keys) {
@@ -124,7 +130,10 @@ function Ensure-Backup {
                     Write-Log ("   [-] копия не подписана ({0}) -- вернуть её кнопкой программы будет нельзя, только вручную" -f $_.Exception.Message)
                 }
             } else {
-                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+                # Remove-Item -Recurse в PowerShell 5.1 идёт по ссылкам: папку
+                # убираем тем же обходом без ссылок, что и при чистке
+                $rmStat = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+                Remove-TreeNoFollow $dir $rmStat
                 Write-Log '   [-] сохранять нечего: ни одна ветка не выгрузилась'
             }
             if ($missed.Count -gt 0) {

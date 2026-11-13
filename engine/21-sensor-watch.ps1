@@ -12,6 +12,7 @@ $script:SensorCapNames = @{
 if ($InstallSensorGuard) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Слежение за датчиками'
+    Write-SessionUserNote
     try {
         Ensure-DataDir
         $engineDst = Install-TaskEngine
@@ -26,7 +27,7 @@ if ($InstallSensorGuard) {
         $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -SensorGuard' + $script:DataArg)
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 3650)
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-        $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+        $principal = New-ScheduledTaskPrincipal -UserId $script:RunAccount -LogonType Interactive -RunLevel Highest
         Register-ScheduledTask -TaskName $script:SensorTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
         Write-Log '   [+] слежение включено: сверка журнала каждые 30 минут'
         Write-Log '   [+] новая программа получит доступ к камере, микрофону или геолокации — придёт уведомление'
@@ -40,6 +41,7 @@ if ($InstallSensorGuard) {
 if ($InstallNetGuard) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Слежение за сетью'
+    Write-SessionUserNote
     try {
         Ensure-DataDir
         $engineDst = Install-TaskEngine
@@ -57,7 +59,7 @@ if ($InstallNetGuard) {
         $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $engineDst + '" -NetGuard' + $script:DataArg)
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Days 3650)
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-        $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+        $principal = New-ScheduledTaskPrincipal -UserId $script:RunAccount -LogonType Interactive -RunLevel Highest
         Register-ScheduledTask -TaskName $script:NetTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
         Write-Log '   [+] слежение включено: сверка журнала брандмауэра каждые 15 минут'
         Write-Log ("   [+] известных программ: {0}; первый час слежение учится и молчит" -f $known.Count)

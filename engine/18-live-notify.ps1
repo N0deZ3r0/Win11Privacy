@@ -7,6 +7,7 @@ $script:WatcherTask = 'Win11Privacy Watcher'
 if ($InstallWatcher) {
     if (-not (Test-Admin)) { Write-Log 'Нужны права администратора.'; Write-Log '###DONE###'; exit 1 }
     Write-Section 'Живые уведомления'
+    Write-SessionUserNote
     try {
         Ensure-DataDir
         $engineDst = Install-TaskEngine
@@ -20,7 +21,7 @@ if ($InstallWatcher) {
         $trigger.Enabled = $true
         $trigger.Delay = 'PT5S'
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 3)
-        $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+        $principal = New-ScheduledTaskPrincipal -UserId $script:RunAccount -LogonType Interactive -RunLevel Highest
         Register-ScheduledTask -TaskName $script:WatcherTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
         Write-Log '   [+] уведомления включены: всплывашка при перехвате отправки телеметрии'
         Write-Log '   [+] чтобы не мешать, одно уведомление не чаще чем раз в 10 минут'

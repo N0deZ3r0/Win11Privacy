@@ -119,9 +119,23 @@ param(
     [switch]$AllProfiles,
     # --- проверка утечек: доходит ли соединение до серверов сбора ---
     [switch]$LeakTest,
+    # --- чистка: корзину очищать только по отдельному согласию ---
+    [switch]$EmptyRecycleBin,
     [switch]$GdidReissue,
     [switch]$GdidRestore
 )
+
+# --------------------------------------------------------------------------- #
+#  Модули PowerShell — только системные, и это первая строка после param.
+#  Движок вызывает команды из модулей (ScheduledTasks, NetSecurity, Appx...),
+#  и PowerShell подгружает их по PSModulePath, где первой стоит папка
+#  «Документы\WindowsPowerShell\Modules». Туда пишет любая программа
+#  пользователя без прав администратора, а движок и задачи стража работают с
+#  этими правами: модуль с тем же именем выполнился бы вместо системного.
+#  До этой строки PowerShell не загружает ни одного модуля (проверено), а
+#  здесь нет ни одной команды — только присваивание: Join-Path сам из модуля.
+# --------------------------------------------------------------------------- #
+$env:PSModulePath = "$PSHOME\Modules"
 
 $ErrorActionPreference = 'Continue'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
@@ -142,6 +156,82 @@ if ($script:LangMode -ne 'FullLanguage') {
     Write-Host ('###JSON### {"error":"languageMode","languageMode":"' + $script:LangMode + '"}')
     Write-Host '###DONE###'
     exit 3
+}
+
+# --------------------------------------------------------------------------- #
+#  Окружение — из самой системы, а не из переменных среды. Переменные среды
+#  повышенного процесса складываются и из HKCU\Environment, а туда пишет любая
+#  программа пользователя: ProgramData, указанная на свою папку, увела бы
+#  журнал отката и ключ подписи туда, где их можно подменить, а TEMP или
+#  LOCALAPPDATA, указанные на системную папку, — чистку. Системная папка
+#  берётся у Windows (GetSystemDirectory), ProgramData и Program Files — из
+#  HKLM, папка профиля — из HKLM\...\ProfileList по SID этого процесса.
+#  Пути профиля дальше строятся от неё: перенесённые через «Документы →
+#  Свойства» папки программа не трогает.
+# --------------------------------------------------------------------------- #
+$script:SysDir   = [Environment]::SystemDirectory
+$script:WinDir   = [IO.Path]::GetDirectoryName($script:SysDir)
+$script:SysDrive = [IO.Path]::GetPathRoot($script:SysDir).TrimEnd('\')
+
+function Get-MachinePath {
+    param([string]$Key, [string]$Name, [string]$Default)
+    try {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+        try {
+            $k = $base.OpenSubKey($Key, $false)
+            if ($null -ne $k) {
+                $v = ''
+                try { $v = [string]$k.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) } finally { $k.Close() }
+                # раскрываем сами и только системные имена: %USERPROFILE% и
+                # прочие пользовательские переменные здесь не годятся
+                $v = $v.Replace('%SystemDrive%', $script:SysDrive).Replace('%SYSTEMDRIVE%', $script:SysDrive).Replace('%systemdrive%', $script:SysDrive)
+                $v = $v.Replace('%SystemRoot%', $script:WinDir).Replace('%SYSTEMROOT%', $script:WinDir).Replace('%systemroot%', $script:WinDir)
+                if ($v -and $v.IndexOf('%') -lt 0 -and [IO.Path]::IsPathRooted($v)) { return $v.TrimEnd('\') }
+            }
+        } finally { $base.Close() }
+    } catch { }
+    return $Default
+}
+
+$script:ProgramDataDir = Get-MachinePath 'SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' 'ProgramData' ($script:SysDrive + '\ProgramData')
+$script:ProgramFilesDir = Get-MachinePath 'SOFTWARE\Microsoft\Windows\CurrentVersion' 'ProgramFilesDir' ($script:SysDrive + '\Program Files')
+$script:ProgramFilesX86Dir = Get-MachinePath 'SOFTWARE\Microsoft\Windows\CurrentVersion' 'ProgramFilesDir (x86)' ($script:SysDrive + '\Program Files (x86)')
+$script:UserSid = ''
+# DOMAIN\имя — из маркера процесса: им ставятся задачи планировщика
+$script:RunAccount = ''
+try {
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $script:UserSid = $me.User.Value
+    $script:RunAccount = $me.Name
+} catch { }
+# Папка профиля: $null — узнать у системы не вышло, и тогда пути профиля
+# (чистка, VS Code, следы) не трогаются вовсе
+$script:UserProfileDir = $null
+if ($script:UserSid) {
+    $script:UserProfileDir = Get-MachinePath ('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $script:UserSid) 'ProfileImagePath' $null
+}
+
+$env:SystemRoot    = $script:WinDir
+$env:windir        = $script:WinDir
+$env:SystemDrive   = $script:SysDrive
+$env:ComSpec       = $script:SysDir + '\cmd.exe'
+$env:ProgramData   = $script:ProgramDataDir
+$env:ALLUSERSPROFILE = $script:ProgramDataDir
+$env:ProgramFiles  = $script:ProgramFilesDir
+$env:ProgramW6432  = $script:ProgramFilesDir
+${env:ProgramFiles(x86)} = $script:ProgramFilesX86Dir
+$env:CommonProgramFiles = $script:ProgramFilesDir + '\Common Files'
+${env:CommonProgramFiles(x86)} = $script:ProgramFilesX86Dir + '\Common Files'
+# Утилиты движка (reg, auditpol, ipconfig, cmdkey, schtasks) — системные
+$env:PATH = ($script:SysDir + ';' + $script:WinDir + ';' + $script:SysDir + '\Wbem;' + $script:SysDir + '\WindowsPowerShell\v1.0\')
+# Program Files пишут только администраторы — там модули, поставленные для всех
+$env:PSModulePath = "$PSHOME\Modules;" + $script:ProgramFilesDir + '\WindowsPowerShell\Modules'
+if ($script:UserProfileDir) {
+    $env:USERPROFILE  = $script:UserProfileDir
+    $env:APPDATA      = $script:UserProfileDir + '\AppData\Roaming'
+    $env:LOCALAPPDATA = $script:UserProfileDir + '\AppData\Local'
+    $env:TEMP         = $script:UserProfileDir + '\AppData\Local\Temp'
+    $env:TMP          = $env:TEMP
 }
 
 # --------------------------------------------------------------------------- #

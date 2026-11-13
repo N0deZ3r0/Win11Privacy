@@ -59,12 +59,16 @@ if ($SelfTest) {
     $root = if ($BackupRoot) { $BackupRoot } else { [Environment]::GetFolderPath('Desktop') }
     Write-Log ("   папка для копий       : {0}" -f $root)
     try {
-        $probeDir = Join-Path $root ('Win11Privacy-SelfTest-' + (Get-Date -Format 'HHmmss'))
-        New-Item -ItemType Directory -Path $probeDir -Force -ErrorAction Stop | Out-Null
+        # имя с случайным хвостом и без Remove-Item -Recurse: папка на рабочем
+        # столе, куда пишет любая программа пользователя (см. Ensure-Backup)
+        $probeDir = Join-Path $root ('Win11Privacy-SelfTest-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        $null = [IO.Directory]::CreateDirectory($probeDir)
+        if ((Get-Item -LiteralPath $probeDir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'на месте пробной папки оказалась ссылка' }
         $probeFile = Join-Path $probeDir 'probe.reg'
         $null = & reg.exe export 'HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo' "$probeFile" /y 2>&1
         $r.backup = (Test-Path -LiteralPath $probeDir)
-        Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue
+        $rmProbe = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+        Remove-TreeNoFollow $probeDir $rmProbe
     } catch { Write-Log ("   [!] {0}" -f $_.Exception.Message) }
     Write-Log ("   [{0}] создание папки резервной копии" -f $(if ($r.backup) { '+' } else { '!' }))
 

@@ -40,6 +40,7 @@ namespace Win11Privacy
             Versions();
             Commands();
             Arguments();
+            Profiles();
             Verdict();
             Answers();
             Language();
@@ -118,6 +119,33 @@ namespace Win11Privacy
             Check("путь с пробелом берётся в кавычки", q == @"--profile ""C:\My Files\p.json"" --silent", "получено: " + q);
             Check("пустой аргумент не пропадает", MainForm.QuoteArgs(new[] { "a", "", "b" }) == "a \"\" b");
             Check("без аргументов — пустая строка", MainForm.QuoteArgs(new string[0]) == "");
+        }
+
+        // --- тихий режим: что из файла профиля попадёт в командную строку ---- //
+        //  Имена модулей и пунктов шли в неё как есть: «telemetry -Revert» в
+        //  подложенном файле добавил бы к запуску другой ключ движка.
+        private static string SilentArgs(string json)
+        {
+            string why;
+            return MainForm.SilentProfileArgs(Json.ParseObject(json), out why);
+        }
+
+        private static void Profiles()
+        {
+            Console.WriteLine();
+            Console.WriteLine("Профиль тихого режима");
+            Check("обычный профиль собирается",
+                  SilentArgs("{\"modules\":[\"telemetry\",\"app_vscode\"],\"skip\":[\"telemetry#3\"]}") ==
+                  "-Modules telemetry,app_vscode -SkipItems telemetry#3");
+            Check("ключ движка в имени модуля — отказ", SilentArgs("{\"modules\":[\"telemetry -Revert\"]}") == null);
+            Check("ключ движка в номере пункта — отказ",
+                  SilentArgs("{\"modules\":[\"telemetry\"],\"skip\":[\"a#1 -PurgeData\"]}") == null);
+            Check("кавычка в имени модуля — отказ", SilentArgs("{\"modules\":[\"tele\\\"metry\"]}") == null);
+            Check("пустой список модулей — отказ", SilentArgs("{\"modules\":[]}") == null);
+            Check("повтор модуля не удваивается",
+                  SilentArgs("{\"modules\":[\"ads\",\"ads\"]}") == "-Modules ads");
+            Check("выключенная копия даёт -NoBackup",
+                  SilentArgs("{\"modules\":[\"ads\"],\"backup\":false}") == "-Modules ads -NoBackup");
         }
 
         // --- вердикт о версии на GitHub -------------------------------------- //

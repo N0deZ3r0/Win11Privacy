@@ -180,7 +180,7 @@ namespace Win11Privacy
         private void ApplyPreset(string kind)
         {
             string[] baseMods = { "telemetry", "errors", "activity", "input", "edge", "delivery",
-                                  "ads", "search", "copilot", "ai", "cleanup", "apppriv", "network" };
+                                  "ads", "search", "copilot", "ai", "apppriv", "network" };   // чистку наборы не включают: стёртое не вернуть
             string[] strictAdd = { "widgets", "location", "onedrive", "cloudsync", "defender", "services", "hosts" };
             int n = 0;
             _presetBusy = true;

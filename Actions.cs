@@ -29,7 +29,19 @@ namespace Win11Privacy
                 warn += L.T("\n\nПродолжить?");
                 if (MessageBox.Show(this, warn, L.T("Подтверждение"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             }
+            // Корзина — отдельный вопрос: из неё уже ничего не вернуть, а
+            // раньше она очищалась заодно с кэшами, стоило отметить чистку.
+            bool bin = false;
+            if (!dry && mods.Contains("cleanup"))
+            {
+                bin = MessageBox.Show(this,
+                    L.T("Очистить и корзину?\n\nИз корзины файлы уже не вернуть — ни кнопкой «Откат», ни как-то иначе.\n") +
+                    L.T("Остальная чистка (кэши, временные файлы, дампы) идёт в любом случае; во временной папке файлы моложе суток не трогаются."),
+                    L.T("Чистка: корзина"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+            }
             string extra = "-Modules " + string.Join(",", mods.ToArray());
+            if (bin) extra += " -EmptyRecycleBin";
             List<string> skip = SkippedItems();
             if (skip.Count > 0) extra += " -SkipItems " + string.Join(",", skip.ToArray());
             if (dry) extra += " -DryRun";
