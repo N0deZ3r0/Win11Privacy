@@ -1,6 +1,7 @@
-﻿# Pester: точечные проверки шести мест из ревью (запись реестра и её сверка,
+﻿# Pester: точечные проверки мест из ревью (запись реестра и её сверка,
 # исключение после записи, набор адресов брандмауэра, одна подмена hosts,
-# откат отложенного запуска службы, «ключа нет» и «нет доступа»).
+# откат отложенного запуска службы, «ключа нет» и «нет доступа», уборка
+# самопроверки в реестре, данные программы и папка -DataRoot).
 # Работает и со встроенным в Windows PowerShell 5.1 Pester 3.4, и с Pester 5
 # на сборке GitHub: проверки — через throw, без Should, всё готовится в
 # BeforeAll. Опасное подменено: реестр — только пробный ключ
@@ -225,6 +226,76 @@ Describe 'Движок Win11Privacy: точечные проверки' {
             # его отсутствующий подключ — да, но выше закрытого родителя не поднимается
             $top = Get-TopMissingKey 'HKLM:\SECURITY\Policy\W11PPester\Sub'
             Assert-True ($top -eq 'HKLM:\SECURITY\Policy\W11PPester') ("вышло: " + $top)
+        }
+    }
+
+    Context '7. Самопроверка убирает за собой только своё' {
+        It 'в ветке были свои значения и подключи — они на месте, пробного ключа нет' {
+            Reset-State
+            $root = "$script:Probe\ST1"
+            Microsoft.PowerShell.Management\New-Item -Path "$root\Other" -Force | Out-Null
+            Microsoft.PowerShell.Management\New-ItemProperty -LiteralPath $root -Name 'Keep' -Value 5 -PropertyType DWord -Force | Out-Null
+            Microsoft.PowerShell.Management\New-ItemProperty -LiteralPath "$root\Other" -Name 'Also' -Value 'x' -PropertyType String -Force | Out-Null
+            $x = Test-RegWriteProbe "$root\SelfTest"
+            Assert-True ([bool]$x.ok) ("запись не прошла: " + $x.error)
+            Assert-True ((Get-RegValue $root 'Keep') -eq 5 -and (Get-RegValue "$root\Other" 'Also') -eq 'x') 'стёрто то, что было в ветке до проверки'
+            Assert-True (-not (Test-Path -LiteralPath "$root\SelfTest")) 'пробный ключ остался'
+        }
+        It 'ветки не было — после проверки её снова нет' {
+            Reset-State
+            $root = "$script:Probe\ST2"
+            $x = Test-RegWriteProbe "$root\SelfTest"
+            Assert-True ([bool]$x.ok) ("запись не прошла: " + $x.error)
+            Assert-True (-not (Test-Path -LiteralPath $root)) 'созданная проверкой ветка осталась'
+        }
+        It 'ключ SelfTest был до проверки — он на месте со своим значением, пробного нет' {
+            Reset-State
+            $k = "$script:Probe\ST3\SelfTest"
+            Microsoft.PowerShell.Management\New-Item -Path $k -Force | Out-Null
+            Microsoft.PowerShell.Management\New-ItemProperty -LiteralPath $k -Name 'Probe' -Value 7 -PropertyType DWord -Force | Out-Null
+            $x = Test-RegWriteProbe $k
+            Assert-True ([bool]$x.ok) ("запись не прошла: " + $x.error)
+            $names = @((Get-Item -LiteralPath $k).GetValueNames())
+            Assert-True ((Get-RegValue $k 'Probe') -eq 7 -and $names.Count -eq 1) ('значения: ' + ($names -join ','))
+        }
+        It 'запись не прошла — созданное проверкой убрано, итог «нельзя»' {
+            Reset-State
+            $root = "$script:Probe\ST4"
+            function New-ItemProperty { throw 'отказано' }
+            $x = Test-RegWriteProbe "$root\SelfTest"
+            Assert-True ((-not $x.ok) -and "$($x.error)" -like '*отказано*') ("ok=$($x.ok) error=$($x.error)")
+            Assert-True (-not (Test-Path -LiteralPath $root)) 'созданная проверкой ветка осталась'
+        }
+    }
+
+    Context '8. Данные программы — только её собственные файлы' {
+        BeforeAll {
+            foreach ($a in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -like '$script:DataFile*' }, $true)) { Invoke-Expression $a.Extent.Text }
+            $script:DataDir = Join-Path ([IO.Path]::GetTempPath()) ('w11p-pester-data-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+            Microsoft.PowerShell.Management\New-Item -ItemType Directory -Path $script:DataDir -Force | Out-Null
+        }
+        AfterAll { Remove-Item -LiteralPath $script:DataDir -Recurse -Force -ErrorAction SilentlyContinue }
+        It 'в списке только файлы программы; чужие файлы и папка с «нашим» именем не входят' {
+            $own = @('profile.json', 'changes.json', 'xray-history.json', 'changes.broken-20261113-120000.json', 'changes.json.tmp')
+            $foreign = @('Отчёт.docx', 'notes.txt', 'profile.json.bak', 'changes.old.json', 'changes.broken-x.json', 'other.tmp', 'engine.ps1', 'journal.key')
+            foreach ($n in @($own + $foreign)) { [IO.File]::WriteAllText((Join-Path $script:DataDir $n), 'x') }
+            Microsoft.PowerShell.Management\New-Item -ItemType Directory -Path (Join-Path $script:DataDir 'blocked.json') -Force | Out-Null
+            $got = (@(Get-DataFiles | ForEach-Object { $_.file }) | Sort-Object) -join ','
+            $want = (@($own) | Sort-Object) -join ','
+            Assert-True ($got -eq $want) ("получено: " + $got)
+            Assert-True (-not (Test-DataFileOwned (Get-Item -LiteralPath (Join-Path $script:DataDir 'blocked.json')))) 'папка с именем файла данных сочтена файлом программы'
+        }
+        It '-DataRoot «<Path>» — <Want>' -TestCases @(
+            @{ Path = 'D:\Win11Privacy\Win11Privacy-Data'; Want = $true },
+            @{ Path = 'D:\Win11Privacy\win11privacy-data\'; Want = $true },
+            @{ Path = '\\nas\share\Win11Privacy-Data'; Want = $true },
+            @{ Path = 'C:\Users\Someone\Documents'; Want = $false },
+            @{ Path = 'D:\'; Want = $false },
+            @{ Path = 'Win11Privacy-Data'; Want = $false },
+            @{ Path = 'D:\Win11Privacy-Data-old'; Want = $false },
+            @{ Path = 'D:\Win11Privacy-Data\..\Documents'; Want = $false }) {
+            param($Path, $Want)
+            Assert-True ((Test-DataRootAllowed $Path) -eq $Want) ("получено: " + (Test-DataRootAllowed $Path))
         }
     }
 }

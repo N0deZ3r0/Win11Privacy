@@ -56,7 +56,13 @@ MAC-адрес и названия сетей говорят, где физич�
 Эталон рентгена: сколько событий уходило до настройки	X-ray baseline: how many events left before the settings were applied
 Известные записи автозагрузки — по ним страж замечает новые	Known startup entries — the guard spots new ones against them
 Список программ, которым доступ к датчикам уже известен	Programs whose access to the sensors is already known
-Снимок состояния или служебный файл	A state snapshot or an internal file
+История рентгена по дням: сколько событий уходило	Daily X-ray history: how many events left
+Настройки, которые Windows не дала применить	Settings Windows did not let the program apply
+Компоненты производителя, отключённые прежней версией	Manufacturer components turned off by an older version
+Время последнего живого уведомления	Time of the latest live notification
+Проба записи журнала, оставшаяся после обрыва	A journal write probe left over after an interruption
+Отложенный журнал отката: повреждён или не прошёл проверку подписи	A set-aside rollback journal: damaged or failed the signature check
+Недописанная копия файла данных: осталась после обрыва записи	An unfinished copy of a data file, left over after an interrupted write
 
 # --- прочее ---
 NVIDIA (драйвер и GeForce)	NVIDIA (driver and GeForce)

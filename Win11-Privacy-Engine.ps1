@@ -901,6 +901,27 @@ function Ensure-DataDir {
     if (-not (Test-Path -LiteralPath $script:DataDir)) { New-Item -ItemType Directory -Path $script:DataDir -Force | Out-Null }
 }
 
+# -DataRoot — только переносимая папка Win11Privacy-Data (так её называет
+# окно рядом с exe, так она описана в README), по полному пути. В папку
+# данных программа пишет файлы с обычными именами (profile.json), меняет её
+# права, откладывает «чужое» в карантин, а по -PurgeData и при полном откате
+# стирает свои файлы. -DataRoot, по ошибке указывающий на «Документы», папку
+# программы или корень диска, затёр бы или стёр там чужое.
+function Test-DataRootAllowed {
+    param([string]$Path)
+    try {
+        if (-not [IO.Path]::IsPathRooted($Path)) { return $false }
+        $full = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+        return ([IO.Path]::GetFileName($full) -ieq 'Win11Privacy-Data')
+    } catch { return $false }
+}
+
+if ($DataRoot -and -not (Test-DataRootAllowed $DataRoot)) {
+    Write-Log ("[!] -DataRoot ""{0}"": папкой данных может быть только папка Win11Privacy-Data, по полному пути (например, D:\Win11Privacy\Win11Privacy-Data). В другой папке программа ничего не пишет и не удаляет." -f $DataRoot)
+    Write-Log '###DONE###'
+    exit 1
+}
+
 # Задача планировщика данным из папки, которую можно подменить, не верит и
 # ничего не делает.
 if ($script:TaskRun -and -not (Test-DataTrusted)) { exit 1 }
@@ -3275,10 +3296,17 @@ function Get-DohStatus {
 }
 
 # --------------------------------------------------------------------------- #
-#  Проверка утечек «в бою». Имя каждого сервера сбора разрешается так, как его
-#  разрешит любая программа — с учётом hosts, — и к нему пробуется соединение
-#  на порт 443. Данных не уходит: соединение сразу закрывается. Отвечает на
-#  вопрос, которого не задаёт проверка настроек: дойдёт ли отправка на деле.
+#  Проверка утечек «в бою». Имя каждого известного сервера сбора разрешается
+#  так, как его разрешит любая программа — с учётом hosts, — и к нему
+#  пробуется соединение TCP на порт 443. Данных не уходит: соединение сразу
+#  закрывается. Отвечает на вопрос, которого не задаёт проверка настроек:
+#  доступны ли известные адреса сбора.
+#
+#  Это доступность адресов (endpointReachability), а не наблюдение за
+#  трафиком (telemetryObserved): неизвестные и новые адреса, другие порты,
+#  UDP и QUIC, отправка через сторонние службы этой проверке не видны. Раньше
+#  «ни один сервер не отвечает» подавалось как «телеметрия не дойдёт».
+#  Результат поэтому разделён: что проверено — и что не измерялось вовсе.
 # --------------------------------------------------------------------------- #
 function Invoke-LeakTest {
     param([int]$TimeoutMs = 8000)
@@ -3332,9 +3360,15 @@ function Invoke-LeakTest {
         try { $cn.client.Close() } catch { }
     }
     $count = { param($s) @($items | Where-Object { $_.state -eq $s }).Count }
-    return @{ time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); total = $items.Count
-              open = (& $count 'open'); blocked = (& $count 'blocked'); hosts = (& $count 'hosts'); none = (& $count 'none')
-              doh = (Get-DohStatus); items = $items.ToArray() }
+    return @{ time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); doh = (Get-DohStatus)
+              endpointReachability = @{
+                  protocol = 'tcp'; port = 443; total = $items.Count
+                  open = (& $count 'open'); blocked = (& $count 'blocked'); hosts = (& $count 'hosts'); none = (& $count 'none')
+                  items = $items.ToArray()
+                  # чего эта проверка не видит
+                  notCovered = @('unknown-hosts', 'other-ports', 'udp-quic', 'third-party-relays') }
+              # трафик не наблюдался: «никто не ответил» не значит «ничего не ушло»
+              telemetryObserved = @{ measured = $false } }
 }
 
 function Remove-FwRules {
@@ -6486,6 +6520,35 @@ if ($Proof) {
 # =========================================================================== #
 #  САМОПРОВЕРКА: может ли программа реально менять настройки на этом ПК
 # =========================================================================== #
+# Пробная запись в реестр. Убирается ровно то, что создала сама проверка:
+# своё значение (имя у каждого запуска своё — чужое «Probe» не затрётся) и
+# ключи, которых до проверки не было, — если в них ничего не осталось.
+# Раньше самопроверка стирала всю ветку Software\Win11Privacy со всем, что в
+# ней лежало до неё.
+function Test-RegWriteProbe {
+    param([string]$Key)
+    $res = @{ ok = $false; error = '' }
+    $name = 'Probe-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    # верхний из ключей, которых нет (неизвестно — значит «есть»): удалить
+    # потом можно только его и только пустым
+    $created = Get-TopMissingKey $Key
+    try {
+        # New-Item -Force по существующему ключу пересоздал бы его пустым
+        if ($created) { New-Item -Path $Key -Force -ErrorAction Stop | Out-Null }
+        New-ItemProperty -LiteralPath $Key -Name $name -Value 1 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
+        $res.ok = ((Get-ItemProperty -LiteralPath $Key -Name $name -ErrorAction Stop).$name -eq 1)
+    } catch { $res.error = $_.Exception.Message }
+    if ((Get-RegRaw $Key $name).exists) {
+        try { Remove-ItemProperty -LiteralPath $Key -Name $name -Force -ErrorAction Stop }
+        catch { Write-Log ("   [!] пробное значение {0}\{1} не удалилось: {2}" -f $Key, $name, $_.Exception.Message) }
+    }
+    if ($created -and (Test-RegKeyExists $created) -and (Test-KeyTreeEmpty $created)) {
+        try { Remove-Item -LiteralPath $created -Recurse -Force -ErrorAction Stop }
+        catch { Write-Log ("   [!] пробный ключ {0} не удалился: {1}" -f $created, $_.Exception.Message) }
+    }
+    return $res
+}
+
 if ($SelfTest) {
     Write-Section 'Самопроверка: может ли программа менять настройки'
     $r = @{}
@@ -6498,25 +6561,15 @@ if ($SelfTest) {
     Write-Log ''
 
     # --- реестр пользователя (HKCU) ---
-    $r.hkcu = $false
-    try {
-        $k = 'HKCU:\Software\Win11Privacy\SelfTest'
-        if (-not (Test-Path -LiteralPath $k)) { New-Item -Path $k -Force -ErrorAction Stop | Out-Null }
-        New-ItemProperty -LiteralPath $k -Name 'Probe' -Value 1 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
-        $r.hkcu = ((Get-ItemProperty -LiteralPath $k -Name 'Probe' -ErrorAction Stop).Probe -eq 1)
-        Remove-Item -LiteralPath 'HKCU:\Software\Win11Privacy' -Recurse -Force -ErrorAction SilentlyContinue
-    } catch { Write-Log ("   [!] {0}" -f $_.Exception.Message) }
+    $p = Test-RegWriteProbe 'HKCU:\Software\Win11Privacy\SelfTest'
+    $r.hkcu = [bool]$p.ok
+    if ($p.error) { Write-Log ("   [!] {0}" -f $p.error) }
     Write-Log ("   [{0}] запись в реестр пользователя (HKCU)" -f $(if ($r.hkcu) { '+' } else { '!' }))
 
     # --- реестр системы (HKLM) ---
-    $r.hklm = $false
-    try {
-        $k = 'HKLM:\SOFTWARE\Win11Privacy\SelfTest'
-        if (-not (Test-Path -LiteralPath $k)) { New-Item -Path $k -Force -ErrorAction Stop | Out-Null }
-        New-ItemProperty -LiteralPath $k -Name 'Probe' -Value 1 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
-        $r.hklm = ((Get-ItemProperty -LiteralPath $k -Name 'Probe' -ErrorAction Stop).Probe -eq 1)
-        Remove-Item -LiteralPath 'HKLM:\SOFTWARE\Win11Privacy' -Recurse -Force -ErrorAction SilentlyContinue
-    } catch { Write-Log ("   [!] {0}" -f $_.Exception.Message) }
+    $p = Test-RegWriteProbe 'HKLM:\SOFTWARE\Win11Privacy\SelfTest'
+    $r.hklm = [bool]$p.ok
+    if ($p.error) { Write-Log ("   [!] {0}" -f $p.error) }
     Write-Log ("   [{0}] запись в реестр системы (HKLM) — сюда идут политики" -f $(if ($r.hklm) { '+' } else { '!' }))
 
     # --- резервная копия на рабочий стол ---
@@ -7096,6 +7149,11 @@ if ($GdidRestore) {
 # --------------------------------------------------------------------------- #
 #  Что программа накопила о вас у себя. Для программы про приватность честно
 #  показывать и свои файлы — и уметь их стереть.
+#
+#  Данными программы считается только то, что она кладёт сама: имена ниже и
+#  файлы по строгим образцам. Раньше сюда шло и всё прочее, что лежало в
+#  папке, — и -PurgeData стёр бы любые чужие файлы, окажись папка данных не
+#  той. Неизвестный файл не показывается и не удаляется.
 # --------------------------------------------------------------------------- #
 $script:DataFiles = @(
     @{ file = 'sensor-history.json'; title = 'История датчиков по дням: кто включал камеру, микрофон и геолокацию' },
@@ -7108,31 +7166,49 @@ $script:DataFiles = @(
     @{ file = 'profile.json';        title = 'Профиль стража: какие разделы он сторожит' },
     @{ file = 'guard-last.json';     title = 'Последняя проверка стража' },
     @{ file = 'guard.log';           title = 'Журнал работы стража' },
-    @{ file = 'net-apps.json';       title = 'Программы, выходившие в сеть, — по ним слежение замечает новые' }
+    @{ file = 'net-apps.json';       title = 'Программы, выходившие в сеть, — по ним слежение замечает новые' },
+    @{ file = 'xray-history.json';   title = 'История рентгена по дням: сколько событий уходило' },
+    @{ file = 'blocked.json';        title = 'Настройки, которые Windows не дала применить' },
+    @{ file = 'oem-disabled.json';   title = 'Компоненты производителя, отключённые прежней версией' },
+    @{ file = 'watcher-last.txt';    title = 'Время последнего живого уведомления' },
+    @{ file = 'journal-check.json';  title = 'Проба записи журнала, оставшаяся после обрыва' }
 )
+# Файлы с изменчивой частью имени: журнал, отложенный проверкой (метка
+# времени — как у Read-JournalFile), и недописанная копия файла данных
+# (Save-Json пишет рядом «имя.tmp»). Копия движка и ключ подписи — не данные
+# о человеке и сюда не входят.
+$script:DataFilePatterns = @(
+    @{ rx = '^changes\.(broken|unverifiable|unverified)-\d{8}-\d{6}\.json$'
+       title = 'Отложенный журнал отката: повреждён или не прошёл проверку подписи' },
+    @{ rx = ('^(' + (@($script:DataFiles | ForEach-Object { [regex]::Escape($_.file) }) -join '|') + ')\.tmp$')
+       title = 'Недописанная копия файла данных: осталась после обрыва записи' }
+)
+
+# Название файла данных программы — или $null, если файл не её.
+function Get-DataFileTitle {
+    param([string]$Name)
+    foreach ($d in $script:DataFiles) { if ($Name -ieq $d.file) { return $d.title } }
+    foreach ($p in $script:DataFilePatterns) { if ($Name -match $p.rx) { return $p.title } }
+    return $null
+}
+
+# Можно ли удалить этот файл как данные программы: обычный файл (не папка и
+# не ссылка) с именем из списка выше. Сверяется перед каждым удалением, а не
+# только при составлении списка.
+function Test-DataFileOwned {
+    param($Item)
+    if ($null -eq $Item -or $Item.PSIsContainer) { return $false }
+    if ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+    return ($null -ne (Get-DataFileTitle $Item.Name))
+}
 
 function Get-DataFiles {
     $out = @()
-    $seen = @{}
-    foreach ($d in $script:DataFiles) {
-        $seen[$d.file] = $true
-        $full = Join-Path $script:DataDir $d.file
-        if (-not (Test-Path -LiteralPath $full)) { continue }
-        $fi = Get-Item -LiteralPath $full -ErrorAction SilentlyContinue
-        if (-not $fi) { continue }
-        $out += @{ file = $d.file; title = $d.title; kb = [math]::Round($fi.Length / 1KB, 1)
+    if (-not (Test-Path -LiteralPath $script:DataDir -PathType Container)) { return @() }
+    foreach ($fi in @(Get-ChildItem -LiteralPath $script:DataDir -File -Force -ErrorAction SilentlyContinue)) {
+        if (-not (Test-DataFileOwned $fi)) { continue }
+        $out += @{ file = $fi.Name; title = (Get-DataFileTitle $fi.Name); kb = [math]::Round($fi.Length / 1KB, 1)
                    changed = $fi.LastWriteTime.ToString('yyyy-MM-dd HH:mm') }
-    }
-    # снимки состояния и всё прочее, что могло появиться рядом
-    if (Test-Path -LiteralPath $script:DataDir) {
-        foreach ($fi in @(Get-ChildItem -LiteralPath $script:DataDir -File -ErrorAction SilentlyContinue)) {
-            if ($seen.ContainsKey($fi.Name)) { continue }
-            if ($fi.Name -like 'engine*.ps1') { continue }   # это сам движок для стража, не данные
-            if ($fi.Name -like 'journal.key*') { continue }  # ключ подписи журнала — не данные о человеке
-            $out += @{ file = $fi.Name; title = 'Снимок состояния или служебный файл'
-                       kb = [math]::Round($fi.Length / 1KB, 1)
-                       changed = $fi.LastWriteTime.ToString('yyyy-MM-dd HH:mm') }
-        }
     }
     return @($out | Sort-Object { -[double]$_.kb })
 }
@@ -7154,6 +7230,10 @@ if ($PurgeData) {
     foreach ($d in $dataList) {
         $full = Join-Path $script:DataDir $d.file
         if ($DryRun) { Write-Log ("   [тест] {0}" -f $d.file); continue }
+        # между списком и удалением на месте файла могла появиться папка или ссылка
+        if (-not (Test-DataFileOwned (Get-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue))) {
+            Write-Log ("   [-] пропущен: {0} -- это уже не файл данных программы" -f $d.file); continue
+        }
         try { Remove-Item -LiteralPath $full -Force -ErrorAction Stop; Write-Log ("   [+] удалён: {0}" -f $d.file); $gone++ }
         catch { Write-Log ("   [!] не удалось удалить {0} -- {1}" -f $d.file, $_.Exception.Message); $script:Failures++ }
     }

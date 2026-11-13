@@ -33,8 +33,13 @@ namespace Win11Privacy
 
             Label h = new Label();
             h.Text = hint; h.ForeColor = Theme.TextDim; h.AutoSize = false;
-            h.Dock = DockStyle.Top; h.Height = (int)(u * 2.6F);
             h.Padding = new Padding((int)(u * 0.2F), (int)(u * 0.4F), 0, 0);
+            // не меньше двух строк, а длинная подсказка — во всю свою высоту:
+            // раньше третья строка просто обрезалась
+            Size need = TextRenderer.MeasureText(hint ?? "", baseFont,
+                new Size(ClientSize.Width - h.Padding.Horizontal, int.MaxValue), TextFormatFlags.WordBreak);
+            h.Dock = DockStyle.Top;
+            h.Height = Math.Max((int)(u * 2.6F), need.Height + h.Padding.Vertical + u / 2);
             Controls.Add(h);
 
             _list.Dock = DockStyle.Fill;

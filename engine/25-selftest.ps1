@@ -2,6 +2,35 @@
 # =========================================================================== #
 #  САМОПРОВЕРКА: может ли программа реально менять настройки на этом ПК
 # =========================================================================== #
+# Пробная запись в реестр. Убирается ровно то, что создала сама проверка:
+# своё значение (имя у каждого запуска своё — чужое «Probe» не затрётся) и
+# ключи, которых до проверки не было, — если в них ничего не осталось.
+# Раньше самопроверка стирала всю ветку Software\Win11Privacy со всем, что в
+# ней лежало до неё.
+function Test-RegWriteProbe {
+    param([string]$Key)
+    $res = @{ ok = $false; error = '' }
+    $name = 'Probe-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    # верхний из ключей, которых нет (неизвестно — значит «есть»): удалить
+    # потом можно только его и только пустым
+    $created = Get-TopMissingKey $Key
+    try {
+        # New-Item -Force по существующему ключу пересоздал бы его пустым
+        if ($created) { New-Item -Path $Key -Force -ErrorAction Stop | Out-Null }
+        New-ItemProperty -LiteralPath $Key -Name $name -Value 1 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
+        $res.ok = ((Get-ItemProperty -LiteralPath $Key -Name $name -ErrorAction Stop).$name -eq 1)
+    } catch { $res.error = $_.Exception.Message }
+    if ((Get-RegRaw $Key $name).exists) {
+        try { Remove-ItemProperty -LiteralPath $Key -Name $name -Force -ErrorAction Stop }
+        catch { Write-Log ("   [!] пробное значение {0}\{1} не удалилось: {2}" -f $Key, $name, $_.Exception.Message) }
+    }
+    if ($created -and (Test-RegKeyExists $created) -and (Test-KeyTreeEmpty $created)) {
+        try { Remove-Item -LiteralPath $created -Recurse -Force -ErrorAction Stop }
+        catch { Write-Log ("   [!] пробный ключ {0} не удалился: {1}" -f $created, $_.Exception.Message) }
+    }
+    return $res
+}
+
 if ($SelfTest) {
     Write-Section 'Самопроверка: может ли программа менять настройки'
     $r = @{}
@@ -14,25 +43,15 @@ if ($SelfTest) {
     Write-Log ''
 
     # --- реестр пользователя (HKCU) ---
-    $r.hkcu = $false
-    try {
-        $k = 'HKCU:\Software\Win11Privacy\SelfTest'
-        if (-not (Test-Path -LiteralPath $k)) { New-Item -Path $k -Force -ErrorAction Stop | Out-Null }
-        New-ItemProperty -LiteralPath $k -Name 'Probe' -Value 1 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
-        $r.hkcu = ((Get-ItemProperty -LiteralPath $k -Name 'Probe' -ErrorAction Stop).Probe -eq 1)
-        Remove-Item -LiteralPath 'HKCU:\Software\Win11Privacy' -Recurse -Force -ErrorAction SilentlyContinue
-    } catch { Write-Log ("   [!] {0}" -f $_.Exception.Message) }
+    $p = Test-RegWriteProbe 'HKCU:\Software\Win11Privacy\SelfTest'
+    $r.hkcu = [bool]$p.ok
+    if ($p.error) { Write-Log ("   [!] {0}" -f $p.error) }
     Write-Log ("   [{0}] запись в реестр пользователя (HKCU)" -f $(if ($r.hkcu) { '+' } else { '!' }))
 
     # --- реестр системы (HKLM) ---
-    $r.hklm = $false
-    try {
-        $k = 'HKLM:\SOFTWARE\Win11Privacy\SelfTest'
-        if (-not (Test-Path -LiteralPath $k)) { New-Item -Path $k -Force -ErrorAction Stop | Out-Null }
-        New-ItemProperty -LiteralPath $k -Name 'Probe' -Value 1 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
-        $r.hklm = ((Get-ItemProperty -LiteralPath $k -Name 'Probe' -ErrorAction Stop).Probe -eq 1)
-        Remove-Item -LiteralPath 'HKLM:\SOFTWARE\Win11Privacy' -Recurse -Force -ErrorAction SilentlyContinue
-    } catch { Write-Log ("   [!] {0}" -f $_.Exception.Message) }
+    $p = Test-RegWriteProbe 'HKLM:\SOFTWARE\Win11Privacy\SelfTest'
+    $r.hklm = [bool]$p.ok
+    if ($p.error) { Write-Log ("   [!] {0}" -f $p.error) }
     Write-Log ("   [{0}] запись в реестр системы (HKLM) — сюда идут политики" -f $(if ($r.hklm) { '+' } else { '!' }))
 
     # --- резервная копия на рабочий стол ---

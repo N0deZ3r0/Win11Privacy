@@ -59,7 +59,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(1528, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1536, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -1122,7 +1122,13 @@ namespace Win11Privacy
             _map["Эталон рентгена: сколько событий уходило до настройки"] = "X-ray baseline: how many events left before the settings were applied";
             _map["Известные записи автозагрузки — по ним страж замечает новые"] = "Known startup entries — the guard spots new ones against them";
             _map["Список программ, которым доступ к датчикам уже известен"] = "Programs whose access to the sensors is already known";
-            _map["Снимок состояния или служебный файл"] = "A state snapshot or an internal file";
+            _map["История рентгена по дням: сколько событий уходило"] = "Daily X-ray history: how many events left";
+            _map["Настройки, которые Windows не дала применить"] = "Settings Windows did not let the program apply";
+            _map["Компоненты производителя, отключённые прежней версией"] = "Manufacturer components turned off by an older version";
+            _map["Время последнего живого уведомления"] = "Time of the latest live notification";
+            _map["Проба записи журнала, оставшаяся после обрыва"] = "A journal write probe left over after an interruption";
+            _map["Отложенный журнал отката: повреждён или не прошёл проверку подписи"] = "A set-aside rollback journal: damaged or failed the signature check";
+            _map["Недописанная копия файла данных: осталась после обрыва записи"] = "An unfinished copy of a data file, left over after an interrupted write";
             _map["NVIDIA (драйвер и GeForce)"] = "NVIDIA (driver and GeForce)";
             _map["запускалась"] = "used to start";
             _map["была отключена"] = "was switched off";
@@ -1331,17 +1337,19 @@ namespace Win11Privacy
             _map["Набор для других компьютеров сохранён: "] = "Set for other computers saved: ";
             _map["Для всех пользователей"] = "For all users";
             _map["Настройки пользователя ложатся и в другие профили этого компьютера, и в профиль по умолчанию — новые пользователи получат их сразу."] = "User settings also go into the other profiles on this computer and into the default profile, so new users get them straight away.";
-            _map["Программа разрешит имя каждого сервера сбора данных так же, как это сделает любая программа,\n"] = "The program will resolve the name of every data-collection server the same way any program would,\n";
-            _map["и попробует открыть к нему соединение. Данные не отправляются: соединение сразу закрывается.\n\n"] = "and try to open a connection to it. No data is sent: the connection is closed at once.\n\n";
+            _map["Программа разрешит имя каждого известного сервера сбора данных так же, как это сделает любая программа,\n"] = "The program will resolve the name of every known data-collection server the same way any program would,\n";
+            _map["и попробует открыть к нему соединение по TCP, порт 443. Данные не отправляются: соединение сразу закрывается.\n"] = "and try to open a TCP connection to it on port 443. No data is sent: the connection is closed at once.\n";
+            _map["Это проверка доступности известных адресов, а не наблюдение за трафиком.\n\n"] = "This checks whether known addresses are reachable; it does not watch traffic.\n\n";
             _map["Займёт до 15 секунд. Продолжить?"] = "It takes up to 15 seconds. Continue?";
             _map["Проверить утечки"] = "Leak test";
             _map["Проверка утечек…"] = "Testing for leaks…";
             _map["Не удалось провести проверку."] = "The test could not be run.";
-            _map["Доступны — отправка дойдёт"] = "Reachable — data would get through";
+            _map["Отвечают на TCP 443"] = "Answer on TCP 443";
             _map["Закрыты брандмауэром или недоступны"] = "Blocked by the firewall or unreachable";
             _map["Закрыты в hosts"] = "Blocked in hosts";
-            _map["Имя не отвечает — сервера нет"] = "Name does not resolve — no server";
-            _map["Ни один сервер сбора не отвечает: отправка телеметрии отсюда не дойдёт."] = "No data-collection server answers: telemetry from here will not get through.";
+            _map["Имя не разрешается"] = "Name does not resolve";
+            _map["Ни один из известных серверов сбора не ответил на TCP 443."] = "None of the known data-collection servers answered on TCP 443.";
+            _map["\nЭто проверка известных адресов, а не трафика: новые адреса, другие порты, UDP/QUIC и сторонние службы она не видит. Что уходит на деле, показывает «Наблюдение» → «Сеть»."] = "\nThis checks known addresses, not traffic: it does not see new addresses, other ports, UDP/QUIC or third-party services. What actually leaves is shown under Observation → Network.";
             _map[" серверов отвечают. Закрыть их — модули «Блокировка доменов» и «Блокировка адресов телеметрии»."] = " servers answer. To block them, use the \"Domain blocking\" and \"Telemetry address blocking\" modules.";
             _map["\nШифрованный DNS не запрещён: браузер с ним обойдёт блокировку в hosts."] = "\nEncrypted DNS is not blocked: a browser using it bypasses hosts blocking.";
             _map["Проверка утечек"] = "Leak test";

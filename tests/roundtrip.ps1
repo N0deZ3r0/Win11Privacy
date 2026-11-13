@@ -52,7 +52,7 @@ function Check {
 # Своя папка данных и своя папка копий: журнал изменений теста не смешивается
 # с журналом настоящей работы программы, и откат вернёт ровно наши правки.
 $work    = Join-Path $env:TEMP ('win11privacy-roundtrip-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-$dataDir = Join-Path $work 'data'
+$dataDir = Join-Path $work 'Win11Privacy-Data'     # другое имя движок как -DataRoot не примет
 $bakDir  = Join-Path $work 'backup'
 New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
 New-Item -ItemType Directory -Path $bakDir  -Force | Out-Null

@@ -262,7 +262,7 @@ powershell.exe -File engine.ps1 -Modules telemetry,ads,cleanup -BackupRoot "C:\.
 | `-ListStartup` | автозагрузка: что стартует вместе с Windows |
 | `-ChangeLog` / `-RestoreItems -ChangeItems a,b` | журнал изменений и возврат отдельных записей |
 | `-DataInfo` / `-PurgeData` | что программа хранит о вас у себя и удаление этого |
-| `-DataRoot "C:\...\Win11Privacy-Data"` | держать данные в указанной папке (переносимый режим) |
+| `-DataRoot "C:\...\Win11Privacy-Data"` | держать данные в указанной папке (переносимый режим); это должна быть папка `Win11Privacy-Data`, по полному пути |
 | `-Timeline -TimelineDays 30` | хронология: телеметрия по дням, обновления Windows, правки и возвраты |
 | `-ListBackups` / `-RestoreBackup -BackupPath ...` | резервные копии реестра: список и возврат |
 | `-CleanJunk` | убрать параметры, записанные версиями до 1.6 под числовыми именами |

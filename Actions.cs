@@ -267,23 +267,27 @@ namespace Win11Privacy
 
         private ModernButton _btnCleanJunk;
 
-        // Проверка утечек «в бою»: дойдёт ли соединение до серверов сбора. Проверка
-        // настроек говорит, что выставлено; эта — что получается на деле.
+        // Проверка утечек «в бою»: доступны ли известные серверы сбора. Проверка
+        // настроек говорит, что выставлено; эта — открыт ли путь к известным
+        // адресам. Трафик она не наблюдает, и «никто не ответил» не выдаётся за
+        // «телеметрия не уходит».
         private void OnLeakTest(object sender, EventArgs e)
         {
             if (MessageBox.Show(this,
-                L.T("Программа разрешит имя каждого сервера сбора данных так же, как это сделает любая программа,\n") +
-                L.T("и попробует открыть к нему соединение. Данные не отправляются: соединение сразу закрывается.\n\n") +
+                L.T("Программа разрешит имя каждого известного сервера сбора данных так же, как это сделает любая программа,\n") +
+                L.T("и попробует открыть к нему соединение по TCP, порт 443. Данные не отправляются: соединение сразу закрывается.\n") +
+                L.T("Это проверка доступности известных адресов, а не наблюдение за трафиком.\n\n") +
                 L.T("Займёт до 15 секунд. Продолжить?"),
                 L.T("Проверить утечки"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             RunJson("-LeakTest", L.T("Проверка утечек…"), delegate(Dictionary<string, object> d)
             {
-                if (d == null) { MessageBox.Show(this, L.T("Не удалось провести проверку."), L.T("Проверить утечки"), MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+                Dictionary<string, object> reach = d == null ? null : Json.GetObj(d, "endpointReachability");
+                if (reach == null) { MessageBox.Show(this, L.T("Не удалось провести проверку."), L.T("Проверить утечки"), MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
                 List<string> lines = new List<string>();
                 string[] order = { "open", "blocked", "hosts", "none" };
-                string[] heads = { L.T("Доступны — отправка дойдёт"), L.T("Закрыты брандмауэром или недоступны"),
-                                   L.T("Закрыты в hosts"), L.T("Имя не отвечает — сервера нет") };
-                List<object> items = Json.GetArr(d, "items");
+                string[] heads = { L.T("Отвечают на TCP 443"), L.T("Закрыты брандмауэром или недоступны"),
+                                   L.T("Закрыты в hosts"), L.T("Имя не разрешается") };
+                List<object> items = Json.GetArr(reach, "items");
                 for (int i = 0; i < order.Length; i++)
                 {
                     List<string> names = new List<string>();
@@ -296,11 +300,12 @@ namespace Win11Privacy
                     lines.Add(heads[i] + "  (" + names.Count + ")");
                     lines.AddRange(names);
                 }
-                int open = Json.GetInt(d, "open");
+                int open = Json.GetInt(reach, "open");
                 Dictionary<string, object> doh = Json.GetObj(d, "doh");
                 string hint = open == 0
-                    ? L.T("Ни один сервер сбора не отвечает: отправка телеметрии отсюда не дойдёт.")
+                    ? L.T("Ни один из известных серверов сбора не ответил на TCP 443.")
                     : open + L.T(" серверов отвечают. Закрыть их — модули «Блокировка доменов» и «Блокировка адресов телеметрии».");
+                hint += L.T("\nЭто проверка известных адресов, а не трафика: новые адреса, другие порты, UDP/QUIC и сторонние службы она не видит. Что уходит на деле, показывает «Наблюдение» → «Сеть».");
                 if (doh != null && !Json.GetBool(doh, "blocked"))
                     hint += L.T("\nШифрованный DNS не запрещён: браузер с ним обойдёт блокировку в hosts.");
                 using (ListDialog dlg = new ListDialog(L.T("Проверка утечек"), hint, lines.ToArray(), L.T("Закрыть"), Font, false))

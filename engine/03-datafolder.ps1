@@ -186,6 +186,27 @@ function Ensure-DataDir {
     if (-not (Test-Path -LiteralPath $script:DataDir)) { New-Item -ItemType Directory -Path $script:DataDir -Force | Out-Null }
 }
 
+# -DataRoot — только переносимая папка Win11Privacy-Data (так её называет
+# окно рядом с exe, так она описана в README), по полному пути. В папку
+# данных программа пишет файлы с обычными именами (profile.json), меняет её
+# права, откладывает «чужое» в карантин, а по -PurgeData и при полном откате
+# стирает свои файлы. -DataRoot, по ошибке указывающий на «Документы», папку
+# программы или корень диска, затёр бы или стёр там чужое.
+function Test-DataRootAllowed {
+    param([string]$Path)
+    try {
+        if (-not [IO.Path]::IsPathRooted($Path)) { return $false }
+        $full = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+        return ([IO.Path]::GetFileName($full) -ieq 'Win11Privacy-Data')
+    } catch { return $false }
+}
+
+if ($DataRoot -and -not (Test-DataRootAllowed $DataRoot)) {
+    Write-Log ("[!] -DataRoot ""{0}"": папкой данных может быть только папка Win11Privacy-Data, по полному пути (например, D:\Win11Privacy\Win11Privacy-Data). В другой папке программа ничего не пишет и не удаляет." -f $DataRoot)
+    Write-Log '###DONE###'
+    exit 1
+}
+
 # Задача планировщика данным из папки, которую можно подменить, не верит и
 # ничего не делает.
 if ($script:TaskRun -and -not (Test-DataTrusted)) { exit 1 }

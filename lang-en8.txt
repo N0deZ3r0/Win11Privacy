@@ -114,17 +114,19 @@ revert.cmd — вернуть всё, что программа изменила
 Настройки пользователя ложатся и в другие профили этого компьютера, и в профиль по умолчанию — новые пользователи получат их сразу.	User settings also go into the other profiles on this computer and into the default profile, so new users get them straight away.
 
 # --- проверка утечек ---
-Программа разрешит имя каждого сервера сбора данных так же, как это сделает любая программа,\n	The program will resolve the name of every data-collection server the same way any program would,\n
-и попробует открыть к нему соединение. Данные не отправляются: соединение сразу закрывается.\n\n	and try to open a connection to it. No data is sent: the connection is closed at once.\n\n
+Программа разрешит имя каждого известного сервера сбора данных так же, как это сделает любая программа,\n	The program will resolve the name of every known data-collection server the same way any program would,\n
+и попробует открыть к нему соединение по TCP, порт 443. Данные не отправляются: соединение сразу закрывается.\n	and try to open a TCP connection to it on port 443. No data is sent: the connection is closed at once.\n
+Это проверка доступности известных адресов, а не наблюдение за трафиком.\n\n	This checks whether known addresses are reachable; it does not watch traffic.\n\n
 Займёт до 15 секунд. Продолжить?	It takes up to 15 seconds. Continue?
 Проверить утечки	Leak test
 Проверка утечек…	Testing for leaks…
 Не удалось провести проверку.	The test could not be run.
-Доступны — отправка дойдёт	Reachable — data would get through
+Отвечают на TCP 443	Answer on TCP 443
 Закрыты брандмауэром или недоступны	Blocked by the firewall or unreachable
 Закрыты в hosts	Blocked in hosts
-Имя не отвечает — сервера нет	Name does not resolve — no server
-Ни один сервер сбора не отвечает: отправка телеметрии отсюда не дойдёт.	No data-collection server answers: telemetry from here will not get through.
+Имя не разрешается	Name does not resolve
+Ни один из известных серверов сбора не ответил на TCP 443.	None of the known data-collection servers answered on TCP 443.
+\nЭто проверка известных адресов, а не трафика: новые адреса, другие порты, UDP/QUIC и сторонние службы она не видит. Что уходит на деле, показывает «Наблюдение» → «Сеть».	\nThis checks known addresses, not traffic: it does not see new addresses, other ports, UDP/QUIC or third-party services. What actually leaves is shown under Observation → Network.
  серверов отвечают. Закрыть их — модули «Блокировка доменов» и «Блокировка адресов телеметрии».	 servers answer. To block them, use the "Domain blocking" and "Telemetry address blocking" modules.
 \nШифрованный DNS не запрещён: браузер с ним обойдёт блокировку в hosts.	\nEncrypted DNS is not blocked: a browser using it bypasses hosts blocking.
 Проверка утечек	Leak test

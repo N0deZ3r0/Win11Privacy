@@ -267,7 +267,7 @@ Because of that the engine is fully testable separately from the interface.
 | `-ListStartup` | startup: what launches with Windows |
 | `-ChangeLog` / `-RestoreItems -ChangeItems a,b` | the change log and reverting individual entries |
 | `-DataInfo` / `-PurgeData` | what the program stores about you, and deleting it |
-| `-DataRoot "C:\...\Win11Privacy-Data"` | keep the data in the given folder (portable mode) |
+| `-DataRoot "C:\...\Win11Privacy-Data"` | keep the data in the given folder (portable mode); it must be a folder named `Win11Privacy-Data`, given by its full path |
 | `-Timeline -TimelineDays 30` | timeline: telemetry by day, Windows updates, edits and reversions |
 | `-ListBackups` / `-RestoreBackup -BackupPath ...` | registry backups: list and restore |
 | `-CleanJunk` | remove parameters written under numeric names by versions before 1.6 |

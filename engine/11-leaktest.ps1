@@ -1,8 +1,15 @@
 ﻿# --------------------------------------------------------------------------- #
-#  Проверка утечек «в бою». Имя каждого сервера сбора разрешается так, как его
-#  разрешит любая программа — с учётом hosts, — и к нему пробуется соединение
-#  на порт 443. Данных не уходит: соединение сразу закрывается. Отвечает на
-#  вопрос, которого не задаёт проверка настроек: дойдёт ли отправка на деле.
+#  Проверка утечек «в бою». Имя каждого известного сервера сбора разрешается
+#  так, как его разрешит любая программа — с учётом hosts, — и к нему
+#  пробуется соединение TCP на порт 443. Данных не уходит: соединение сразу
+#  закрывается. Отвечает на вопрос, которого не задаёт проверка настроек:
+#  доступны ли известные адреса сбора.
+#
+#  Это доступность адресов (endpointReachability), а не наблюдение за
+#  трафиком (telemetryObserved): неизвестные и новые адреса, другие порты,
+#  UDP и QUIC, отправка через сторонние службы этой проверке не видны. Раньше
+#  «ни один сервер не отвечает» подавалось как «телеметрия не дойдёт».
+#  Результат поэтому разделён: что проверено — и что не измерялось вовсе.
 # --------------------------------------------------------------------------- #
 function Invoke-LeakTest {
     param([int]$TimeoutMs = 8000)
@@ -56,9 +63,15 @@ function Invoke-LeakTest {
         try { $cn.client.Close() } catch { }
     }
     $count = { param($s) @($items | Where-Object { $_.state -eq $s }).Count }
-    return @{ time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); total = $items.Count
-              open = (& $count 'open'); blocked = (& $count 'blocked'); hosts = (& $count 'hosts'); none = (& $count 'none')
-              doh = (Get-DohStatus); items = $items.ToArray() }
+    return @{ time = (Get-Date).ToString('yyyy-MM-dd HH:mm'); doh = (Get-DohStatus)
+              endpointReachability = @{
+                  protocol = 'tcp'; port = 443; total = $items.Count
+                  open = (& $count 'open'); blocked = (& $count 'blocked'); hosts = (& $count 'hosts'); none = (& $count 'none')
+                  items = $items.ToArray()
+                  # чего эта проверка не видит
+                  notCovered = @('unknown-hosts', 'other-ports', 'udp-quic', 'third-party-relays') }
+              # трафик не наблюдался: «никто не ответил» не значит «ничего не ушло»
+              telemetryObserved = @{ measured = $false } }
 }
 
 function Remove-FwRules {

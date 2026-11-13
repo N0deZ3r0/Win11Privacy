@@ -113,8 +113,22 @@ $foot = Get-EngineJson @('-Footprint')
 Check 'цифровой след отвечает' ($null -ne $foot -and $null -ne $foot.items)
 $apps = Get-EngineJson @('-ListApps')
 Check 'список приложений отвечает' ($null -ne $apps -and $null -ne $apps.apps)
+# Самопроверка пишет пробное значение в Software\Win11Privacy. Раньше она
+# стирала эту ветку целиком — вместе со всем, что в ней было до неё.
+$stRoot = 'HKCU:\Software\Win11Privacy'
+$stHad = Test-Path -LiteralPath $stRoot
+$stSubHad = Test-Path -LiteralPath "$stRoot\SelfTest"
+$stMark = 'W11PTests-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
+if (-not $stHad) { New-Item -Path $stRoot -Force | Out-Null }
+New-ItemProperty -LiteralPath $stRoot -Name $stMark -Value 1 -PropertyType DWord -Force | Out-Null
 $self = Get-EngineJson @('-SelfTest')
 Check 'самопроверка отвечает' ($null -ne $self)
+Check 'самопроверка не стирает то, что лежало в Software\Win11Privacy до неё' `
+      ((Get-ItemProperty -LiteralPath $stRoot -Name $stMark -ErrorAction SilentlyContinue).$stMark -eq 1)
+if (-not $stSubHad) { Check 'самопроверка убирает свой пробный ключ' (-not (Test-Path -LiteralPath "$stRoot\SelfTest")) }
+if ($self) { Check 'самопроверка смогла записать в реестр пользователя' ([bool]$self.hkcu) }
+Remove-ItemProperty -LiteralPath $stRoot -Name $stMark -Force -ErrorAction SilentlyContinue
+if (-not $stHad) { Remove-Item -LiteralPath $stRoot -Recurse -Force -ErrorAction SilentlyContinue }
 $log = Get-EngineJson @('-ChangeLog')
 Check 'журнал отката отвечает' ($null -ne $log)
 
@@ -864,8 +878,9 @@ if ($engineSrc.Contains($buildLine)) {
 # --------------------------------------------------------------------------- #
 Write-Host ''
 Write-Host 'Переносимый режим: данные там, где сказано'
-$portable = Join-Path $env:TEMP 'w11p-tests-portable'
-Remove-Item -LiteralPath $portable -Recurse -Force -ErrorAction SilentlyContinue
+$portableTop = Join-Path $env:TEMP 'w11p-tests-portable'
+$portable = Join-Path $portableTop 'Win11Privacy-Data'
+Remove-Item -LiteralPath $portableTop -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $portable -Force | Out-Null
 $dataInfo = Get-EngineJson @('-DataInfo', '-DataRoot', ('"' + $portable + '"'))
 Check 'папка данных берётся из -DataRoot' ($null -ne $dataInfo -and "$($dataInfo.folder)" -eq $portable) `
@@ -873,7 +888,22 @@ Check 'папка данных берётся из -DataRoot' ($null -ne $dataIn
 $dataDefault = Get-EngineJson @('-DataInfo')
 Check 'без ключа данные остаются в ProgramData' ("$($dataDefault.folder)" -like '*ProgramData*') `
       ("получено: " + $dataDefault.folder)
-Remove-Item -LiteralPath $portable -Recurse -Force -ErrorAction SilentlyContinue
+# Стираются только файлы программы: чужое в той же папке остаётся.
+foreach ($n in @('profile.json', 'changes.broken-20261113-120000.json', 'notes.txt', 'Отчёт.docx', 'profile.json.bak')) {
+    [IO.File]::WriteAllText((Join-Path $portable $n), 'x')
+}
+$purgeOut = Run-Engine @('-PurgeData', '-DataRoot', ('"' + $portable + '"'))
+$leftNames = (@(Get-ChildItem -LiteralPath $portable -File | ForEach-Object { $_.Name }) | Sort-Object) -join ','
+Check '-PurgeData стирает только файлы программы' ($leftNames -eq ((@('notes.txt', 'Отчёт.docx', 'profile.json.bak') | Sort-Object) -join ',')) `
+      ("осталось: " + $leftNames)
+# -DataRoot не на папку Win11Privacy-Data — движок не работает с ней вовсе.
+[IO.File]::WriteAllText((Join-Path $portableTop 'profile.json'), 'x')
+$wrongOut = Run-Engine @('-PurgeData', '-DataRoot', ('"' + $portableTop + '"'))
+Check '-DataRoot на чужую папку отвергается' (($wrongOut -match 'Win11Privacy-Data') -and (Test-Path -LiteralPath (Join-Path $portableTop 'profile.json'))) `
+      ($wrongOut.Trim() -replace '\s+', ' ')
+$wrongInfo = Get-EngineJson @('-DataInfo', '-DataRoot', ('"' + $portableTop + '"'))
+Check '-DataRoot на чужую папку не отдаёт и списка' ($null -eq $wrongInfo)
+Remove-Item -LiteralPath $portableTop -Recurse -Force -ErrorAction SilentlyContinue
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
@@ -1099,12 +1129,17 @@ if ($defsRisk) {
     $orphans = @(@($script:DefNotes.Keys) + @($script:DefRisk.Keys) | Where-Object { -not $itemNames.ContainsKey($_) })
     Check 'каждое пояснение относится к существующей настройке' ($orphans.Count -eq 0) ($orphans -join ' | ')
 }
-$leak = Get-EngineJson @('-LeakTest')
+$leakAll = Get-EngineJson @('-LeakTest')
+$leak = $(if ($leakAll) { $leakAll.endpointReachability } else { $null })
 Check 'проверка утечек отвечает' ($null -ne $leak -and $null -ne $leak.items)
 if ($leak) {
     Check 'итоги проверки утечек сходятся' ([int]$leak.total -eq ([int]$leak.open + [int]$leak.blocked + [int]$leak.hosts + [int]$leak.none)) `
           ("всего {0}: {1}/{2}/{3}/{4}" -f $leak.total, $leak.open, $leak.blocked, $leak.hosts, $leak.none)
     Check 'в проверке утечек и серверы номера устройства' (@($leak.items | Where-Object { "$($_.name)" -eq 'cs.dds.microsoft.com' }).Count -eq 1)
+    # доступность известных адресов — не наблюдение за трафиком, и так и сказано
+    Check 'проверка утечек не выдаёт себя за наблюдение трафика' (
+          "$($leak.protocol)" -eq 'tcp' -and [int]$leak.port -eq 443 -and @($leak.notCovered).Count -ge 4 -and
+          $null -ne $leakAll.telemetryObserved -and $leakAll.telemetryObserved.measured -eq $false)
 }
 Check 'монитор пишет и разрешённые соединения' (($engineText -match [regex]::Escape('Set-AuditSetting $script:AuditGuid $(if ($On) { 3 } else { 0 })')) -and
                                               ($engineText -match [regex]::Escape('/success:$s /failure:$f')))
