@@ -42,7 +42,7 @@ function Get-ProofSnapshot {
     try {
         foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
             if (($t.TaskPath + $t.TaskName) -match 'Appraiser|Consolidator|UsbCeip|DmClient|QueueReporting|ProgramDataUpdater|KernelCeip|Sqm-Tasks|GatherNetworkInfo|Device Information') {
-                if ($t.State -ne 'Disabled') { $tasks++ }
+                if (-not (Test-TaskDisabled $t)) { $tasks++ }
             }
         }
     } catch { }

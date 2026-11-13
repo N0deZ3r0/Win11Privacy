@@ -24,7 +24,13 @@ function Get-RegValue {
 # человек только что вернул. Ответ: removed, absent или failed (посчитано).
 function Remove-OwnTask {
     param([string]$Name, [string]$What)
-    $t = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+    # «нет такой задачи» (ObjectNotFound) и «планировщик не ответил» — тоже разное
+    $t = $null
+    try { $t = Get-ScheduledTask -TaskName $Name -ErrorAction Stop }
+    catch {
+        if ("$($_.CategoryInfo.Category)" -eq 'ObjectNotFound') { Write-Log ("   [-] {0}: нет" -f $What); return 'absent' }
+        Write-Log ("   [!] {0}: планировщик не ответил -- {1}" -f $What, $_.Exception.Message); $script:Failures++; return 'failed'
+    }
     if (-not $t) { Write-Log ("   [-] {0}: нет" -f $What); return 'absent' }
     # работающую сейчас — сначала остановить, чтобы она не доделала своё
     if ("$($t.State)" -eq 'Running') { Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue }
@@ -32,6 +38,83 @@ function Remove-OwnTask {
     catch { Write-Log ("   [!] {0}: не удалилось -- {1}" -f $What, $_.Exception.Message); $script:Failures++; return 'failed' }
     Write-Log ("   [+] {0}: удалено" -f $What)
     return 'removed'
+}
+
+# Выключена ли задача планировщика. State тут не годится: «Disabled» он
+# показывает, только пока у задачи нет работающего экземпляра, — выключенная
+# задача, которая ещё доделывает свой запуск, видна как «Running», а включённая
+# — как «Ready» или «Running». Признак — Settings.Enabled; State — только
+# если настроек у объекта нет.
+function Test-TaskDisabled {
+    param($Task)
+    if ($null -eq $Task) { return $false }
+    $s = $Task.Settings
+    if ($null -ne $s -and $null -ne $s.Enabled) { return (-not [bool]$s.Enabled) }
+    return ("$($Task.State)" -eq 'Disabled')
+}
+
+# Есть ли ключ: $true, $false или $null — неизвестно (нет доступа).
+function Test-RegKeyExists {
+    param([string]$Path)
+    $k = $null
+    try { $k = Open-RegKeyRead $Path; return ($null -ne $k) }
+    catch { return $null }
+    finally { if ($null -ne $k) { $k.Close() } }
+}
+
+# Самый верхний из ключей, которых нет на пути к $Path (его и всё ниже
+# создаст New-Item -Force). Ключ уже есть — пустая строка. Если о ключе
+# или его родителе нельзя сказать наверняка (нет доступа), он «есть»: удалять
+# потом можно только то, что программа точно создала сама.
+function Get-TopMissingKey {
+    param([string]$Path)
+    if ((Test-RegKeyExists $Path) -ne $false) { return '' }
+    $top = $Path
+    while ($true) {
+        $parent = Split-Path -Path $top -Parent
+        if (-not $parent -or $parent -eq $top -or (Test-RegKeyExists $parent) -ne $false) { break }
+        $top = $parent
+    }
+    return $top
+}
+
+# Ключ и всё под ним без единого значения. Что-то не прочиталось — считаем,
+# что не пуст: удалять можно только то, что точно пусто.
+function Test-KeyTreeEmpty {
+    param([string]$Path)
+    try {
+        $k = Get-Item -LiteralPath $Path -ErrorAction Stop
+        try { if ($k.ValueCount -gt 0) { return $false } } finally { $k.Close() }
+        foreach ($c in @(Get-ChildItem -LiteralPath $Path -Recurse -ErrorAction Stop)) {
+            try { if ($c.ValueCount -gt 0) { return $false } } finally { $c.Close() }
+        }
+        return $true
+    } catch { return $false }
+}
+
+# Ключ реестра на чтение — RegistryKey или $null, если ключа нет. Нет доступа
+# (к нему или к ключу выше) — исключение, а не $null. Пути — как у провайдера
+# PowerShell: HKLM:\…, HKCU:\…, Registry::HKEY_USERS\… и т. п.
+function Open-RegKeyRead {
+    param([string]$Path)
+    $hive = $null; $sub = ''
+    switch -Regex ($Path) {
+        '^(HKLM:|Registry::HKEY_LOCAL_MACHINE)(\\(.*))?$' { $hive = [Microsoft.Win32.Registry]::LocalMachine; $sub = $Matches[3]; break }
+        '^(HKCU:|Registry::HKEY_CURRENT_USER)(\\(.*))?$'  { $hive = [Microsoft.Win32.Registry]::CurrentUser; $sub = $Matches[3]; break }
+        '^(HKU:|Registry::HKEY_USERS)(\\(.*))?$'          { $hive = [Microsoft.Win32.Registry]::Users; $sub = $Matches[3]; break }
+        '^(HKCR:|Registry::HKEY_CLASSES_ROOT)(\\(.*))?$'  { $hive = [Microsoft.Win32.Registry]::ClassesRoot; $sub = $Matches[3]; break }
+    }
+    if ($null -eq $hive) { throw ("неизвестная ветка реестра: {0}" -f $Path) }
+    # OpenSubKey('') — отдельный дескриптор самого куста: его можно закрыть
+    return $hive.OpenSubKey("$sub".TrimEnd('\'), $false)
+}
+
+# Два прочитанных состояния значения (Get-RegRaw) — одно и то же: оба «нет»
+# или оба есть, того же вида и с теми же данными.
+function Test-RegSameRaw {
+    param($A, $B)
+    if (-not $A.exists -or -not $B.exists) { return ([bool]$A.exists -eq [bool]$B.exists) }
+    return ("$($A.kind)" -eq "$($B.kind)" -and (ConvertTo-RegComparable $A.value $A.kind) -eq (ConvertTo-RegComparable $B.value $B.kind))
 }
 
 # Виды значений реестра, которые программа умеет записать и вернуть.
@@ -45,12 +128,16 @@ function Test-RegKind {
 # называет, а откату нужно и то и другое: «%SystemRoot%\x», возвращённое
 # раскрытым, или строка, возвращённая числом, — уже не то, что было.
 # ok = $false — прочитать не удалось (это не «параметра нет»).
+# Ключ открывается средствами самого реестра (Open-RegKeyRead): «ключа нет»
+# там — пустой ответ, «нет доступа» — исключение. Раньше сначала спрашивался
+# Test-Path, а он ключ, до которого нельзя добраться, мог назвать отсутствующим,
+# и в журнал легло бы «значения не было».
 function Get-RegRaw {
     param([string]$Path, [string]$Name)
-    if (-not (Test-Path -LiteralPath $Path)) { return @{ ok = $true; exists = $false; kind = ''; value = $null } }
     $key = $null
     try {
-        $key = Get-Item -LiteralPath $Path -ErrorAction Stop
+        $key = Open-RegKeyRead $Path
+        if ($null -eq $key) { return @{ ok = $true; exists = $false; kind = ''; value = $null } }
         if (@($key.GetValueNames()) -notcontains $Name) { return @{ ok = $true; exists = $false; kind = ''; value = $null } }
         return @{ ok = $true; exists = $true; kind = "$($key.GetValueKind($Name))"
                   value = $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
@@ -165,10 +252,15 @@ function Set-Reg {
         $oldType = $raw.kind
         $oldValue = $raw.value
     }
+    # Ключа нет — New-Item создаст и его, и недостающие ключи выше. Самый
+    # верхний из них запоминается: откат уберёт его, если в нём не останется
+    # ни одного значения. Раньше пустые ключи политик оставались навсегда.
+    $createdKey = Get-TopMissingKey $Path
     # «Как было» — на диск раньше изменения (см. Write-AheadEntry). Если
     # изменение не пройдёт, запись отзывается: изменения ведь не было.
     # type — вид прежнего значения (им его и вернёт откат).
     $entry = @{ kind = 'reg'; path = $Path; name = $Name; type = $oldType; existed = $existed; old = $oldValue; newValue = "$Value" }
+    if ($createdKey) { $entry['createdKey'] = $createdKey }
     if (-not (Write-AheadEntry $entry)) {
         Write-Log "   [!] $label -- не меняется: «как было» не легло в журнал отката"
         $script:Failures++; return
@@ -181,23 +273,30 @@ function Set-Reg {
         $done = $true
     } catch {
         $why = ("{0}: {1}" -f $_.Exception.GetType().Name, $_.Exception.Message)
-        $after = Get-RegValue $Path $Name
-        if ($null -ne $after -and (ConvertTo-RegComparable $after $Type) -eq (ConvertTo-RegComparable $Value $Type)) {
-            Undo-AheadEntry $entry
-            Write-Log "   [в] $label -- уже настроено"; $script:Already++; return
+        # Команда сообщила об ошибке, но значение могло и лечь. Раньше в этом
+        # случае запись «как было» отзывалась («уже настроено»), хотя до записи
+        # значение было другим — изменение было, и путь назад терялся. Теперь
+        # такое значение — сделанное изменение: запись остаётся, дальше — сверка.
+        $after = Get-RegRaw $Path $Name
+        if ($after.ok -and $after.exists -and $after.kind -eq $Type -and (ConvertTo-RegComparable $after.value $Type) -eq (ConvertTo-RegComparable $Value $Type)) {
+            Write-Log ("   [i] {0} -- команда записи сообщила об ошибке ({1}), но значение легло" -f $label, $why)
+            $done = $true
+        } else {
+            $retry = Set-RegDirect -Path $Path -Name $Name -Value $Value -Type $Type
+            if ($retry.ok) { $done = $true } else { $why += " / вторая попытка: $($retry.error)" }
         }
-        $retry = Set-RegDirect -Path $Path -Name $Name -Value $Value -Type $Type
-        if ($retry.ok) { $done = $true } else { $why += " / вторая попытка: $($retry.error)" }
     }
 
     if ($done) {
-        # «Команда прошла» — ещё не «значение такое»: читаем обратно и сверяем.
-        # Запись в журнале остаётся в любом случае: значение уже не прежнее.
-        $now = Get-RegValue $Path $Name
+        # «Команда прошла» — ещё не «значение такое»: читаем обратно и сверяем
+        # и данные, и вид значения. Запись в журнале остаётся в любом случае:
+        # значение уже не прежнее.
+        $now = Get-RegRaw $Path $Name
         $want = ConvertTo-RegComparable $Value $Type
-        $got = ConvertTo-RegComparable $now $Type
-        if ($null -eq $now -or $got -ne $want) {
-            Write-Log ("   [!] {0} -- записано, но читается другое: ожидалось {1}, сейчас {2}" -f $label, $want, $(if ($null -eq $now) { 'нет значения' } else { $got }))
+        $got = $(if ($now.ok -and $now.exists) { ConvertTo-RegComparable $now.value $Type } else { $null })
+        if (-not $now.ok -or -not $now.exists -or $now.kind -ne $Type -or $got -ne $want) {
+            $seen = $(if (-not $now.ok) { "не читается ($($now.error))" } elseif (-not $now.exists) { 'нет значения' } elseif ($now.kind -ne $Type) { "{0} вида {1}" -f $got, $now.kind } else { $got })
+            Write-Log ("   [!] {0} -- записано, но читается другое: ожидалось {1} ({2}), сейчас {3}" -f $label, $want, $Type, $seen)
             $script:Failures++
             return
         }
@@ -206,8 +305,22 @@ function Set-Reg {
         return
     }
 
-    # изменения не было — заранее положенная запись отзывается
+    # Записать не вышло. Было ли изменение — решает не ответ команды, а то, что
+    # лежит сейчас: прежнее значение — изменения не было, запись отзывается;
+    # не прочиталось или стало чем-то третьим (запись оборвалась на середине) —
+    # запись «как было» остаётся для отката, и это ошибка.
+    $now = Get-RegRaw $Path $Name
+    if (-not $now.ok -or -not (Test-RegSameRaw $now $raw)) {
+        $state = $(if (-not $now.ok) { "не читается ({0})" -f $now.error } elseif (-not $now.exists) { 'значения нет' } else { "{0} вида {1}" -f (ConvertTo-RegComparable $now.value $now.kind), $now.kind })
+        Write-Log ("   [!] {0} -- не записалось ({1}), но значение уже не прежнее: сейчас {2}. Запись «как было» оставлена для отката" -f $label, $why, $state)
+        $script:Failures++
+        return
+    }
     Undo-AheadEntry $entry
+    # ключ, который успел создать New-Item, — пустой и ничей: убираем
+    if ($createdKey -and (Test-RegKeyExists $createdKey) -and (Test-KeyTreeEmpty $createdKey)) {
+        Remove-Item -LiteralPath $createdKey -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if ($why -like '*UnauthorizedAccessException*' -or $why -like '*SecurityException*') {
         # Часть политик Windows держит сама и не отдаёт даже администратору —
         # это не поломка программы, а решение системы, и в ошибки оно не идёт.

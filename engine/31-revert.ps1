@@ -48,10 +48,10 @@ if ($Revert) {
                 $pp = Split-TaskPath $d.P
                 $st = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
                 if (-not $st) { continue }
-                if ($st.State -ne 'Disabled') { continue }
+                if (-not (Test-TaskDisabled $st)) { continue }
                 if ((Set-TaskEnabled $d.P $true) -in @('ok', 'system')) { Write-Log "   [+] включена: $($pp[1])" } else { Write-Log "   [-] пропущена: $($pp[1])" }
             } elseif ($d.T -eq 'taskglob') {
-                foreach ($t in @(Get-TaskGlobTasks $d.P -AnyFolder | Where-Object { $_.State -eq 'Disabled' })) {
+                foreach ($t in @(Get-TaskGlobTasks $d.P -AnyFolder | Where-Object { Test-TaskDisabled $_ })) {
                     try { Enable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null; Write-Log "   [+] включена: $($t.TaskName)" } catch { Write-Log ("   [!] не включилась: {0} -- {1}" -f $t.TaskName, $_.Exception.Message); $script:Failures++ }
                 }
             }
@@ -153,6 +153,10 @@ if ($Revert) {
     } elseif ([int]$rj.failed -gt 0) {
         Write-Log ("[!] Вернулось не всё: записей журнала, которые вернуть не удалось, -- {0} (какие и почему — выше). Они остались в журнале: повторите откат после перезагрузки." -f $rj.failed)
         Write-Log 'Запасной вариант — резервная копия реестра на рабочем столе или точка восстановления Windows.'
+    } elseif ("$($rj.state)" -eq 'none' -or ([int]$rj.restored + [int]$rj.startup) -eq 0) {
+        # Раньше и здесь говорилось «возвращены и сверены», хотя по журналу
+        # не возвращалось ничего: его не было или он был пуст.
+        Write-Log 'Журнала изменений нет или он пуст -- по нему возвращать было нечего. Остальное (hosts, брандмауэр, страж) убрано, как сказано выше.'
     } else {
         Write-Log 'Настройки реестра возвращены по журналу изменений и сверены — ручной импорт .reg больше не нужен.'
         Write-Log 'Папка резервной копии на рабочем столе остаётся как запасной вариант.'

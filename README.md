@@ -219,6 +219,7 @@ By hand, if you prefer (after editing `engine/`, run `python tools/build_engine.
 | **app.res** | A prebuilt Win32 resource: manifest + icon (10 sizes, 16–256) + version. No need to rebuild it. |
 | **app.ico / app.png** | The application icon. To change it, run `python tools/set_icon.py logo-16.png ... logo-256.png`: it builds app.ico and puts the same images into app.res. |
 | **tests/engine-tests.ps1** | Behaviour checks for the engine; the GitHub build runs the same ones. Read-only. |
+| **tests/engine.Tests.ps1** | Pester tests for registry writes and their verification, the firewall address set, the single-swap hosts rewrite, service rollback and registry access errors. Works with the in-box Pester 3.4 and with Pester 5; the GitHub build runs it. |
 | **tests/roundtrip.ps1** | Apply, verify and revert for real, then compare every value with the original one. It changes the system, so it needs the `-Confirmed` switch; the build runs it on a disposable machine. |
 | **CHANGELOG.md** | What changed in every version. The release text on GitHub is taken from here. |
 | **docs/security-model.md** | The security model and rollback guarantees: trust boundaries, the signed journal, write-ahead logging, what survives a crash, how restores are verified, known limits. |

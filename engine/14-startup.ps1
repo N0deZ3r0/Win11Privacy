@@ -205,7 +205,7 @@ function Get-StartupList {
         try {
             foreach ($a in @($t.Actions)) { if ($a.Execute) { $cmd = [string]$a.Execute; break } }
         } catch { }
-        $list += (New-StartupItem ('task|' + $full) ([string]$t.TaskName) $cmd 'планировщик задач, при входе' 'task' ($t.State -ne 'Disabled'))
+        $list += (New-StartupItem ('task|' + $full) ([string]$t.TaskName) $cmd 'планировщик задач, при входе' 'task' (-not (Test-TaskDisabled $t)))
     }
 
     return @($list | Sort-Object @{ Expression = { -[int][bool]$_.advise } }, @{ Expression = { $_.name } })

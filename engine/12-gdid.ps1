@@ -318,7 +318,7 @@ function Set-TaskEnabled {
     if (-not $denied) {
         # «команда прошла» — ещё не «задача такая»: состояние сверяется
         $t = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
-        if ($t -and (($t.State -eq 'Disabled') -ne $Enabled)) { return 'ok' }
+        if ($t -and ((Test-TaskDisabled $t) -ne $Enabled)) { return 'ok' }
     }
     $flag = $(if ($Enabled) { '/enable' } else { '/disable' })
     # schtasks запускается напрямую, а не через cmd; кавычка в имени задачи
@@ -326,7 +326,7 @@ function Set-TaskEnabled {
     if ($Full -match '["\r\n]') { return 'fail' }
     $null = Invoke-OneShotTask -TaskName 'Win11Privacy Task' -Execute "$env:SystemRoot\System32\schtasks.exe" -Arguments ('/change /tn "{0}" {1}' -f $Full, $flag) -AsSystem
     $t = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
-    if ($t -and (($t.State -eq 'Disabled') -ne $Enabled)) { return 'system' }
+    if ($t -and ((Test-TaskDisabled $t) -ne $Enabled)) { return 'system' }
     return 'fail'
 }
 

@@ -98,6 +98,19 @@ jobs:
           .\tests\engine-tests.ps1
           if ($LASTEXITCODE -ne 0) { throw "engine behaviour checks failed (see [FAIL] lines above)" }
 
+      - name: Pester-проверки движка
+        timeout-minutes: 10
+        shell: powershell
+        # Latin-only text here (the step runs in Windows PowerShell 5.1). The
+        # test file works with both the in-box Pester 3.4 and Pester 5.
+        run: |
+          $pv = (Get-Module Pester -ListAvailable | Sort-Object Version -Descending | Select-Object -First 1).Version
+          Write-Host "Pester $pv"
+          Import-Module Pester -RequiredVersion $pv -Force
+          if ($pv.Major -ge 5) { $r = Invoke-Pester -Path .\tests\engine.Tests.ps1 -PassThru -Output Detailed }
+          else { $r = Invoke-Pester -Script .\tests\engine.Tests.ps1 -PassThru }
+          if ($r.FailedCount -gt 0 -or $r.PassedCount -eq 0) { throw "Pester: $($r.FailedCount) failed, $($r.PassedCount) passed" }
+
       # Единственная проверка, которая по-настоящему отвечает за откат:
       # настройки применяются на живой системе, а потом каждое значение
       # сверяется с тем, что было до. Машина здесь одноразовая.

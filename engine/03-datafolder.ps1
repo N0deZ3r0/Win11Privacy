@@ -222,6 +222,12 @@ function Install-TaskEngine {
 # Файл пишется рядом и подменяет прежний одним движением: обрыв на середине
 # записи (выключили питание, прервали движок) не оставит от журнала отката
 # половину — а журнал единственный путь назад.
+#
+# Файлы данных читают и другие запуски (окно, страж), и антивирус. Замене
+# одним действием мешает тот, кто держит файл открытым без права на удаление:
+# раньше первая же такая встреча давала «журнал отката не записался», и
+# применение останавливалось. Теперь замена ждёт и пробует снова; сами мы
+# читаем с правом на удаление (Read-TextShared) и чужую замену не держим.
 function Save-Json {
     param([string]$Name, $Object)
     Ensure-DataDir
@@ -231,6 +237,47 @@ function Save-Json {
     # Замена одним действием системы (ReplaceFile). Move-Item -Force делал
     # «удалить старый, переименовать новый» — между ними журнала не было
     # вовсе, и обрыв в этот миг оставлял программу без пути назад.
-    if (Test-Path -LiteralPath $path) { [IO.File]::Replace($tmp, $path, [NullString]::Value) }
-    else { [IO.File]::Move($tmp, $path) }
+    Replace-FileAtomic $tmp $path
+}
+
+# Готовый файл $Tmp встаёт на место $Path одним действием системы
+# (ReplaceFile: права и атрибуты прежнего файла сохраняются; файла ещё нет —
+# переименование). Держит кто-то другой (антивирус, чужое чтение без права
+# на удаление) — ждём и пробуем снова, до трёх секунд.
+function Replace-FileAtomic {
+    param([string]$Tmp, [string]$Path)
+    for ($try = 1; ; $try++) {
+        try {
+            if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($Tmp, $Path, [NullString]::Value) }
+            else { [IO.File]::Move($Tmp, $Path) }
+            return
+        } catch [System.IO.IOException] {
+            if ($try -ge 30) { throw }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+}
+
+# Текст файла данных. Открывается с правом на чтение, запись и удаление для
+# других: замена файла другим запуском (ReplaceFile) не упрётся в нас, а мы
+# прочитаем либо прежний файл, либо новый — целиком. Занят без права на
+# чтение (антивирус) — ждём и пробуем снова; не вышло — ошибка, а не «пусто».
+# Файла нет — $null.
+function Read-TextShared {
+    param([string]$Path)
+    for ($try = 1; ; $try++) {
+        try {
+            $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read,
+                                         ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+            try {
+                $sr = New-Object System.IO.StreamReader($fs, (New-Object System.Text.UTF8Encoding $false), $true)
+                return $sr.ReadToEnd()
+            } finally { $fs.Dispose() }
+        } catch [System.IO.FileNotFoundException] { return $null }
+        catch [System.IO.DirectoryNotFoundException] { return $null }
+        catch [System.IO.IOException] {
+            if ($try -ge 30) { throw }
+            Start-Sleep -Milliseconds 100
+        }
+    }
 }

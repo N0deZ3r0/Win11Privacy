@@ -188,7 +188,9 @@ $script:FwGroup        = 'Win11Privacy'
 $script:DataDir        = $(if ($DataRoot) { $DataRoot } else { Join-Path $env:ProgramData 'Win11Privacy' })
 # Задачам планировщика путь к данным надо передать явно: они запускаются
 # сами по себе и о переносимом режиме иначе не узнают.
-$script:DataArg        = $(if ($DataRoot) { ' -DataRoot "' + $DataRoot + '"' } else { '' })
+# Обратная косая в конце пути (D:\) экранировала бы закрывающую кавычку в
+# командной строке задачи; по правилам разбора её удваивают.
+$script:DataArg        = $(if ($DataRoot) { ' -DataRoot "' + ($DataRoot -replace '\\$', '\\') + '"' } else { '' })
 # Запуск из планировщика: страж, наблюдение за датчиками и сетью. Такие запуски
 # идут сами, без человека, и с правами администратора.
 $script:TaskRun        = [bool]($Guard -or $SensorGuard -or $NetGuard -or $WatcherNotify)
@@ -268,7 +270,13 @@ function Get-RegValue {
 # человек только что вернул. Ответ: removed, absent или failed (посчитано).
 function Remove-OwnTask {
     param([string]$Name, [string]$What)
-    $t = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+    # «нет такой задачи» (ObjectNotFound) и «планировщик не ответил» — тоже разное
+    $t = $null
+    try { $t = Get-ScheduledTask -TaskName $Name -ErrorAction Stop }
+    catch {
+        if ("$($_.CategoryInfo.Category)" -eq 'ObjectNotFound') { Write-Log ("   [-] {0}: нет" -f $What); return 'absent' }
+        Write-Log ("   [!] {0}: планировщик не ответил -- {1}" -f $What, $_.Exception.Message); $script:Failures++; return 'failed'
+    }
     if (-not $t) { Write-Log ("   [-] {0}: нет" -f $What); return 'absent' }
     # работающую сейчас — сначала остановить, чтобы она не доделала своё
     if ("$($t.State)" -eq 'Running') { Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue }
@@ -276,6 +284,83 @@ function Remove-OwnTask {
     catch { Write-Log ("   [!] {0}: не удалилось -- {1}" -f $What, $_.Exception.Message); $script:Failures++; return 'failed' }
     Write-Log ("   [+] {0}: удалено" -f $What)
     return 'removed'
+}
+
+# Выключена ли задача планировщика. State тут не годится: «Disabled» он
+# показывает, только пока у задачи нет работающего экземпляра, — выключенная
+# задача, которая ещё доделывает свой запуск, видна как «Running», а включённая
+# — как «Ready» или «Running». Признак — Settings.Enabled; State — только
+# если настроек у объекта нет.
+function Test-TaskDisabled {
+    param($Task)
+    if ($null -eq $Task) { return $false }
+    $s = $Task.Settings
+    if ($null -ne $s -and $null -ne $s.Enabled) { return (-not [bool]$s.Enabled) }
+    return ("$($Task.State)" -eq 'Disabled')
+}
+
+# Есть ли ключ: $true, $false или $null — неизвестно (нет доступа).
+function Test-RegKeyExists {
+    param([string]$Path)
+    $k = $null
+    try { $k = Open-RegKeyRead $Path; return ($null -ne $k) }
+    catch { return $null }
+    finally { if ($null -ne $k) { $k.Close() } }
+}
+
+# Самый верхний из ключей, которых нет на пути к $Path (его и всё ниже
+# создаст New-Item -Force). Ключ уже есть — пустая строка. Если о ключе
+# или его родителе нельзя сказать наверняка (нет доступа), он «есть»: удалять
+# потом можно только то, что программа точно создала сама.
+function Get-TopMissingKey {
+    param([string]$Path)
+    if ((Test-RegKeyExists $Path) -ne $false) { return '' }
+    $top = $Path
+    while ($true) {
+        $parent = Split-Path -Path $top -Parent
+        if (-not $parent -or $parent -eq $top -or (Test-RegKeyExists $parent) -ne $false) { break }
+        $top = $parent
+    }
+    return $top
+}
+
+# Ключ и всё под ним без единого значения. Что-то не прочиталось — считаем,
+# что не пуст: удалять можно только то, что точно пусто.
+function Test-KeyTreeEmpty {
+    param([string]$Path)
+    try {
+        $k = Get-Item -LiteralPath $Path -ErrorAction Stop
+        try { if ($k.ValueCount -gt 0) { return $false } } finally { $k.Close() }
+        foreach ($c in @(Get-ChildItem -LiteralPath $Path -Recurse -ErrorAction Stop)) {
+            try { if ($c.ValueCount -gt 0) { return $false } } finally { $c.Close() }
+        }
+        return $true
+    } catch { return $false }
+}
+
+# Ключ реестра на чтение — RegistryKey или $null, если ключа нет. Нет доступа
+# (к нему или к ключу выше) — исключение, а не $null. Пути — как у провайдера
+# PowerShell: HKLM:\…, HKCU:\…, Registry::HKEY_USERS\… и т. п.
+function Open-RegKeyRead {
+    param([string]$Path)
+    $hive = $null; $sub = ''
+    switch -Regex ($Path) {
+        '^(HKLM:|Registry::HKEY_LOCAL_MACHINE)(\\(.*))?$' { $hive = [Microsoft.Win32.Registry]::LocalMachine; $sub = $Matches[3]; break }
+        '^(HKCU:|Registry::HKEY_CURRENT_USER)(\\(.*))?$'  { $hive = [Microsoft.Win32.Registry]::CurrentUser; $sub = $Matches[3]; break }
+        '^(HKU:|Registry::HKEY_USERS)(\\(.*))?$'          { $hive = [Microsoft.Win32.Registry]::Users; $sub = $Matches[3]; break }
+        '^(HKCR:|Registry::HKEY_CLASSES_ROOT)(\\(.*))?$'  { $hive = [Microsoft.Win32.Registry]::ClassesRoot; $sub = $Matches[3]; break }
+    }
+    if ($null -eq $hive) { throw ("неизвестная ветка реестра: {0}" -f $Path) }
+    # OpenSubKey('') — отдельный дескриптор самого куста: его можно закрыть
+    return $hive.OpenSubKey("$sub".TrimEnd('\'), $false)
+}
+
+# Два прочитанных состояния значения (Get-RegRaw) — одно и то же: оба «нет»
+# или оба есть, того же вида и с теми же данными.
+function Test-RegSameRaw {
+    param($A, $B)
+    if (-not $A.exists -or -not $B.exists) { return ([bool]$A.exists -eq [bool]$B.exists) }
+    return ("$($A.kind)" -eq "$($B.kind)" -and (ConvertTo-RegComparable $A.value $A.kind) -eq (ConvertTo-RegComparable $B.value $B.kind))
 }
 
 # Виды значений реестра, которые программа умеет записать и вернуть.
@@ -289,12 +374,16 @@ function Test-RegKind {
 # называет, а откату нужно и то и другое: «%SystemRoot%\x», возвращённое
 # раскрытым, или строка, возвращённая числом, — уже не то, что было.
 # ok = $false — прочитать не удалось (это не «параметра нет»).
+# Ключ открывается средствами самого реестра (Open-RegKeyRead): «ключа нет»
+# там — пустой ответ, «нет доступа» — исключение. Раньше сначала спрашивался
+# Test-Path, а он ключ, до которого нельзя добраться, мог назвать отсутствующим,
+# и в журнал легло бы «значения не было».
 function Get-RegRaw {
     param([string]$Path, [string]$Name)
-    if (-not (Test-Path -LiteralPath $Path)) { return @{ ok = $true; exists = $false; kind = ''; value = $null } }
     $key = $null
     try {
-        $key = Get-Item -LiteralPath $Path -ErrorAction Stop
+        $key = Open-RegKeyRead $Path
+        if ($null -eq $key) { return @{ ok = $true; exists = $false; kind = ''; value = $null } }
         if (@($key.GetValueNames()) -notcontains $Name) { return @{ ok = $true; exists = $false; kind = ''; value = $null } }
         return @{ ok = $true; exists = $true; kind = "$($key.GetValueKind($Name))"
                   value = $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
@@ -409,10 +498,15 @@ function Set-Reg {
         $oldType = $raw.kind
         $oldValue = $raw.value
     }
+    # Ключа нет — New-Item создаст и его, и недостающие ключи выше. Самый
+    # верхний из них запоминается: откат уберёт его, если в нём не останется
+    # ни одного значения. Раньше пустые ключи политик оставались навсегда.
+    $createdKey = Get-TopMissingKey $Path
     # «Как было» — на диск раньше изменения (см. Write-AheadEntry). Если
     # изменение не пройдёт, запись отзывается: изменения ведь не было.
     # type — вид прежнего значения (им его и вернёт откат).
     $entry = @{ kind = 'reg'; path = $Path; name = $Name; type = $oldType; existed = $existed; old = $oldValue; newValue = "$Value" }
+    if ($createdKey) { $entry['createdKey'] = $createdKey }
     if (-not (Write-AheadEntry $entry)) {
         Write-Log "   [!] $label -- не меняется: «как было» не легло в журнал отката"
         $script:Failures++; return
@@ -425,23 +519,30 @@ function Set-Reg {
         $done = $true
     } catch {
         $why = ("{0}: {1}" -f $_.Exception.GetType().Name, $_.Exception.Message)
-        $after = Get-RegValue $Path $Name
-        if ($null -ne $after -and (ConvertTo-RegComparable $after $Type) -eq (ConvertTo-RegComparable $Value $Type)) {
-            Undo-AheadEntry $entry
-            Write-Log "   [в] $label -- уже настроено"; $script:Already++; return
+        # Команда сообщила об ошибке, но значение могло и лечь. Раньше в этом
+        # случае запись «как было» отзывалась («уже настроено»), хотя до записи
+        # значение было другим — изменение было, и путь назад терялся. Теперь
+        # такое значение — сделанное изменение: запись остаётся, дальше — сверка.
+        $after = Get-RegRaw $Path $Name
+        if ($after.ok -and $after.exists -and $after.kind -eq $Type -and (ConvertTo-RegComparable $after.value $Type) -eq (ConvertTo-RegComparable $Value $Type)) {
+            Write-Log ("   [i] {0} -- команда записи сообщила об ошибке ({1}), но значение легло" -f $label, $why)
+            $done = $true
+        } else {
+            $retry = Set-RegDirect -Path $Path -Name $Name -Value $Value -Type $Type
+            if ($retry.ok) { $done = $true } else { $why += " / вторая попытка: $($retry.error)" }
         }
-        $retry = Set-RegDirect -Path $Path -Name $Name -Value $Value -Type $Type
-        if ($retry.ok) { $done = $true } else { $why += " / вторая попытка: $($retry.error)" }
     }
 
     if ($done) {
-        # «Команда прошла» — ещё не «значение такое»: читаем обратно и сверяем.
-        # Запись в журнале остаётся в любом случае: значение уже не прежнее.
-        $now = Get-RegValue $Path $Name
+        # «Команда прошла» — ещё не «значение такое»: читаем обратно и сверяем
+        # и данные, и вид значения. Запись в журнале остаётся в любом случае:
+        # значение уже не прежнее.
+        $now = Get-RegRaw $Path $Name
         $want = ConvertTo-RegComparable $Value $Type
-        $got = ConvertTo-RegComparable $now $Type
-        if ($null -eq $now -or $got -ne $want) {
-            Write-Log ("   [!] {0} -- записано, но читается другое: ожидалось {1}, сейчас {2}" -f $label, $want, $(if ($null -eq $now) { 'нет значения' } else { $got }))
+        $got = $(if ($now.ok -and $now.exists) { ConvertTo-RegComparable $now.value $Type } else { $null })
+        if (-not $now.ok -or -not $now.exists -or $now.kind -ne $Type -or $got -ne $want) {
+            $seen = $(if (-not $now.ok) { "не читается ($($now.error))" } elseif (-not $now.exists) { 'нет значения' } elseif ($now.kind -ne $Type) { "{0} вида {1}" -f $got, $now.kind } else { $got })
+            Write-Log ("   [!] {0} -- записано, но читается другое: ожидалось {1} ({2}), сейчас {3}" -f $label, $want, $Type, $seen)
             $script:Failures++
             return
         }
@@ -450,8 +551,22 @@ function Set-Reg {
         return
     }
 
-    # изменения не было — заранее положенная запись отзывается
+    # Записать не вышло. Было ли изменение — решает не ответ команды, а то, что
+    # лежит сейчас: прежнее значение — изменения не было, запись отзывается;
+    # не прочиталось или стало чем-то третьим (запись оборвалась на середине) —
+    # запись «как было» остаётся для отката, и это ошибка.
+    $now = Get-RegRaw $Path $Name
+    if (-not $now.ok -or -not (Test-RegSameRaw $now $raw)) {
+        $state = $(if (-not $now.ok) { "не читается ({0})" -f $now.error } elseif (-not $now.exists) { 'значения нет' } else { "{0} вида {1}" -f (ConvertTo-RegComparable $now.value $now.kind), $now.kind })
+        Write-Log ("   [!] {0} -- не записалось ({1}), но значение уже не прежнее: сейчас {2}. Запись «как было» оставлена для отката" -f $label, $why, $state)
+        $script:Failures++
+        return
+    }
     Undo-AheadEntry $entry
+    # ключ, который успел создать New-Item, — пустой и ничей: убираем
+    if ($createdKey -and (Test-RegKeyExists $createdKey) -and (Test-KeyTreeEmpty $createdKey)) {
+        Remove-Item -LiteralPath $createdKey -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if ($why -like '*UnauthorizedAccessException*' -or $why -like '*SecurityException*') {
         # Часть политик Windows держит сама и не отдаёт даже администратору —
         # это не поломка программы, а решение системы, и в ошибки оно не идёт.
@@ -822,6 +937,12 @@ function Install-TaskEngine {
 # Файл пишется рядом и подменяет прежний одним движением: обрыв на середине
 # записи (выключили питание, прервали движок) не оставит от журнала отката
 # половину — а журнал единственный путь назад.
+#
+# Файлы данных читают и другие запуски (окно, страж), и антивирус. Замене
+# одним действием мешает тот, кто держит файл открытым без права на удаление:
+# раньше первая же такая встреча давала «журнал отката не записался», и
+# применение останавливалось. Теперь замена ждёт и пробует снова; сами мы
+# читаем с правом на удаление (Read-TextShared) и чужую замену не держим.
 function Save-Json {
     param([string]$Name, $Object)
     Ensure-DataDir
@@ -831,8 +952,49 @@ function Save-Json {
     # Замена одним действием системы (ReplaceFile). Move-Item -Force делал
     # «удалить старый, переименовать новый» — между ними журнала не было
     # вовсе, и обрыв в этот миг оставлял программу без пути назад.
-    if (Test-Path -LiteralPath $path) { [IO.File]::Replace($tmp, $path, [NullString]::Value) }
-    else { [IO.File]::Move($tmp, $path) }
+    Replace-FileAtomic $tmp $path
+}
+
+# Готовый файл $Tmp встаёт на место $Path одним действием системы
+# (ReplaceFile: права и атрибуты прежнего файла сохраняются; файла ещё нет —
+# переименование). Держит кто-то другой (антивирус, чужое чтение без права
+# на удаление) — ждём и пробуем снова, до трёх секунд.
+function Replace-FileAtomic {
+    param([string]$Tmp, [string]$Path)
+    for ($try = 1; ; $try++) {
+        try {
+            if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($Tmp, $Path, [NullString]::Value) }
+            else { [IO.File]::Move($Tmp, $Path) }
+            return
+        } catch [System.IO.IOException] {
+            if ($try -ge 30) { throw }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+}
+
+# Текст файла данных. Открывается с правом на чтение, запись и удаление для
+# других: замена файла другим запуском (ReplaceFile) не упрётся в нас, а мы
+# прочитаем либо прежний файл, либо новый — целиком. Занят без права на
+# чтение (антивирус) — ждём и пробуем снова; не вышло — ошибка, а не «пусто».
+# Файла нет — $null.
+function Read-TextShared {
+    param([string]$Path)
+    for ($try = 1; ; $try++) {
+        try {
+            $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read,
+                                         ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+            try {
+                $sr = New-Object System.IO.StreamReader($fs, (New-Object System.Text.UTF8Encoding $false), $true)
+                return $sr.ReadToEnd()
+            } finally { $fs.Dispose() }
+        } catch [System.IO.FileNotFoundException] { return $null }
+        catch [System.IO.DirectoryNotFoundException] { return $null }
+        catch [System.IO.IOException] {
+            if ($try -ge 30) { throw }
+            Start-Sleep -Milliseconds 100
+        }
+    }
 }
 # --- Резервная копия и точка восстановления --------------------------------- #
 #  Делаются не «на всякий случай» при каждом запуске, а ровно перед первым
@@ -845,39 +1007,75 @@ $script:BackupTried = $false
 # столе и тратить минуту на точку отката при каждой мелкой правке.
 $script:BackupEnabled = $false
 
-# Выгружает ветку реестра в .reg и проверяет, что выгрузилась: reg.exe
-# закончил с кодом 0, а файл начинается с заголовка, который понимает импорт.
-# Раньше успехом считалось само появление файла — а reg.exe, упавший на
-# середине, оставляет недописанный. reg.exe запускается напрямую, по полному
-# пути, без cmd.exe; вывод читается, но не превращается в ошибки PowerShell.
-# Пустая строка — выгрузилось, иначе — почему нет.
-function Export-RegKey {
-    param([string]$Key, [string]$File)
+# reg.exe напрямую, по полному пути, без cmd.exe: вывод читается, но не
+# превращается в ошибки PowerShell. Ответ — код выхода и текст ошибки
+# (code = -1 — не запустился или не уложился во время).
+function Invoke-RegExe {
+    param([string]$Arguments, [int]$TimeoutMs = 300000)
     $p = $null
     try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = Join-Path $env:SystemRoot 'System32\reg.exe'
-        # в пути ветки и файла кавычек не бывает; обратная косая в конце
-        # экранировала бы закрывающую кавычку — её убираем
-        $psi.Arguments = ('export "{0}" "{1}" /y' -f $Key.TrimEnd('\'), $File)
+        $psi.Arguments = $Arguments
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $true
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
         $p = [System.Diagnostics.Process]::Start($psi)
+        # Оба потока — асинхронно: синхронное чтение ждало бы конца процесса,
+        # и ограничение по времени ниже не сработало бы никогда.
         $errText = $p.StandardError.ReadToEndAsync()
-        $null = $p.StandardOutput.ReadToEnd()
-        if (-not $p.WaitForExit(300000)) { try { $p.Kill() } catch { }; return 'reg.exe не закончил выгрузку за пять минут' }
-        if ($p.ExitCode -ne 0) { return ("reg.exe, код {0}: {1}" -f $p.ExitCode, ("$($errText.Result)" -replace '\s+', ' ').Trim()) }
-    } catch { return $_.Exception.Message }
+        $null = $p.StandardOutput.ReadToEndAsync()
+        if (-not $p.WaitForExit($TimeoutMs)) { try { $p.Kill() } catch { }; return @{ code = -1; error = 'reg.exe не закончил за отведённое время' } }
+        return @{ code = $p.ExitCode; error = ("$($errText.Result)" -replace '\s+', ' ').Trim() }
+    } catch { return @{ code = -1; error = $_.Exception.Message } }
     finally { if ($null -ne $p) { $p.Dispose() } }
-    if (-not (Test-Path -LiteralPath $File)) { return 'reg.exe закончил без ошибки, но файла нет' }
-    $head = ''
+}
+
+# Подпись файла резервной копии — тем же ключом, что и журнал отката
+# (HMAC-SHA256), с отдельной приставкой: подпись журнала за подпись файла не
+# сойдёт. В подпись входят имя папки копии и имя файла: файл из другой копии
+# или под другим именем не подойдёт.
+function Get-BackupFileSig {
+    param([string]$File, [string]$Folder, [string]$Name, [switch]$Create)
+    $h = [System.Security.Cryptography.HMACSHA256]::new([byte[]](Get-SignKey -Create:$Create))
     try {
-        $sr = New-Object System.IO.StreamReader($File, $true)
-        try { $head = $sr.ReadLine() } finally { $sr.Close() }
-    } catch { return ("файл не читается: {0}" -f $_.Exception.Message) }
-    if ("$head" -ne 'Windows Registry Editor Version 5.00') { return 'в файле нет заголовка выгрузки реестра' }
+        $head = [Text.Encoding]::UTF8.GetBytes(('w11p-backup|{0}|{1}|' -f $Folder.ToLowerInvariant(), $Name.ToLowerInvariant()))
+        $data = [IO.File]::ReadAllBytes($File)
+        $null = $h.TransformBlock($head, 0, $head.Length, $null, 0)
+        $null = $h.TransformFinalBlock($data, 0, $data.Length)
+        return (($h.Hash | ForEach-Object { $_.ToString('x2') }) -join '')
+    } finally { $h.Dispose() }
+}
+
+# Выгружает ветку реестра в .reg и проверяет, что выгрузилась: reg.exe
+# закончил с кодом 0, а файл начинается с заголовка, который понимает импорт.
+# Раньше успехом считалось само появление файла — а reg.exe, упавший на
+# середине, оставляет недописанный. Пустая строка — выгрузилось, иначе — почему нет.
+function Export-RegKey {
+    param([string]$Key, [string]$File)
+    # в пути ветки и файла кавычек не бывает; обратная косая в конце
+    # экранировала бы закрывающую кавычку — её убираем
+    $r = Invoke-RegExe ('export "{0}" "{1}" /y' -f $Key.TrimEnd('\'), $File)
+    if ($r.code -eq -1) { return $r.error }
+    if ($r.code -ne 0) { return ("reg.exe, код {0}: {1}" -f $r.code, $r.error) }
+    if (-not (Test-Path -LiteralPath $File)) { return 'reg.exe закончил без ошибки, но файла нет' }
+    return (Test-RegExportFile $File $Key)
+}
+
+# Выгрузка целая: UTF-16 с меткой FF FE и чётной длиной, заголовок, сразу за
+# ним — сама выгруженная ветка, а в конце — пустая строка, которой reg.exe
+# заканчивает каждую запись. Файл, оборванный посередине записи, не пройдёт.
+# Пустая строка — целая, иначе — почему нет.
+function Test-RegExportFile {
+    param([string]$File, [string]$Key)
+    try { $b = [IO.File]::ReadAllBytes($File) } catch { return ("файл не читается: {0}" -f $_.Exception.Message) }
+    if ($b.Length -lt 4 -or $b[0] -ne 0xFF -or $b[1] -ne 0xFE -or ($b.Length % 2) -ne 0) { return 'файл не в том виде, в каком его пишет reg.exe (UTF-16)' }
+    $t = [Text.Encoding]::Unicode.GetString($b, 2, $b.Length - 2)
+    $full = ($Key.TrimEnd('\') -replace '^HKLM\\', 'HKEY_LOCAL_MACHINE\' -replace '^HKCU\\', 'HKEY_CURRENT_USER\')
+    $start = "Windows Registry Editor Version 5.00`r`n`r`n[" + $full + "]`r`n"
+    if (-not $t.StartsWith($start, [StringComparison]::OrdinalIgnoreCase)) { return 'в начале файла нет заголовка выгрузки и самой ветки' }
+    if (-not $t.EndsWith("`r`n`r`n")) { return 'файл оборван: последняя запись не закончена' }
     return ''
 }
 
@@ -911,6 +1109,18 @@ function Ensure-Backup {
             if ($saved -gt 0) {
                 $script:BackupDir = $dir
                 Write-Log ("   [+] сохранено веток: {0} -> {1}" -f $saved, $dir)
+                # Подписи файлов: копия лежит там, куда пишет любая программа
+                # пользователя, а возвращается с правами администратора
+                # (см. Restore-BackupFolder). Без подписи программа её не вернёт.
+                try {
+                    $sigs = @{}
+                    foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter '*.reg')) {
+                        $sigs[$f.Name] = Get-BackupFileSig $f.FullName (Split-Path $dir -Leaf) $f.Name -Create
+                    }
+                    (@{ version = 1; files = $sigs } | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath (Join-Path $dir 'backup-sig.json') -Encoding UTF8 -ErrorAction Stop
+                } catch {
+                    Write-Log ("   [-] копия не подписана ({0}) -- вернуть её кнопкой программы будет нельзя, только вручную" -f $_.Exception.Message)
+                }
             } else {
                 Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
                 Write-Log '   [-] сохранять нечего: ни одна ветка не выгрузилась'
@@ -1080,7 +1290,22 @@ function Test-JournalEntryKnown {
 }
 
 # -ReadOnly — для показа журнала: ничего не откладывать и не писать.
+# Журнал читается под тем же замком, под которым его пишут: у подмены файла
+# (ReplaceFile) есть миг, когда его нет под этим именем, и чтение без замка
+# в этот миг видело «журнала нет» — откат сказал бы «возвращать нечего».
+# Замок повторно входимый: запись, которая читает журнал под замком, не ждёт сама себя.
 function Read-JournalFile {
+    param([switch]$ReadOnly)
+    $box = @{ r = $null }
+    try { Use-JournalLock { $box.r = Read-JournalFileUnlocked -ReadOnly:$ReadOnly } }
+    catch {
+        if (-not $ReadOnly) { Write-Log ("   [!] журнал отката сейчас не читается ({0}) -- файл не тронут, повторите позже" -f $_.Exception.Message) }
+        return @{ items = @(); legacy = $false; exists = $true; signed = $false; trusted = $false; state = 'unreadable'; updated = ''; dropped = 0 }
+    }
+    return $box.r
+}
+
+function Read-JournalFileUnlocked {
     param([switch]$ReadOnly)
     # state: none — журнала нет; valid — ему можно верить; legacy — можно
     # верить, но он прежнего образца (не знает служб и задач); untrusted —
@@ -1103,8 +1328,27 @@ function Read-JournalFile {
         Write-Log ("   [!] {0} По нему ничего не возвращается; файл отложен как {1}" -f $Why, (Split-Path $bad -Leaf))
         $res.exists = $false
     }
-    try { $j = Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json }
-    catch {
+    # Не прочитался (занят другим процессом) — это не повреждение и не «пусто».
+    # Раньше ошибка чтения Get-Content не прерывала разбор: журнал выглядел
+    # пустым и достоверным, и откат в этот миг сказал бы «возвращать нечего».
+    # Файл был, а при открытии его нет: другой запуск как раз подменяет его
+    # (у ReplaceFile есть миг без файла под этим именем). Это не «журнала нет»
+    # — ждём и читаем снова; раньше такой миг читался как пустой журнал.
+    $txt = $null
+    for ($k = 1; $k -le 20; $k++) {
+        try { $txt = Read-TextShared $p }
+        catch {
+            $res.trusted = $false; $res.state = 'unreadable'
+            if (-not $ReadOnly) { Write-Log ("   [!] журнал отката сейчас не читается ({0}) -- файл не тронут, повторите позже" -f $_.Exception.Message) }
+            return $res
+        }
+        if ($null -ne $txt) { break }
+        Start-Sleep -Milliseconds 50
+    }
+    if ($null -eq $txt) { $res.exists = $false; return $res }      # и правда удалён
+    $j = $null
+    try { if ("$txt".Trim()) { $j = $txt | ConvertFrom-Json -ErrorAction Stop } } catch { $j = $null }
+    if ($null -eq $j) {
         & $setAside 'changes.broken-' 'журнал отката повреждён.'
         return $res
     }
@@ -1250,6 +1494,10 @@ function Save-JournalEntries {
         if (-not (Test-DataTrusted)) { throw 'папка данных программы не защищена от подмены' }
         Use-JournalLock {
             $prev = Read-JournalFile
+            # Не прочитался (занят) — дописывать нельзя: новый файл из одних
+            # свежих записей затёр бы всю историю «как было». Раньше ошибка
+            # чтения выглядела пустым журналом, и так и происходило.
+            if ($prev.state -eq 'unreadable') { throw 'журнал отката сейчас не читается -- дописать в него нельзя, не потеряв прежние записи' }
             $all = New-Object System.Collections.Generic.List[object]
             foreach ($e in @($prev.items)) {
                 # Записи, положенные заранее этим же запуском, чьё изменение не
@@ -1319,8 +1567,11 @@ function Load-Json {
     if (-not (Test-DataTrusted)) { return $null }
     $p = Join-Path $script:DataDir $Name
     if (-not (Test-Path -LiteralPath $p)) { return $null }
-    try { return (Get-Content -LiteralPath $p -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json) }
-    catch { Write-Log ("   [!] файл данных {0} не читается: {1}" -f $Name, $_.Exception.Message); return $null }
+    try {
+        $txt = Read-TextShared $p
+        if (-not "$txt".Trim()) { return $null }
+        return ($txt | ConvertFrom-Json -ErrorAction Stop)
+    } catch { Write-Log ("   [!] файл данных {0} не читается: {1}" -f $Name, $_.Exception.Message); return $null }
 }
 
 # --- Службы, задачи и переменные среды в журнале отката --------------------- #
@@ -1413,6 +1664,9 @@ function Test-JournalEntryShape {
             if ("$($f['path'])" -notmatch $regPath) { return 'путь не в ветке реестра' }
             if (-not "$($f['name'])") { return 'пустое имя параметра' }
             if ($f['existed'] -and -not (Test-RegKind "$($f['type'])")) { return 'неизвестный тип значения' }
+            # созданный программой ключ — только сам путь значения или ключ выше него
+            $ck = "$($f['createdKey'])"
+            if ($ck -and -not ($ck -match $regPath -and ("$($f['path'])" -eq $ck -or "$($f['path'])".StartsWith($ck + '\', [StringComparison]::OrdinalIgnoreCase)))) { return 'созданный ключ не на пути значения' }
             return ''
         }
         'svc' {
@@ -1487,6 +1741,21 @@ function Restore-RegValue {
     return @{ ok = $true }
 }
 
+# Убирает ключи, которые создала программа (createdKey в записях журнала),
+# когда в них не осталось ни одного значения. Вызывается после того, как
+# возвращены все значения: значения одного ключа лежат в разных записях, а
+# ключ запомнила только первая из них. Ключ, в который за это время записал
+# кто-то ещё, остаётся — это не ошибка.
+function Remove-CreatedKeys {
+    param([string[]]$Keys)
+    foreach ($k in @($Keys | Where-Object { $_ } | Select-Object -Unique | Sort-Object { $_.Length } -Descending)) {
+        if (-not (Test-Path -LiteralPath $k)) { continue }
+        if (-not (Test-KeyTreeEmpty $k)) { Write-Log ("   [i] ключ {0} создала программа, но в нём есть и другие значения -- оставлен" -f $k); continue }
+        try { Remove-Item -LiteralPath $k -Recurse -Force -ErrorAction Stop; Write-Log ("   [+] убран пустой ключ, которого не было до программы: {0}" -f $k) }
+        catch { Write-Log ("   [!] пустой ключ {0}, которого не было до программы, не убрался: {1}" -f $k, $_.Exception.Message); $script:Failures++ }
+    }
+}
+
 # Возвращает одну запись журнала (реестр, служба, задача, переменная среды).
 # Записи автозагрузки и чужих профилей возвращаются своими функциями.
 function Restore-JournalEntry {
@@ -1501,10 +1770,28 @@ function Restore-JournalEntry {
                 $type = switch ($start) { '2' { 'Automatic' } '3' { 'Manual' } '4' { 'Disabled' } default { '' } }
                 if ($type) { Set-Service -Name $name -StartupType $type -ErrorAction Stop }
                 elseif ($start -ne '') { Set-ItemProperty -LiteralPath $k -Name 'Start' -Value ([int]$start) -Type DWord -ErrorAction Stop }
-                if ("$($e.delayed)" -ne '') { Set-ItemProperty -LiteralPath $k -Name 'DelayedAutostart' -Value ([int]"$($e.delayed)") -Type DWord -ErrorAction SilentlyContinue }
                 # тип запуска сверяется: «команда прошла» — ещё не «вернулось»
                 if ($start -ne '' -and "$(Get-RegValue $k 'Start')" -ne $start) {
                     return @{ ok = $false; error = ("тип запуска не вернулся: сейчас {0}, нужно {1}" -f (Get-StartName "$(Get-RegValue $k 'Start')"), (Get-StartName $start)) }
+                }
+                # Отложенный запуск — так же: вернуть и сверить. Раньше он
+                # возвращался молча (ошибка глоталась) и без сверки, а откат
+                # считался полным. Не было — значит, и сейчас не должно быть
+                # ненулевым (ноль и «нет» для Windows одно и то же).
+                $wantD = "$($e.delayed)"
+                $nowD = Get-RegRaw $k 'DelayedAutostart'
+                if ($wantD -ne '') {
+                    try { Set-ItemProperty -LiteralPath $k -Name 'DelayedAutostart' -Value ([int]$wantD) -Type DWord -ErrorAction Stop }
+                    catch { return @{ ok = $false; error = ("тип запуска возвращён, а отложенный запуск — нет: {0}" -f $_.Exception.Message) } }
+                    $nowD = Get-RegRaw $k 'DelayedAutostart'
+                    if (-not $nowD.ok -or -not $nowD.exists -or "$($nowD.kind)" -ne 'DWord' -or "$([int64]$nowD.value)" -ne $wantD) {
+                        return @{ ok = $false; error = ("отложенный запуск не вернулся: сейчас {0}, нужно {1}" -f $(if ($nowD.exists) { "$($nowD.value)" } else { 'нет' }), $wantD) }
+                    }
+                } elseif (-not $nowD.ok) {
+                    return @{ ok = $false; error = ("отложенный запуск не прочитался: {0}" -f $nowD.error) }
+                } elseif ($nowD.exists -and [int64]("0" + "$($nowD.value)") -ne 0) {
+                    try { Remove-ItemProperty -LiteralPath $k -Name 'DelayedAutostart' -ErrorAction Stop }
+                    catch { return @{ ok = $false; error = ("отложенного запуска до программы не было, а убрать его не вышло: {0}" -f $_.Exception.Message) } }
                 }
                 # работала до нас — запускаем снова, чтобы не ждать перезагрузки;
                 # не запустилась сейчас — так и сказано (тип запуска уже верный)
@@ -2399,7 +2686,7 @@ function Apply-Def {
             if ($DryRun) { Write-Log "   [тест] $($d.C) -- отключить"; return }
             $st = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
             if (-not $st) { Write-Log "   [-] $($d.C) -- нет на этой системе"; return }
-            if ($st.State -eq 'Disabled') { Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return }
+            if (Test-TaskDisabled $st) { Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return }
             if (-not (Test-CanModify $d.C)) { return }
             Ensure-Backup
             $tj = @{ kind = 'task'; path = $d.P; old = 'Enabled'; newValue = 'Disabled' }
@@ -2416,13 +2703,19 @@ function Apply-Def {
             if ($ts.Count -eq 0) { return }
             foreach ($t in $ts) {
                 if ($DryRun) { Write-Log "   [тест] задача $($t.TaskName) -- отключить"; continue }
-                if ($t.State -eq 'Disabled') { Write-Log "   [в] задача $($t.TaskName) -- уже отключена"; $script:Already++; continue }
+                if (Test-TaskDisabled $t) { Write-Log "   [в] задача $($t.TaskName) -- уже отключена"; $script:Already++; continue }
                 if (-not (Test-CanModify ("задача " + $t.TaskName))) { break }
                 Ensure-Backup
                 $tj = @{ kind = 'task'; path = ($t.TaskPath + $t.TaskName); old = 'Enabled'; newValue = 'Disabled' }
                 if (-not (Write-AheadEntry $tj)) { Write-Log ("   [!] задача {0} -- не меняется: «как было» не легло в журнал отката" -f $t.TaskName); $script:Failures++; break }
-                try { Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null; Write-Log "   [+] задача $($t.TaskName) -- отключена"; $script:Changes++ }
-                catch { Undo-AheadEntry $tj; Write-Log "   [-] задача $($t.TaskName) -- не удалось" }
+                # тем же путём, что и задачи по имени: со сверкой и запасным путём
+                # от имени системы. Раньше неудача здесь шла как «[-]», не как ошибка.
+                switch (Set-TaskEnabled ($t.TaskPath + $t.TaskName) $false) {
+                    'ok'      { Write-Log "   [+] задача $($t.TaskName) -- отключена"; $script:Changes++ }
+                    'system'  { Write-Log "   [+] задача $($t.TaskName) -- отключена от имени системы"; $script:Changes++ }
+                    'missing' { Undo-AheadEntry $tj; Write-Log "   [-] задача $($t.TaskName) -- пропала, пока шла работа" }
+                    default   { Undo-AheadEntry $tj; Write-Log "   [!] задача $($t.TaskName) -- Windows не дала отключить"; $script:Failures++ }
+                }
             }
         }
         'env' {
@@ -2520,11 +2813,11 @@ function Check-Def {
             $pp = Split-TaskPath $d.P
             $t = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
             if (-not $t) { $ok = $true; $actual = 'нет задачи' }
-            else { $actual = [string]$t.State; $ok = ($t.State -eq 'Disabled') }
+            else { $ok = Test-TaskDisabled $t; $actual = $(if ($ok) { 'Disabled' } else { [string]$t.State }) }
         }
         'taskglob' {
             $ts = @(Get-TaskGlobTasks $d.P)
-            $bad = @($ts | Where-Object { $_.State -ne 'Disabled' })
+            $bad = @($ts | Where-Object { -not (Test-TaskDisabled $_) })
             $ok = ($bad.Count -eq 0); $actual = "всего $($ts.Count), активных $($bad.Count)"
         }
         'env' {
@@ -2710,18 +3003,15 @@ function Apply-Hosts {
             # копия нужна та, что была до программы, а не после первого блока
             if (-not (Test-Path -LiteralPath $copy)) { Copy-Item -LiteralPath $script:HostsPath -Destination $copy -Force -ErrorAction SilentlyContinue }
         }
-        # устаревший блок переписывается целиком: так он не обрастает повторами.
-        # Не убрался — новый не дописывается: иначе в hosts стало бы два блока.
-        if ($present -and -not (Remove-HostsBlock -Kind $Kind -Quiet)) { return }
+        # Весь файл — одной подменой: прежний блок этого вида убран, новый
+        # дописан, всё чужое на месте. Раньше прежний блок удалялся отдельной
+        # записью, а новый дописывался следом (Add-Content): между ними блока
+        # не было вовсе, а оборванная дозапись оставляла его половину.
+        $cut = Get-HostsLinesWithout (Read-HostsLines) $Kind
         $block = @('') + $(switch ($Kind) { 'gdid' { $script:HostsMarkGdidStart } 'lock' { $script:HostsMarkLockStart } default { $script:HostsMarkStart } })
         $block += $wanted
         $block += $(switch ($Kind) { 'gdid' { $script:HostsMarkGdidEnd } 'lock' { $script:HostsMarkLockEnd } default { $script:HostsMarkEnd } })
-        # Сразу после записи антивирус ненадолго держит hosts открытым, и
-        # второй блок подряд падал с «файл занят другим процессом».
-        for ($try = 1; ; $try++) {
-            try { Add-Content -LiteralPath $script:HostsPath -Value $block -Encoding ASCII -ErrorAction Stop; break }
-            catch [System.IO.IOException] { if ($try -ge 5) { throw }; Start-Sleep -Milliseconds (400 * $try) }
-        }
+        Write-HostsFile (@($cut.keep) + $block)
         ipconfig /flushdns | Out-Null
         if ($present) { Write-Log ("   [+] список доменов обновлён, теперь их: {0}" -f $count) }
         else { Write-Log ("   [+] заблокировано доменов: {0}" -f $count) }
@@ -2737,45 +3027,75 @@ function Apply-Hosts {
 # его недописанным — вместе со строками, которые человек вписал сам.
 function Remove-HostsBlock {
     param([string]$Kind = 'all', [switch]$Quiet)
-    $tmp = $script:HostsPath + '.w11p-new'
     try {
-        $lines = @(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop)
-        $keep = New-Object System.Collections.Generic.List[string]
-        $inside = $false; $found = 0
-        foreach ($l in $lines) {
-            if ($l -match $script:HostsMarkRegex) {
-                if (-not $inside) {
-                    if (-not (Test-HostsMarkKind $l $Kind)) { $keep.Add($l); continue }
-                    $found++
-                    # пустую строку перед блоком ставили мы сами
-                    if ($keep.Count -gt 0 -and $keep[$keep.Count - 1] -eq '') { $keep.RemoveAt($keep.Count - 1) }
-                    $inside = $true
-                } else { $inside = $false }
-                continue
-            }
-            # Внутри блока убираем только свои строки. Чужая строка значит, что
-            # закрывающую метку кто-то стёр: дальше идёт уже не наше.
-            if ($inside -and $l -notmatch '^\s*((0\.0\.0\.0|::)\s+\S+)?\s*$') { $inside = $false }
-            if (-not $inside) { $keep.Add($l) }
-        }
-        if ($found -eq 0) { if (-not $Quiet) { Write-Log '   [-] блока в hosts нет' }; return $true }
-        # Default, а не ASCII: чужие строки с нелатинскими буквами остаются как были
-        [IO.File]::WriteAllLines($tmp, [string[]]$keep.ToArray(), [Text.Encoding]::Default)
-        # ReplaceFile сохраняет права и атрибуты прежнего файла. Сразу после
-        # записи антивирус ненадолго держит hosts открытым — пробуем ещё раз.
-        for ($try = 1; ; $try++) {
-            try { [IO.File]::Replace($tmp, $script:HostsPath, [NullString]::Value); break }
-            catch [System.IO.IOException] { if ($try -ge 5) { throw }; Start-Sleep -Milliseconds (400 * $try) }
-        }
+        $cut = Get-HostsLinesWithout (Read-HostsLines) $Kind
+        if ($cut.found -eq 0) { if (-not $Quiet) { Write-Log '   [-] блока в hosts нет' }; return $true }
+        Write-HostsFile $cut.keep
         ipconfig /flushdns | Out-Null
         if (-not $Quiet) { Write-Log '   [+] блок блокировки доменов удалён' }
         return $true
     } catch {
-        # недописанная копия рядом с hosts не остаётся; сам hosts — прежний
-        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
         Write-Log ("   [!] hosts не переписался ({0}) -- блок остался на месте" -f $_.Exception.Message)
         $script:Failures++
         return $false
+    }
+}
+
+# Кодировка hosts — та, в которой он лежит: метка UTF-8 или UTF-16 — она,
+# иначе системная ANSI (так его пишет Windows; чужие строки с нелатинскими
+# буквами остаются байт в байт).
+function Get-HostsEncoding {
+    $b = New-Object byte[] 3
+    $n = 0
+    $fs = [IO.File]::Open($script:HostsPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try { $n = $fs.Read($b, 0, 3) } finally { $fs.Dispose() }
+    if ($n -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { return (New-Object System.Text.UTF8Encoding $true) }
+    if ($n -ge 2 -and $b[0] -eq 0xFF -and $b[1] -eq 0xFE) { return [System.Text.Encoding]::Unicode }
+    return [System.Text.Encoding]::Default
+}
+
+function Read-HostsLines { return , ([string[]][IO.File]::ReadAllLines($script:HostsPath, (Get-HostsEncoding))) }
+
+# Строки hosts без блоков программы этого вида. Внутри блока убираются только
+# свои строки: чужая строка значит, что закрывающую метку кто-то стёр, и
+# дальше идёт уже не наше. Пустую строку перед блоком ставила сама программа.
+function Get-HostsLinesWithout {
+    param([string[]]$Lines, [string]$Kind)
+    $keep = New-Object System.Collections.Generic.List[string]
+    $inside = $false; $found = 0
+    foreach ($l in @($Lines)) {
+        if ($l -match $script:HostsMarkRegex) {
+            if (-not $inside) {
+                if (-not (Test-HostsMarkKind $l $Kind)) { $keep.Add($l); continue }
+                $found++
+                if ($keep.Count -gt 0 -and $keep[$keep.Count - 1] -eq '') { $keep.RemoveAt($keep.Count - 1) }
+                $inside = $true
+            } else { $inside = $false }
+            continue
+        }
+        if ($inside -and $l -notmatch '^\s*((0\.0\.0\.0|::)\s+\S+)?\s*$') { $inside = $false }
+        if (-not $inside) { $keep.Add($l) }
+    }
+    return @{ keep = $keep.ToArray(); found = $found }
+}
+
+# hosts целиком: копия рядом (в той же кодировке), сверка копии строка в
+# строку, затем подмена одним действием системы (ReplaceFile — права и
+# атрибуты прежнего файла сохраняются). Обрыв в любой миг оставляет либо
+# прежний hosts, либо новый, но не половину. Копия после себя не остаётся.
+function Write-HostsFile {
+    param([string[]]$Lines)
+    $enc = Get-HostsEncoding
+    $tmp = $script:HostsPath + '.w11p-new'
+    $want = [string[]]@($Lines)
+    try {
+        [IO.File]::WriteAllLines($tmp, $want, $enc)
+        $back = [IO.File]::ReadAllLines($tmp, $enc)
+        if ($back.Count -ne $want.Count) { throw 'копия hosts не совпала с задуманной' }
+        for ($i = 0; $i -lt $back.Count; $i++) { if ($back[$i] -cne $want[$i]) { throw ('копия hosts не совпала с задуманной в строке {0}' -f ($i + 1)) } }
+        Replace-FileAtomic $tmp $script:HostsPath
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -2874,6 +3194,14 @@ function Test-FwIpRule {
     return $false
 }
 
+# IP-адрес в каноническом виде (IPv6 — сжатый, строчными), не адрес — $null
+function ConvertTo-IpCanonical {
+    param([string]$Text)
+    $ip = $null
+    if ([System.Net.IPAddress]::TryParse("$Text".Trim(), [ref]$ip)) { return $ip.ToString().ToLowerInvariant() }
+    return $null
+}
+
 function Apply-FwIpBlock {
     if ($DryRun) { Write-Log '   [тест] будут заблокированы адреса сбора телеметрии'; return }
     try {
@@ -2881,6 +3209,11 @@ function Apply-FwIpBlock {
         $found = Get-TelemetryIpList
         $ips = @($found.ips)
         Write-Log ("   ответили DNS имён: {0} из {1}" -f $found.answered, $found.asked)
+        # каждый адрес — в каноническом виде и один раз: «2001:DB8::1» и
+        # «2001:db8:0::1» — один адрес, и сверять потом надо множества
+        $wantSet = @{}
+        foreach ($a in $ips) { $n = ConvertTo-IpCanonical $a; if ($n) { $wantSet[$n] = $true } }
+        $ips = @($wantSet.Keys | Sort-Object)
         if ($ips.Count -eq 0) { Write-Log '   [-] адреса не определились'; return }
         # Новое правило ставится рядом со старым, проверяется, и только потом
         # старое убирается. Раньше старое удалялось первым: не создалось
@@ -2894,8 +3227,18 @@ function Apply-FwIpBlock {
         if (-not $new) { $why = 'правило не появилось' }
         elseif ("$($new.Enabled)" -ne 'True' -or "$($new.Action)" -ne 'Block' -or "$($new.Direction)" -ne 'Outbound') { $why = 'правило создалось не таким, как задумано' }
         else {
-            $got = @((Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $new -ErrorAction Stop).RemoteAddress)
-            if ($got.Count -ne $ips.Count) { $why = ("в правиле адресов {0} вместо {1}" -f $got.Count, $ips.Count) }
+            # множество адресов в правиле — ровно то, что задумано: не только
+            # сколько, но и какие (раньше сверялось одно число)
+            $gotSet = @{}
+            foreach ($a in @((Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $new -ErrorAction Stop).RemoteAddress)) {
+                $n = ConvertTo-IpCanonical $a
+                $gotSet[$(if ($n) { $n } else { "?$a" })] = $true
+            }
+            $missing = @($wantSet.Keys | Where-Object { -not $gotSet.ContainsKey($_) } | Sort-Object)
+            $extra = @($gotSet.Keys | Where-Object { -not $wantSet.ContainsKey($_) } | Sort-Object)
+            if ($missing.Count -or $extra.Count) {
+                $why = ("в правиле не те адреса: нет {0}, лишние {1}" -f $(if ($missing.Count) { $missing -join ', ' } else { '—' }), $(if ($extra.Count) { $extra -join ', ' } else { '—' }))
+            }
         }
         if ($why) {
             Remove-NetFirewallRule -Name $id -ErrorAction SilentlyContinue
@@ -3321,7 +3664,7 @@ function Set-TaskEnabled {
     if (-not $denied) {
         # «команда прошла» — ещё не «задача такая»: состояние сверяется
         $t = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
-        if ($t -and (($t.State -eq 'Disabled') -ne $Enabled)) { return 'ok' }
+        if ($t -and ((Test-TaskDisabled $t) -ne $Enabled)) { return 'ok' }
     }
     $flag = $(if ($Enabled) { '/enable' } else { '/disable' })
     # schtasks запускается напрямую, а не через cmd; кавычка в имени задачи
@@ -3329,7 +3672,7 @@ function Set-TaskEnabled {
     if ($Full -match '["\r\n]') { return 'fail' }
     $null = Invoke-OneShotTask -TaskName 'Win11Privacy Task' -Execute "$env:SystemRoot\System32\schtasks.exe" -Arguments ('/change /tn "{0}" {1}' -f $Full, $flag) -AsSystem
     $t = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
-    if ($t -and (($t.State -eq 'Disabled') -ne $Enabled)) { return 'system' }
+    if ($t -and ((Test-TaskDisabled $t) -ne $Enabled)) { return 'system' }
     return 'fail'
 }
 
@@ -4334,7 +4677,7 @@ function Get-StartupList {
         try {
             foreach ($a in @($t.Actions)) { if ($a.Execute) { $cmd = [string]$a.Execute; break } }
         } catch { }
-        $list += (New-StartupItem ('task|' + $full) ([string]$t.TaskName) $cmd 'планировщик задач, при входе' 'task' ($t.State -ne 'Disabled'))
+        $list += (New-StartupItem ('task|' + $full) ([string]$t.TaskName) $cmd 'планировщик задач, при входе' 'task' (-not (Test-TaskDisabled $t)))
     }
 
     return @($list | Sort-Object @{ Expression = { -[int][bool]$_.advise } }, @{ Expression = { $_.name } })
@@ -5933,10 +6276,51 @@ function Get-BackupList {
             foreach ($f in $files) { $size += $f.Length }
             $list += @{ path = $dir.FullName; name = $dir.Name
                         when = $dir.CreationTime.ToString('yyyy-MM-dd HH:mm')
-                        branches = $files.Count; kb = [math]::Round($size / 1KB, 1) }
+                        branches = $files.Count; kb = [math]::Round($size / 1KB, 1)
+                        signed = (Test-Path -LiteralPath (Join-Path $dir.FullName 'backup-sig.json')) }
         }
     }
     return @($list | Sort-Object { $_.when } -Descending)
+}
+
+# Возврат из резервной копии. Папку копии на рабочем столе может переписать
+# любая программа пользователя, а импорт идёт с правами администратора:
+# раньше дописанный в .reg ключ (путь к программе службы, автозагрузка всех
+# пользователей) выполнился бы с этими правами. Теперь каждый файл подписан
+# при создании копии (backup-sig.json, тем же ключом, что и журнал отката).
+# Файл копируется в защищённую папку, подпись сверяется на копии, и
+# импортируется копия: подменить файл между сверкой и импортом нельзя.
+# Неподписанный или изменённый файл не импортируется.
+function Restore-BackupFolder {
+    param([string]$Path)
+    $res = @{ restored = 0; failed = 0; refused = 0; error = '' }
+    $sigs = $null
+    try { $sigs = (Get-Content -LiteralPath (Join-Path $Path 'backup-sig.json') -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json).files } catch { }
+    if ($null -eq $sigs) {
+        $res.error = 'копия не подписана (её сделала прежняя версия или подпись удалена) -- программа её не импортирует; при необходимости откройте нужный .reg вручную'
+        return $res
+    }
+    if (-not (Assert-SafeRoot)) { $res.error = 'папка ProgramData\Win11Privacy не защищена -- проверять копию негде'; return $res }
+    $folder = Split-Path $Path -Leaf
+    $work = Join-Path $script:SafeRoot ('restore-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+        New-Item -ItemType Directory -Path $work -Force -ErrorAction Stop | Out-Null
+        foreach ($f in @(Get-ChildItem -LiteralPath $Path -File -Filter '*.reg' -ErrorAction Stop)) {
+            $p = $sigs.PSObject.Properties[$f.Name]
+            $want = $(if ($p) { "$($p.Value)" } else { '' })
+            if (-not $want) { Write-Log ("   [!] {0} -- этого файла в подписанной копии не было, не импортируется" -f $f.Name); $res.refused++; continue }
+            $copy = Join-Path $work $f.Name
+            Copy-Item -LiteralPath $f.FullName -Destination $copy -Force -ErrorAction Stop
+            if ((Get-BackupFileSig $copy $folder $f.Name) -ne $want) {
+                Write-Log ("   [!] {0} -- файл изменён после создания копии, не импортируется" -f $f.Name); $res.refused++; continue
+            }
+            $r = Invoke-RegExe ('import "{0}"' -f $copy)
+            if ($r.code -eq 0) { Write-Log ("   [+] вернули: {0}" -f $f.Name); $res.restored++ }
+            else { Write-Log ("   [!] не удалось: {0} (код {1}: {2})" -f $f.Name, $r.code, $r.error); $res.failed++ }
+        }
+    } catch { $res.error = $_.Exception.Message }
+    finally { if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue } }
+    return $res
 }
 
 if ($ListBackups) {
@@ -5958,24 +6342,17 @@ if ($RestoreBackup) {
         Emit-Json @{ error = 'в папке нет файлов .reg' }; Write-Log '###DONE###'; exit 1
     }
     Write-Log ("   найдено файлов: {0}" -f $regFiles.Count)
-    $ok = 0; $bad = 0
-    foreach ($f in $regFiles) {
-        if ($DryRun) { Write-Log ("   [тест] {0}" -f $f.Name); continue }
-        # через cmd: у reg.exe свой поток ошибок, и в PowerShell 5.1 он умеет
-        # обрываться терминирующей ошибкой на первом же отказе
-        # Код берётся свой для каждого файла: раньше при исключении здесь
-        # оставался код предыдущего файла, и неудача могла выглядеть успехом.
-        $code = -1
-        try { $null = & cmd.exe /c "reg import `"$($f.FullName)`" >nul 2>&1"; $code = $LASTEXITCODE } catch { $code = -1 }
-        if ($code -eq 0) { Write-Log ("   [+] вернули: {0}" -f $f.Name); $ok++; $script:Changes++ }
-        else { Write-Log ("   [!] не удалось: {0} (код {1})" -f $f.Name, $code); $bad++; $script:Failures++ }
-    }
-    Write-Log ("   возвращено веток: {0}" -f $ok)
-    if ($bad -gt 0) { Write-Log ("   не удалось вернуть: {0}" -f $bad) }
-    Write-Log '   Значения вернулись к состоянию на момент копии. Перезагрузите компьютер.'
-    Emit-Json @{ restored = $ok; failed = $bad; path = $BackupPath }
+    if ($DryRun) { foreach ($f in $regFiles) { Write-Log ("   [тест] {0}" -f $f.Name) }; Write-Log '###DONE###'; exit 0 }
+    $rb = Restore-BackupFolder $BackupPath
+    if ($rb.error) { Write-Log ("   [!] {0}" -f $rb.error); $script:Failures++ }
+    $script:Changes += $rb.restored; $script:Failures += $rb.failed + $rb.refused
+    Write-Log ("   возвращено веток: {0}" -f $rb.restored)
+    if ($rb.failed -gt 0) { Write-Log ("   не удалось вернуть: {0}" -f $rb.failed) }
+    if ($rb.refused -gt 0) { Write-Log ("   не импортировано из-за подписи: {0}" -f $rb.refused) }
+    if ($rb.restored -gt 0) { Write-Log '   Значения вернулись к состоянию на момент копии. Перезагрузите компьютер.' }
+    Emit-Json @{ restored = $rb.restored; failed = $rb.failed; refused = $rb.refused; error = $rb.error; path = $BackupPath }
     Write-Log '###DONE###'
-    exit 0
+    exit $(if ($rb.error -or ($rb.restored -eq 0 -and ($rb.failed + $rb.refused) -gt 0)) { 1 } else { 0 })
 }
 
 if ($ListStartup) {
@@ -6065,7 +6442,7 @@ function Get-ProofSnapshot {
     try {
         foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
             if (($t.TaskPath + $t.TaskName) -match 'Appraiser|Consolidator|UsbCeip|DmClient|QueueReporting|ProgramDataUpdater|KernelCeip|Sqm-Tasks|GatherNetworkInfo|Device Information') {
-                if ($t.State -ne 'Disabled') { $tasks++ }
+                if (-not (Test-TaskDisabled $t)) { $tasks++ }
             }
         }
     } catch { }
@@ -6392,8 +6769,9 @@ function Apply-ProfilesHives {
                 } catch { Undo-AheadEntry $p.e; $cnt.failed++; $cnt.notes.Add(("{0}: {1}" -f $p.d.N, $_.Exception.Message)); continue }
                 # «команда прошла» — ещё не «значение такое»; запись в журнале
                 # остаётся в любом случае: значение уже не прежнее
-                $now = Get-RegValue $p.kp $p.d.N
-                if ($null -eq $now -or (ConvertTo-RegComparable $now $p.d.Type) -ne (ConvertTo-RegComparable $p.d.V $p.d.Type)) {
+                $now = Get-RegRaw $p.kp $p.d.N
+                if (-not $now.ok -or -not $now.exists -or $now.kind -ne $p.d.Type -or
+                    (ConvertTo-RegComparable $now.value $p.d.Type) -ne (ConvertTo-RegComparable $p.d.V $p.d.Type)) {
                     $cnt.failed++; $cnt.notes.Add(("{0}: записано, но читается другое" -f $p.d.N)); continue
                 }
                 $cnt.changed++
@@ -6432,6 +6810,11 @@ function Restore-HiveEntries {
 }
 
 function Restore-Journal {
+    # Куст, оставшийся от оборванного запуска, — первым делом, даже если в
+    # журнале нет ни одной записи о профилях: оборванный запуск мог не успеть
+    # их записать, а куст уже подключить (проверено на VM: процесс убит, пока
+    # куст подключён). Раньше уборка шла только вместе с возвратом профилей.
+    Clear-StaleHiveMounts
     if (-not (Test-DataTrusted)) {
         Write-Log '   [!] папка данных программы не защищена от подмены -- журналу отката сейчас нельзя верить, ничего не возвращаем'
         $script:Failures++
@@ -6448,6 +6831,7 @@ function Restore-Journal {
     $ok = 0; $seen = @{}; $startBack = 0; $svcBack = 0; $malformed = 0
     $failed = New-Object System.Collections.Generic.List[object]
     $hiveGroups = [ordered]@{}
+    $createdKeys = New-Object System.Collections.Generic.List[string]
     # Записи, с которыми откат закончил (вернул или отбросил как негодные).
     # Из журнала уходят только они: что дописал другой запуск, пока шёл
     # откат, остаётся. Раньше журнал переписывался списком неудач целиком.
@@ -6484,6 +6868,7 @@ function Restore-Journal {
         $r = Restore-JournalEntry $e
         if (-not $r.ok) { $failed.Add($e); Write-Log ("   [!] не вернулось: {0} -- {1}" -f $key, $r.error); continue }
         $null = $handled.Add((Get-JournalEntryId $e))
+        if ($kind -eq 'reg' -and "$($e.createdKey)") { $createdKeys.Add("$($e.createdKey)") }
         if ($r.note) { Write-Log ("   [i] {0} -- {1}" -f $key, $r.note) }
         if ($kind -eq 'reg') { $ok++ } else { $svcBack++ }
     }
@@ -6497,6 +6882,8 @@ function Restore-Journal {
             Write-Log ("   [!] не вернулось: профиль {0}, {1}\{2} -- {3}" -f $he.profile, $he.sub, $he.name, $res[$n].error)
         }
     }
+    # ключи, которых не было до программы, — после всех значений
+    if ($createdKeys.Count -gt 0) { Remove-CreatedKeys $createdKeys.ToArray() }
     if ($malformed -gt 0) { $script:Failures++ }
     $bad = $failed.Count
     Write-Log ("   [+] возвращено параметров реестра: {0}" -f $ok)
@@ -6600,6 +6987,7 @@ function Get-ChangeGroups {
 # Возвращает одну запись журнала и убирает её из changes.json
 function Restore-ChangeKey {
     param([string]$Key)
+    Clear-StaleHiveMounts
     if (-not (Test-DataTrusted)) { return @{ ok = $false; error = 'папка данных программы не защищена от подмены' } }
     $jf = Read-JournalFile
     if (-not $jf.trusted) { return @{ ok = $false; error = 'журналу отката нельзя верить: подпись не сошлась или её нечем проверить' } }
@@ -6617,6 +7005,7 @@ function Restore-ChangeKey {
         $r = Restore-JournalEntry $first
     }
     if (-not $r.ok) { return @{ ok = $false; error = "$($r.error)" } }
+    if ("$($first.kind)" -eq 'reg' -and "$($first.createdKey)") { Remove-CreatedKeys @("$($first.createdKey)") }
     # журнал перечитывается под замком: дописанное другим запуском остаётся
     try { Remove-JournalKey $Key }
     catch { return @{ ok = $false; error = ('возвращено, но журнал не переписался: ' + $_.Exception.Message) } }
@@ -6833,10 +7222,10 @@ if ($Revert) {
                 $pp = Split-TaskPath $d.P
                 $st = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
                 if (-not $st) { continue }
-                if ($st.State -ne 'Disabled') { continue }
+                if (-not (Test-TaskDisabled $st)) { continue }
                 if ((Set-TaskEnabled $d.P $true) -in @('ok', 'system')) { Write-Log "   [+] включена: $($pp[1])" } else { Write-Log "   [-] пропущена: $($pp[1])" }
             } elseif ($d.T -eq 'taskglob') {
-                foreach ($t in @(Get-TaskGlobTasks $d.P -AnyFolder | Where-Object { $_.State -eq 'Disabled' })) {
+                foreach ($t in @(Get-TaskGlobTasks $d.P -AnyFolder | Where-Object { Test-TaskDisabled $_ })) {
                     try { Enable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null; Write-Log "   [+] включена: $($t.TaskName)" } catch { Write-Log ("   [!] не включилась: {0} -- {1}" -f $t.TaskName, $_.Exception.Message); $script:Failures++ }
                 }
             }
@@ -6938,6 +7327,10 @@ if ($Revert) {
     } elseif ([int]$rj.failed -gt 0) {
         Write-Log ("[!] Вернулось не всё: записей журнала, которые вернуть не удалось, -- {0} (какие и почему — выше). Они остались в журнале: повторите откат после перезагрузки." -f $rj.failed)
         Write-Log 'Запасной вариант — резервная копия реестра на рабочем столе или точка восстановления Windows.'
+    } elseif ("$($rj.state)" -eq 'none' -or ([int]$rj.restored + [int]$rj.startup) -eq 0) {
+        # Раньше и здесь говорилось «возвращены и сверены», хотя по журналу
+        # не возвращалось ничего: его не было или он был пуст.
+        Write-Log 'Журнала изменений нет или он пуст -- по нему возвращать было нечего. Остальное (hosts, брандмауэр, страж) убрано, как сказано выше.'
     } else {
         Write-Log 'Настройки реестра возвращены по журналу изменений и сверены — ручной импорт .reg больше не нужен.'
         Write-Log 'Папка резервной копии на рабочем столе остаётся как запасной вариант.'
@@ -6968,6 +7361,9 @@ if (-not $DryRun -and -not (Load-Json 'proof-before.json')) {
 }
 
 $script:BackupEnabled = $true    # дальше идёт ручное применение
+
+# куст профиля, оставшийся подключённым после оборванного запуска, — сразу
+if (-not $DryRun) { Clear-StaleHiveMounts }
 
 # Журнал отката должен писаться до первого изменения, а не выясниться в конце
 if (-not (Test-JournalWritable)) {
@@ -7045,7 +7441,7 @@ if ((Use-Module 'oem') -and -not $script:JournalFailed) {
             } else {
                 $pp = Split-TaskPath $it.name
                 $st = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop
-                if ($st.State -eq 'Disabled') { Write-Log ("   [в] {0} -- уже отключено" -f $it.display); $script:Already++; continue }
+                if (Test-TaskDisabled $st) { Write-Log ("   [в] {0} -- уже отключено" -f $it.display); $script:Already++; continue }
                 $tj = @{ kind = 'task'; path = $it.name; old = 'Enabled'; newValue = 'Disabled' }
                 if (-not (Write-AheadEntry $tj)) { Write-Log ("   [!] {0} -- не меняется: «как было» не легло в журнал отката" -f $it.display); $script:Failures++; break }
                 try { Disable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null } catch { Undo-AheadEntry $tj; throw }

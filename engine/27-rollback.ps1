@@ -118,8 +118,9 @@ function Apply-ProfilesHives {
                 } catch { Undo-AheadEntry $p.e; $cnt.failed++; $cnt.notes.Add(("{0}: {1}" -f $p.d.N, $_.Exception.Message)); continue }
                 # «команда прошла» — ещё не «значение такое»; запись в журнале
                 # остаётся в любом случае: значение уже не прежнее
-                $now = Get-RegValue $p.kp $p.d.N
-                if ($null -eq $now -or (ConvertTo-RegComparable $now $p.d.Type) -ne (ConvertTo-RegComparable $p.d.V $p.d.Type)) {
+                $now = Get-RegRaw $p.kp $p.d.N
+                if (-not $now.ok -or -not $now.exists -or $now.kind -ne $p.d.Type -or
+                    (ConvertTo-RegComparable $now.value $p.d.Type) -ne (ConvertTo-RegComparable $p.d.V $p.d.Type)) {
                     $cnt.failed++; $cnt.notes.Add(("{0}: записано, но читается другое" -f $p.d.N)); continue
                 }
                 $cnt.changed++
@@ -158,6 +159,11 @@ function Restore-HiveEntries {
 }
 
 function Restore-Journal {
+    # Куст, оставшийся от оборванного запуска, — первым делом, даже если в
+    # журнале нет ни одной записи о профилях: оборванный запуск мог не успеть
+    # их записать, а куст уже подключить (проверено на VM: процесс убит, пока
+    # куст подключён). Раньше уборка шла только вместе с возвратом профилей.
+    Clear-StaleHiveMounts
     if (-not (Test-DataTrusted)) {
         Write-Log '   [!] папка данных программы не защищена от подмены -- журналу отката сейчас нельзя верить, ничего не возвращаем'
         $script:Failures++
@@ -174,6 +180,7 @@ function Restore-Journal {
     $ok = 0; $seen = @{}; $startBack = 0; $svcBack = 0; $malformed = 0
     $failed = New-Object System.Collections.Generic.List[object]
     $hiveGroups = [ordered]@{}
+    $createdKeys = New-Object System.Collections.Generic.List[string]
     # Записи, с которыми откат закончил (вернул или отбросил как негодные).
     # Из журнала уходят только они: что дописал другой запуск, пока шёл
     # откат, остаётся. Раньше журнал переписывался списком неудач целиком.
@@ -210,6 +217,7 @@ function Restore-Journal {
         $r = Restore-JournalEntry $e
         if (-not $r.ok) { $failed.Add($e); Write-Log ("   [!] не вернулось: {0} -- {1}" -f $key, $r.error); continue }
         $null = $handled.Add((Get-JournalEntryId $e))
+        if ($kind -eq 'reg' -and "$($e.createdKey)") { $createdKeys.Add("$($e.createdKey)") }
         if ($r.note) { Write-Log ("   [i] {0} -- {1}" -f $key, $r.note) }
         if ($kind -eq 'reg') { $ok++ } else { $svcBack++ }
     }
@@ -223,6 +231,8 @@ function Restore-Journal {
             Write-Log ("   [!] не вернулось: профиль {0}, {1}\{2} -- {3}" -f $he.profile, $he.sub, $he.name, $res[$n].error)
         }
     }
+    # ключи, которых не было до программы, — после всех значений
+    if ($createdKeys.Count -gt 0) { Remove-CreatedKeys $createdKeys.ToArray() }
     if ($malformed -gt 0) { $script:Failures++ }
     $bad = $failed.Count
     Write-Log ("   [+] возвращено параметров реестра: {0}" -f $ok)

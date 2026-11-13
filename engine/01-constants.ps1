@@ -19,7 +19,9 @@ $script:FwGroup        = 'Win11Privacy'
 $script:DataDir        = $(if ($DataRoot) { $DataRoot } else { Join-Path $env:ProgramData 'Win11Privacy' })
 # Задачам планировщика путь к данным надо передать явно: они запускаются
 # сами по себе и о переносимом режиме иначе не узнают.
-$script:DataArg        = $(if ($DataRoot) { ' -DataRoot "' + $DataRoot + '"' } else { '' })
+# Обратная косая в конце пути (D:\) экранировала бы закрывающую кавычку в
+# командной строке задачи; по правилам разбора её удваивают.
+$script:DataArg        = $(if ($DataRoot) { ' -DataRoot "' + ($DataRoot -replace '\\$', '\\') + '"' } else { '' })
 # Запуск из планировщика: страж, наблюдение за датчиками и сетью. Такие запуски
 # идут сами, без человека, и с правами администратора.
 $script:TaskRun        = [bool]($Guard -or $SensorGuard -or $NetGuard -or $WatcherNotify)

@@ -21,6 +21,9 @@ if (-not $DryRun -and -not (Load-Json 'proof-before.json')) {
 
 $script:BackupEnabled = $true    # дальше идёт ручное применение
 
+# куст профиля, оставшийся подключённым после оборванного запуска, — сразу
+if (-not $DryRun) { Clear-StaleHiveMounts }
+
 # Журнал отката должен писаться до первого изменения, а не выясниться в конце
 if (-not (Test-JournalWritable)) {
     Write-Log 'ПРИМЕНЕНИЕ ОТМЕНЕНО: журнал отката не записывается, а без него изменения нельзя было бы вернуть. Система не тронута.'
@@ -97,7 +100,7 @@ if ((Use-Module 'oem') -and -not $script:JournalFailed) {
             } else {
                 $pp = Split-TaskPath $it.name
                 $st = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop
-                if ($st.State -eq 'Disabled') { Write-Log ("   [в] {0} -- уже отключено" -f $it.display); $script:Already++; continue }
+                if (Test-TaskDisabled $st) { Write-Log ("   [в] {0} -- уже отключено" -f $it.display); $script:Already++; continue }
                 $tj = @{ kind = 'task'; path = $it.name; old = 'Enabled'; newValue = 'Disabled' }
                 if (-not (Write-AheadEntry $tj)) { Write-Log ("   [!] {0} -- не меняется: «как было» не легло в журнал отката" -f $it.display); $script:Failures++; break }
                 try { Disable-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction Stop | Out-Null } catch { Undo-AheadEntry $tj; throw }

@@ -46,6 +46,7 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - Профили других пользователей: в журнал идёт вид прежнего значения, записанное сверяется, куст подключается один раз на профиль, а куст, оставшийся подключённым после оборванного запуска, отключается при следующем — иначе Windows выдала бы этому человеку временный профиль.
 - Файлы данных (profile.json и другие) читаются только из папки, которой можно верить, — так же, как пишутся.
 - Описание модели безопасности и гарантий отката — docs/security-model.md.
+- Возврат из резервной копии больше не импортирует с правами администратора то, что дописала в копию другая программа. Копия лежит на рабочем столе, куда пишет любая программа пользователя; теперь её файлы подписываются при создании, а при возврате копируются в защищённую папку, сверяются там и импортируются оттуда. Изменённый, подложенный или неподписанный файл не импортируется; копию прежней версии можно открыть только вручную.
 
 **Исправления**
 - Номер устройства: стирание честнее говорит о результате. Учётные данные «личности» устройства считаются убранными, только если после `cmdkey` их действительно нет в хранилище (раньше успехом считался сам запуск задачи). У каждой записи в реестре свой итог — убрана, не было или Windows не дала; запись, закрытая от чтения, больше не засчитывается как «не было». Места, которые не удалось прочитать, — хранилище целиком или закрытый ключ внутри него — не выдаются за «стёрто». На время стирания останавливается и служба DoSvc; если хоть одна из служб не остановилась, стирание не начинается и службы возвращаются как были. Успехом стирание считается, только если службы, работавшие до него, снова запущены, а кэш платформы подключённых устройств действительно пуст. Копии номера ищутся и в профилях пользователей, которые сейчас вошли в Windows; про профили остальных программа прямо пишет, что их не проверяла. Плитка «Номер» берёт номер из любого найденного хранилища, а не только из профиля текущего пользователя.
@@ -77,6 +78,19 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - Включение и отключение задачи планировщика сверяется по её состоянию.
 - Страж пишет «исправлено» по числу изменений, которые действительно прошли, а не по числу перебранных настроек.
 - Откат прямо говорит, если вернулось не всё, и показывает число ошибок. Компоненты производителя, которые не вернулись по списку прежней версии, остаются в нём для второй попытки.
+- Откат убирает ключи реестра, которых не было до программы, если в них не осталось значений. Раньше пустые ключи политик оставались.
+- Выключена ли задача планировщика, программа узнаёт по её настройке, а не по состоянию. Выключенная задача, которая ещё доделывала свой запуск, выглядела включённой: проверка показывала её несделанной, а применение отключало снова.
+- Задачи по маске (OneDrive, NVIDIA) отключаются тем же путём, что и остальные: со сверкой и от имени системы, если администратору отказано. Неудача — ошибка, а не «[-]».
+- Запись в реестр сверяется и по виду значения, а не только по данным.
+- Ограничение времени на выгрузку резервной копии действительно работает: раньше зависший reg.exe держал бы применение бесконечно.
+- Журнал отката, который в этот миг подменял другой запуск или держал открытым антивирус, раньше читался пустым: откат мог сказать «возвращать нечего», а следующая запись — затереть всю историю «как было». Теперь журнал читается и пишется под одним замком, чтение не мешает подмене файла, а журнал, который сейчас не прочитался, — ошибка, и дописывать в него нельзя. Подмена файла данных, которую держит антивирус, ждёт, а не останавливает применение.
+- Проверка резервной копии ловит и оборванную выгрузку: файл должен быть целым UTF-16, начинаться с выгруженной ветки и заканчиваться законченной записью.
+- Если команда записи в реестр сообщила об ошибке, а значение всё-таки легло, запись «как было» больше не отзывается: изменение было. Легло что-то третье или прочитать не вышло — запись остаётся для отката, и это ошибка.
+- Правило брандмауэра сверяется по полному набору адресов, а не по их числу; один и тот же адрес в разной записи (IPv6) считается одним.
+- hosts при обновлении блока переписывается целиком за одну подмену. Раньше старый блок убирался отдельно, а новый дописывался следом, и между ними блока не было вовсе.
+- Откат службы возвращает и сверяет отложенный запуск; не вернулся — ошибка, а не полный успех.
+- «Ключа нет» и «нет доступа» в реестре различаются по ответу самого реестра: о ключе, который не прочитался, программа не записывает «значения не было».
+- Куст профиля, оставшийся подключённым после оборванного запуска, отключается в начале каждого применения и отката. Раньше — только если в журнале были записи о профилях, а оборванный запуск мог не успеть их записать.
 
 ### What's new
 
@@ -114,6 +128,7 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - Other users' profiles: the journal records the kind of the previous value, writes are verified, a hive is mounted once per profile, and a hive left mounted by an interrupted run is unloaded by the next one — otherwise Windows would give that user a temporary profile.
 - Data files (profile.json and others) are read only from a folder that can be trusted, just as they are written.
 - The security model and rollback guarantees are described in docs/security-model.md.
+- Restoring a backup no longer imports, as administrator, whatever another program added to it. The backup sits on the desktop, where any program of the user can write; its files are now signed when it is made, and on restore they are copied into the protected folder, checked there and imported from there. A changed, added or unsigned file is not imported; a backup made by an older version can only be opened by hand.
 
 **Fixes**
 - Device ID: wiping reports its result honestly. The device identity credentials count as removed only if they are really gone from the vault after `cmdkey` (before, merely starting the task counted as success). Every registry entry gets its own outcome — removed, not there, or refused by Windows; an entry closed to reading no longer counts as "not there". Places that could not be read — a whole store or a closed key inside one — are no longer reported as wiped. The DoSvc service is stopped during the wipe too; if any of the services does not stop, nothing is wiped and the services are put back as they were. The wipe counts as a success only if the services that were running before are running again and the Connected Devices Platform cache is really empty. Copies of the ID are also searched for in the profiles of other users who are signed in right now; for everyone else the program says plainly that it did not check them. The ID tile takes the number from any store found, not only from the current user's profile.
@@ -145,6 +160,19 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - Enabling and disabling a scheduled task is verified by its state.
 - The guard reports "fixed" by the number of changes that really went through, not by the number of settings it went over.
 - The rollback says plainly when not everything came back and shows the number of errors. Vendor components that did not come back from an older version's list stay in it for a retry.
+- The rollback removes registry keys that did not exist before the program if no values are left in them. Before, empty policy keys stayed behind.
+- Whether a scheduled task is disabled is read from its settings, not its state. A disabled task still finishing a run looked enabled: the check reported it as not done, and applying disabled it again.
+- Mask-matched tasks (OneDrive, NVIDIA) are disabled the same way as the others: verified, and as SYSTEM if administrators are refused. A failure is an error, not "[-]".
+- Registry writes are verified by the kind of the value too, not only by its data.
+- The time limit on exporting the registry backup really works: before, a hung reg.exe would have held the apply forever.
+- An undo journal that another run was replacing at that moment, or that an antivirus held open, used to read as empty: the rollback could say "nothing to restore", and the next write could overwrite the whole "how it was" history. The journal is now read and written under one lock, reading does not block a replace, and a journal that cannot be read right now is an error that nothing is appended to. A data-file replace held up by an antivirus waits instead of stopping the apply.
+- The backup check also catches a cut-off export: the file must be whole UTF-16, start with the exported branch and end with a finished record.
+- When a registry write command reports an error but the value did land, the "how it was" record is no longer withdrawn: the change happened. If something else landed, or the value cannot be read, the record stays for the rollback and it is an error.
+- The firewall rule is verified by the full set of addresses, not by their number; the same address written differently (IPv6) counts once.
+- When a hosts block is updated, the whole file is rewritten in one swap. Before, the old block was removed separately and the new one appended afterwards, with no block at all in between.
+- Rolling back a service restores and verifies its delayed start; if it does not come back, that is an error, not a full success.
+- "No such key" and "access denied" in the registry are told apart by the registry's own answer: for a key that could not be read the program does not record "the value did not exist".
+- A profile hive left mounted by an interrupted run is unloaded at the start of every apply and rollback. Before, only when the journal had profile entries, and an interrupted run may not have written them yet.
 
 ## 1.10.2 — 2026-10-30
 

@@ -137,7 +137,7 @@ function Apply-Def {
             if ($DryRun) { Write-Log "   [тест] $($d.C) -- отключить"; return }
             $st = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
             if (-not $st) { Write-Log "   [-] $($d.C) -- нет на этой системе"; return }
-            if ($st.State -eq 'Disabled') { Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return }
+            if (Test-TaskDisabled $st) { Write-Log "   [в] $($d.C) -- уже настроено"; $script:Already++; return }
             if (-not (Test-CanModify $d.C)) { return }
             Ensure-Backup
             $tj = @{ kind = 'task'; path = $d.P; old = 'Enabled'; newValue = 'Disabled' }
@@ -154,13 +154,19 @@ function Apply-Def {
             if ($ts.Count -eq 0) { return }
             foreach ($t in $ts) {
                 if ($DryRun) { Write-Log "   [тест] задача $($t.TaskName) -- отключить"; continue }
-                if ($t.State -eq 'Disabled') { Write-Log "   [в] задача $($t.TaskName) -- уже отключена"; $script:Already++; continue }
+                if (Test-TaskDisabled $t) { Write-Log "   [в] задача $($t.TaskName) -- уже отключена"; $script:Already++; continue }
                 if (-not (Test-CanModify ("задача " + $t.TaskName))) { break }
                 Ensure-Backup
                 $tj = @{ kind = 'task'; path = ($t.TaskPath + $t.TaskName); old = 'Enabled'; newValue = 'Disabled' }
                 if (-not (Write-AheadEntry $tj)) { Write-Log ("   [!] задача {0} -- не меняется: «как было» не легло в журнал отката" -f $t.TaskName); $script:Failures++; break }
-                try { Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop | Out-Null; Write-Log "   [+] задача $($t.TaskName) -- отключена"; $script:Changes++ }
-                catch { Undo-AheadEntry $tj; Write-Log "   [-] задача $($t.TaskName) -- не удалось" }
+                # тем же путём, что и задачи по имени: со сверкой и запасным путём
+                # от имени системы. Раньше неудача здесь шла как «[-]», не как ошибка.
+                switch (Set-TaskEnabled ($t.TaskPath + $t.TaskName) $false) {
+                    'ok'      { Write-Log "   [+] задача $($t.TaskName) -- отключена"; $script:Changes++ }
+                    'system'  { Write-Log "   [+] задача $($t.TaskName) -- отключена от имени системы"; $script:Changes++ }
+                    'missing' { Undo-AheadEntry $tj; Write-Log "   [-] задача $($t.TaskName) -- пропала, пока шла работа" }
+                    default   { Undo-AheadEntry $tj; Write-Log "   [!] задача $($t.TaskName) -- Windows не дала отключить"; $script:Failures++ }
+                }
             }
         }
         'env' {
@@ -258,11 +264,11 @@ function Check-Def {
             $pp = Split-TaskPath $d.P
             $t = Get-ScheduledTask -TaskPath $pp[0] -TaskName $pp[1] -ErrorAction SilentlyContinue
             if (-not $t) { $ok = $true; $actual = 'нет задачи' }
-            else { $actual = [string]$t.State; $ok = ($t.State -eq 'Disabled') }
+            else { $ok = Test-TaskDisabled $t; $actual = $(if ($ok) { 'Disabled' } else { [string]$t.State }) }
         }
         'taskglob' {
             $ts = @(Get-TaskGlobTasks $d.P)
-            $bad = @($ts | Where-Object { $_.State -ne 'Disabled' })
+            $bad = @($ts | Where-Object { -not (Test-TaskDisabled $_) })
             $ok = ($bad.Count -eq 0); $actual = "всего $($ts.Count), активных $($bad.Count)"
         }
         'env' {
@@ -448,18 +454,15 @@ function Apply-Hosts {
             # копия нужна та, что была до программы, а не после первого блока
             if (-not (Test-Path -LiteralPath $copy)) { Copy-Item -LiteralPath $script:HostsPath -Destination $copy -Force -ErrorAction SilentlyContinue }
         }
-        # устаревший блок переписывается целиком: так он не обрастает повторами.
-        # Не убрался — новый не дописывается: иначе в hosts стало бы два блока.
-        if ($present -and -not (Remove-HostsBlock -Kind $Kind -Quiet)) { return }
+        # Весь файл — одной подменой: прежний блок этого вида убран, новый
+        # дописан, всё чужое на месте. Раньше прежний блок удалялся отдельной
+        # записью, а новый дописывался следом (Add-Content): между ними блока
+        # не было вовсе, а оборванная дозапись оставляла его половину.
+        $cut = Get-HostsLinesWithout (Read-HostsLines) $Kind
         $block = @('') + $(switch ($Kind) { 'gdid' { $script:HostsMarkGdidStart } 'lock' { $script:HostsMarkLockStart } default { $script:HostsMarkStart } })
         $block += $wanted
         $block += $(switch ($Kind) { 'gdid' { $script:HostsMarkGdidEnd } 'lock' { $script:HostsMarkLockEnd } default { $script:HostsMarkEnd } })
-        # Сразу после записи антивирус ненадолго держит hosts открытым, и
-        # второй блок подряд падал с «файл занят другим процессом».
-        for ($try = 1; ; $try++) {
-            try { Add-Content -LiteralPath $script:HostsPath -Value $block -Encoding ASCII -ErrorAction Stop; break }
-            catch [System.IO.IOException] { if ($try -ge 5) { throw }; Start-Sleep -Milliseconds (400 * $try) }
-        }
+        Write-HostsFile (@($cut.keep) + $block)
         ipconfig /flushdns | Out-Null
         if ($present) { Write-Log ("   [+] список доменов обновлён, теперь их: {0}" -f $count) }
         else { Write-Log ("   [+] заблокировано доменов: {0}" -f $count) }
@@ -475,45 +478,75 @@ function Apply-Hosts {
 # его недописанным — вместе со строками, которые человек вписал сам.
 function Remove-HostsBlock {
     param([string]$Kind = 'all', [switch]$Quiet)
-    $tmp = $script:HostsPath + '.w11p-new'
     try {
-        $lines = @(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop)
-        $keep = New-Object System.Collections.Generic.List[string]
-        $inside = $false; $found = 0
-        foreach ($l in $lines) {
-            if ($l -match $script:HostsMarkRegex) {
-                if (-not $inside) {
-                    if (-not (Test-HostsMarkKind $l $Kind)) { $keep.Add($l); continue }
-                    $found++
-                    # пустую строку перед блоком ставили мы сами
-                    if ($keep.Count -gt 0 -and $keep[$keep.Count - 1] -eq '') { $keep.RemoveAt($keep.Count - 1) }
-                    $inside = $true
-                } else { $inside = $false }
-                continue
-            }
-            # Внутри блока убираем только свои строки. Чужая строка значит, что
-            # закрывающую метку кто-то стёр: дальше идёт уже не наше.
-            if ($inside -and $l -notmatch '^\s*((0\.0\.0\.0|::)\s+\S+)?\s*$') { $inside = $false }
-            if (-not $inside) { $keep.Add($l) }
-        }
-        if ($found -eq 0) { if (-not $Quiet) { Write-Log '   [-] блока в hosts нет' }; return $true }
-        # Default, а не ASCII: чужие строки с нелатинскими буквами остаются как были
-        [IO.File]::WriteAllLines($tmp, [string[]]$keep.ToArray(), [Text.Encoding]::Default)
-        # ReplaceFile сохраняет права и атрибуты прежнего файла. Сразу после
-        # записи антивирус ненадолго держит hosts открытым — пробуем ещё раз.
-        for ($try = 1; ; $try++) {
-            try { [IO.File]::Replace($tmp, $script:HostsPath, [NullString]::Value); break }
-            catch [System.IO.IOException] { if ($try -ge 5) { throw }; Start-Sleep -Milliseconds (400 * $try) }
-        }
+        $cut = Get-HostsLinesWithout (Read-HostsLines) $Kind
+        if ($cut.found -eq 0) { if (-not $Quiet) { Write-Log '   [-] блока в hosts нет' }; return $true }
+        Write-HostsFile $cut.keep
         ipconfig /flushdns | Out-Null
         if (-not $Quiet) { Write-Log '   [+] блок блокировки доменов удалён' }
         return $true
     } catch {
-        # недописанная копия рядом с hosts не остаётся; сам hosts — прежний
-        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
         Write-Log ("   [!] hosts не переписался ({0}) -- блок остался на месте" -f $_.Exception.Message)
         $script:Failures++
         return $false
+    }
+}
+
+# Кодировка hosts — та, в которой он лежит: метка UTF-8 или UTF-16 — она,
+# иначе системная ANSI (так его пишет Windows; чужие строки с нелатинскими
+# буквами остаются байт в байт).
+function Get-HostsEncoding {
+    $b = New-Object byte[] 3
+    $n = 0
+    $fs = [IO.File]::Open($script:HostsPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try { $n = $fs.Read($b, 0, 3) } finally { $fs.Dispose() }
+    if ($n -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { return (New-Object System.Text.UTF8Encoding $true) }
+    if ($n -ge 2 -and $b[0] -eq 0xFF -and $b[1] -eq 0xFE) { return [System.Text.Encoding]::Unicode }
+    return [System.Text.Encoding]::Default
+}
+
+function Read-HostsLines { return , ([string[]][IO.File]::ReadAllLines($script:HostsPath, (Get-HostsEncoding))) }
+
+# Строки hosts без блоков программы этого вида. Внутри блока убираются только
+# свои строки: чужая строка значит, что закрывающую метку кто-то стёр, и
+# дальше идёт уже не наше. Пустую строку перед блоком ставила сама программа.
+function Get-HostsLinesWithout {
+    param([string[]]$Lines, [string]$Kind)
+    $keep = New-Object System.Collections.Generic.List[string]
+    $inside = $false; $found = 0
+    foreach ($l in @($Lines)) {
+        if ($l -match $script:HostsMarkRegex) {
+            if (-not $inside) {
+                if (-not (Test-HostsMarkKind $l $Kind)) { $keep.Add($l); continue }
+                $found++
+                if ($keep.Count -gt 0 -and $keep[$keep.Count - 1] -eq '') { $keep.RemoveAt($keep.Count - 1) }
+                $inside = $true
+            } else { $inside = $false }
+            continue
+        }
+        if ($inside -and $l -notmatch '^\s*((0\.0\.0\.0|::)\s+\S+)?\s*$') { $inside = $false }
+        if (-not $inside) { $keep.Add($l) }
+    }
+    return @{ keep = $keep.ToArray(); found = $found }
+}
+
+# hosts целиком: копия рядом (в той же кодировке), сверка копии строка в
+# строку, затем подмена одним действием системы (ReplaceFile — права и
+# атрибуты прежнего файла сохраняются). Обрыв в любой миг оставляет либо
+# прежний hosts, либо новый, но не половину. Копия после себя не остаётся.
+function Write-HostsFile {
+    param([string[]]$Lines)
+    $enc = Get-HostsEncoding
+    $tmp = $script:HostsPath + '.w11p-new'
+    $want = [string[]]@($Lines)
+    try {
+        [IO.File]::WriteAllLines($tmp, $want, $enc)
+        $back = [IO.File]::ReadAllLines($tmp, $enc)
+        if ($back.Count -ne $want.Count) { throw 'копия hosts не совпала с задуманной' }
+        for ($i = 0; $i -lt $back.Count; $i++) { if ($back[$i] -cne $want[$i]) { throw ('копия hosts не совпала с задуманной в строке {0}' -f ($i + 1)) } }
+        Replace-FileAtomic $tmp $script:HostsPath
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -612,6 +645,14 @@ function Test-FwIpRule {
     return $false
 }
 
+# IP-адрес в каноническом виде (IPv6 — сжатый, строчными), не адрес — $null
+function ConvertTo-IpCanonical {
+    param([string]$Text)
+    $ip = $null
+    if ([System.Net.IPAddress]::TryParse("$Text".Trim(), [ref]$ip)) { return $ip.ToString().ToLowerInvariant() }
+    return $null
+}
+
 function Apply-FwIpBlock {
     if ($DryRun) { Write-Log '   [тест] будут заблокированы адреса сбора телеметрии'; return }
     try {
@@ -619,6 +660,11 @@ function Apply-FwIpBlock {
         $found = Get-TelemetryIpList
         $ips = @($found.ips)
         Write-Log ("   ответили DNS имён: {0} из {1}" -f $found.answered, $found.asked)
+        # каждый адрес — в каноническом виде и один раз: «2001:DB8::1» и
+        # «2001:db8:0::1» — один адрес, и сверять потом надо множества
+        $wantSet = @{}
+        foreach ($a in $ips) { $n = ConvertTo-IpCanonical $a; if ($n) { $wantSet[$n] = $true } }
+        $ips = @($wantSet.Keys | Sort-Object)
         if ($ips.Count -eq 0) { Write-Log '   [-] адреса не определились'; return }
         # Новое правило ставится рядом со старым, проверяется, и только потом
         # старое убирается. Раньше старое удалялось первым: не создалось
@@ -632,8 +678,18 @@ function Apply-FwIpBlock {
         if (-not $new) { $why = 'правило не появилось' }
         elseif ("$($new.Enabled)" -ne 'True' -or "$($new.Action)" -ne 'Block' -or "$($new.Direction)" -ne 'Outbound') { $why = 'правило создалось не таким, как задумано' }
         else {
-            $got = @((Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $new -ErrorAction Stop).RemoteAddress)
-            if ($got.Count -ne $ips.Count) { $why = ("в правиле адресов {0} вместо {1}" -f $got.Count, $ips.Count) }
+            # множество адресов в правиле — ровно то, что задумано: не только
+            # сколько, но и какие (раньше сверялось одно число)
+            $gotSet = @{}
+            foreach ($a in @((Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $new -ErrorAction Stop).RemoteAddress)) {
+                $n = ConvertTo-IpCanonical $a
+                $gotSet[$(if ($n) { $n } else { "?$a" })] = $true
+            }
+            $missing = @($wantSet.Keys | Where-Object { -not $gotSet.ContainsKey($_) } | Sort-Object)
+            $extra = @($gotSet.Keys | Where-Object { -not $wantSet.ContainsKey($_) } | Sort-Object)
+            if ($missing.Count -or $extra.Count) {
+                $why = ("в правиле не те адреса: нет {0}, лишние {1}" -f $(if ($missing.Count) { $missing -join ', ' } else { '—' }), $(if ($extra.Count) { $extra -join ', ' } else { '—' }))
+            }
         }
         if ($why) {
             Remove-NetFirewallRule -Name $id -ErrorAction SilentlyContinue

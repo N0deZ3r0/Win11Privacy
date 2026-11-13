@@ -87,6 +87,7 @@ function Get-ChangeGroups {
 # Возвращает одну запись журнала и убирает её из changes.json
 function Restore-ChangeKey {
     param([string]$Key)
+    Clear-StaleHiveMounts
     if (-not (Test-DataTrusted)) { return @{ ok = $false; error = 'папка данных программы не защищена от подмены' } }
     $jf = Read-JournalFile
     if (-not $jf.trusted) { return @{ ok = $false; error = 'журналу отката нельзя верить: подпись не сошлась или её нечем проверить' } }
@@ -104,6 +105,7 @@ function Restore-ChangeKey {
         $r = Restore-JournalEntry $first
     }
     if (-not $r.ok) { return @{ ok = $false; error = "$($r.error)" } }
+    if ("$($first.kind)" -eq 'reg' -and "$($first.createdKey)") { Remove-CreatedKeys @("$($first.createdKey)") }
     # журнал перечитывается под замком: дописанное другим запуском остаётся
     try { Remove-JournalKey $Key }
     catch { return @{ ok = $false; error = ('возвращено, но журнал не переписался: ' + $_.Exception.Message) } }

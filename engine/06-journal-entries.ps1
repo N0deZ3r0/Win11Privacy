@@ -88,6 +88,9 @@ function Test-JournalEntryShape {
             if ("$($f['path'])" -notmatch $regPath) { return 'путь не в ветке реестра' }
             if (-not "$($f['name'])") { return 'пустое имя параметра' }
             if ($f['existed'] -and -not (Test-RegKind "$($f['type'])")) { return 'неизвестный тип значения' }
+            # созданный программой ключ — только сам путь значения или ключ выше него
+            $ck = "$($f['createdKey'])"
+            if ($ck -and -not ($ck -match $regPath -and ("$($f['path'])" -eq $ck -or "$($f['path'])".StartsWith($ck + '\', [StringComparison]::OrdinalIgnoreCase)))) { return 'созданный ключ не на пути значения' }
             return ''
         }
         'svc' {
@@ -162,6 +165,21 @@ function Restore-RegValue {
     return @{ ok = $true }
 }
 
+# Убирает ключи, которые создала программа (createdKey в записях журнала),
+# когда в них не осталось ни одного значения. Вызывается после того, как
+# возвращены все значения: значения одного ключа лежат в разных записях, а
+# ключ запомнила только первая из них. Ключ, в который за это время записал
+# кто-то ещё, остаётся — это не ошибка.
+function Remove-CreatedKeys {
+    param([string[]]$Keys)
+    foreach ($k in @($Keys | Where-Object { $_ } | Select-Object -Unique | Sort-Object { $_.Length } -Descending)) {
+        if (-not (Test-Path -LiteralPath $k)) { continue }
+        if (-not (Test-KeyTreeEmpty $k)) { Write-Log ("   [i] ключ {0} создала программа, но в нём есть и другие значения -- оставлен" -f $k); continue }
+        try { Remove-Item -LiteralPath $k -Recurse -Force -ErrorAction Stop; Write-Log ("   [+] убран пустой ключ, которого не было до программы: {0}" -f $k) }
+        catch { Write-Log ("   [!] пустой ключ {0}, которого не было до программы, не убрался: {1}" -f $k, $_.Exception.Message); $script:Failures++ }
+    }
+}
+
 # Возвращает одну запись журнала (реестр, служба, задача, переменная среды).
 # Записи автозагрузки и чужих профилей возвращаются своими функциями.
 function Restore-JournalEntry {
@@ -176,10 +194,28 @@ function Restore-JournalEntry {
                 $type = switch ($start) { '2' { 'Automatic' } '3' { 'Manual' } '4' { 'Disabled' } default { '' } }
                 if ($type) { Set-Service -Name $name -StartupType $type -ErrorAction Stop }
                 elseif ($start -ne '') { Set-ItemProperty -LiteralPath $k -Name 'Start' -Value ([int]$start) -Type DWord -ErrorAction Stop }
-                if ("$($e.delayed)" -ne '') { Set-ItemProperty -LiteralPath $k -Name 'DelayedAutostart' -Value ([int]"$($e.delayed)") -Type DWord -ErrorAction SilentlyContinue }
                 # тип запуска сверяется: «команда прошла» — ещё не «вернулось»
                 if ($start -ne '' -and "$(Get-RegValue $k 'Start')" -ne $start) {
                     return @{ ok = $false; error = ("тип запуска не вернулся: сейчас {0}, нужно {1}" -f (Get-StartName "$(Get-RegValue $k 'Start')"), (Get-StartName $start)) }
+                }
+                # Отложенный запуск — так же: вернуть и сверить. Раньше он
+                # возвращался молча (ошибка глоталась) и без сверки, а откат
+                # считался полным. Не было — значит, и сейчас не должно быть
+                # ненулевым (ноль и «нет» для Windows одно и то же).
+                $wantD = "$($e.delayed)"
+                $nowD = Get-RegRaw $k 'DelayedAutostart'
+                if ($wantD -ne '') {
+                    try { Set-ItemProperty -LiteralPath $k -Name 'DelayedAutostart' -Value ([int]$wantD) -Type DWord -ErrorAction Stop }
+                    catch { return @{ ok = $false; error = ("тип запуска возвращён, а отложенный запуск — нет: {0}" -f $_.Exception.Message) } }
+                    $nowD = Get-RegRaw $k 'DelayedAutostart'
+                    if (-not $nowD.ok -or -not $nowD.exists -or "$($nowD.kind)" -ne 'DWord' -or "$([int64]$nowD.value)" -ne $wantD) {
+                        return @{ ok = $false; error = ("отложенный запуск не вернулся: сейчас {0}, нужно {1}" -f $(if ($nowD.exists) { "$($nowD.value)" } else { 'нет' }), $wantD) }
+                    }
+                } elseif (-not $nowD.ok) {
+                    return @{ ok = $false; error = ("отложенный запуск не прочитался: {0}" -f $nowD.error) }
+                } elseif ($nowD.exists -and [int64]("0" + "$($nowD.value)") -ne 0) {
+                    try { Remove-ItemProperty -LiteralPath $k -Name 'DelayedAutostart' -ErrorAction Stop }
+                    catch { return @{ ok = $false; error = ("отложенного запуска до программы не было, а убрать его не вышло: {0}" -f $_.Exception.Message) } }
                 }
                 # работала до нас — запускаем снова, чтобы не ждать перезагрузки;
                 # не запустилась сейчас — так и сказано (тип запуска уже верный)

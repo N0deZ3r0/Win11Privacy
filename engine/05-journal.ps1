@@ -134,7 +134,22 @@ function Test-JournalEntryKnown {
 }
 
 # -ReadOnly — для показа журнала: ничего не откладывать и не писать.
+# Журнал читается под тем же замком, под которым его пишут: у подмены файла
+# (ReplaceFile) есть миг, когда его нет под этим именем, и чтение без замка
+# в этот миг видело «журнала нет» — откат сказал бы «возвращать нечего».
+# Замок повторно входимый: запись, которая читает журнал под замком, не ждёт сама себя.
 function Read-JournalFile {
+    param([switch]$ReadOnly)
+    $box = @{ r = $null }
+    try { Use-JournalLock { $box.r = Read-JournalFileUnlocked -ReadOnly:$ReadOnly } }
+    catch {
+        if (-not $ReadOnly) { Write-Log ("   [!] журнал отката сейчас не читается ({0}) -- файл не тронут, повторите позже" -f $_.Exception.Message) }
+        return @{ items = @(); legacy = $false; exists = $true; signed = $false; trusted = $false; state = 'unreadable'; updated = ''; dropped = 0 }
+    }
+    return $box.r
+}
+
+function Read-JournalFileUnlocked {
     param([switch]$ReadOnly)
     # state: none — журнала нет; valid — ему можно верить; legacy — можно
     # верить, но он прежнего образца (не знает служб и задач); untrusted —
@@ -157,8 +172,27 @@ function Read-JournalFile {
         Write-Log ("   [!] {0} По нему ничего не возвращается; файл отложен как {1}" -f $Why, (Split-Path $bad -Leaf))
         $res.exists = $false
     }
-    try { $j = Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json }
-    catch {
+    # Не прочитался (занят другим процессом) — это не повреждение и не «пусто».
+    # Раньше ошибка чтения Get-Content не прерывала разбор: журнал выглядел
+    # пустым и достоверным, и откат в этот миг сказал бы «возвращать нечего».
+    # Файл был, а при открытии его нет: другой запуск как раз подменяет его
+    # (у ReplaceFile есть миг без файла под этим именем). Это не «журнала нет»
+    # — ждём и читаем снова; раньше такой миг читался как пустой журнал.
+    $txt = $null
+    for ($k = 1; $k -le 20; $k++) {
+        try { $txt = Read-TextShared $p }
+        catch {
+            $res.trusted = $false; $res.state = 'unreadable'
+            if (-not $ReadOnly) { Write-Log ("   [!] журнал отката сейчас не читается ({0}) -- файл не тронут, повторите позже" -f $_.Exception.Message) }
+            return $res
+        }
+        if ($null -ne $txt) { break }
+        Start-Sleep -Milliseconds 50
+    }
+    if ($null -eq $txt) { $res.exists = $false; return $res }      # и правда удалён
+    $j = $null
+    try { if ("$txt".Trim()) { $j = $txt | ConvertFrom-Json -ErrorAction Stop } } catch { $j = $null }
+    if ($null -eq $j) {
         & $setAside 'changes.broken-' 'журнал отката повреждён.'
         return $res
     }
@@ -304,6 +338,10 @@ function Save-JournalEntries {
         if (-not (Test-DataTrusted)) { throw 'папка данных программы не защищена от подмены' }
         Use-JournalLock {
             $prev = Read-JournalFile
+            # Не прочитался (занят) — дописывать нельзя: новый файл из одних
+            # свежих записей затёр бы всю историю «как было». Раньше ошибка
+            # чтения выглядела пустым журналом, и так и происходило.
+            if ($prev.state -eq 'unreadable') { throw 'журнал отката сейчас не читается -- дописать в него нельзя, не потеряв прежние записи' }
             $all = New-Object System.Collections.Generic.List[object]
             foreach ($e in @($prev.items)) {
                 # Записи, положенные заранее этим же запуском, чьё изменение не
@@ -373,7 +411,10 @@ function Load-Json {
     if (-not (Test-DataTrusted)) { return $null }
     $p = Join-Path $script:DataDir $Name
     if (-not (Test-Path -LiteralPath $p)) { return $null }
-    try { return (Get-Content -LiteralPath $p -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json) }
-    catch { Write-Log ("   [!] файл данных {0} не читается: {1}" -f $Name, $_.Exception.Message); return $null }
+    try {
+        $txt = Read-TextShared $p
+        if (-not "$txt".Trim()) { return $null }
+        return ($txt | ConvertFrom-Json -ErrorAction Stop)
+    } catch { Write-Log ("   [!] файл данных {0} не читается: {1}" -f $Name, $_.Exception.Message); return $null }
 }
 
