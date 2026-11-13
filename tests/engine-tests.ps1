@@ -1586,9 +1586,11 @@ Set-Content (Join-Path $own 'mine\inside.txt') 'x'
 Set-Content (Join-Path $own 'mine.txt') 'x'
 $script:Failures = 0
 $ownSt = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
-foreach ($c in @(Get-ChildItem -LiteralPath $own -Force)) { Remove-TreeNoFollow $c.FullName $ownSt -TrustedOwnerOnly }
-# файлы здесь завёл сам пользователь: доверенного владельца у них нет
+# Владелец — до удаления. На раннере CI тесты идут от имени администратора, и
+# созданное там принадлежит группе администраторов, то есть доверенному
+# владельцу: тогда проверять нечего, и такие файлы вправе удалиться.
 $ownMine = (Get-Acl (Join-Path $own 'mine.txt')).GetOwner([Security.Principal.SecurityIdentifier]).Value
+foreach ($c in @(Get-ChildItem -LiteralPath $own -Force)) { Remove-TreeNoFollow $c.FullName $ownSt -TrustedOwnerOnly }
 if ($script:ClearOwners -notcontains $ownMine) {
     Check 'в системной папке чужое не удаляется и внутрь не заходит' (
           (Test-Path (Join-Path $own 'mine.txt')) -and (Test-Path (Join-Path $own 'mine\inside.txt')) -and
@@ -2030,7 +2032,9 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
         $wide.SetAccessRuleProtection($false, $false)
         [IO.File]::SetAccessControl($lp, $wide)
         $r.lockWideBefore = -not (Test-KeyFileSecure $lp)
-        Use-JournalLock { $null }
+        # тело ничего не выводит: лишний объект в выводе задания превратил бы
+        # его итог в массив, и пустые списки проверок пришли бы как $null
+        Use-JournalLock { }
         $r.lockRepaired = [bool](Test-KeyFileSecure $lp)
     }
 
@@ -2297,9 +2301,14 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     $r
 }
 $jDone = Wait-Job $jJob -Timeout 120
-$jr = $(if ($jDone) { Receive-Job $jJob } else { $null })
+# Итог задания — одна хэш-таблица. Лишний объект в выводе (например, $null из
+# тела замка) превращал итог в массив, и пустые списки проверок приходили как
+# $null — падали посторонние проверки. Берём сам итог, а лишнее называем.
+$jOut = @($(if ($jDone) { Receive-Job $jJob }))
+$jr = @($jOut | Where-Object { $_ -is [System.Collections.IDictionary] }) | Select-Object -Last 1
 Remove-Job $jJob -Force
 Check 'проверки журнала не зависают' ($null -ne $jr)
+Check 'задание журнала выводит только свой итог' ($jOut.Count -le 1) ("объектов в выводе: " + $jOut.Count)
 if ($jr) {
     Check 'у служб, задач и переменных свои ключи журнала' ((@($jr.keys) -join ',') -eq 'svc|diagtrack,task|\a\b,env|x') (@($jr.keys) -join ',')
     Check 'у службы в журнале остаётся первое состояние' ($jr.packOld -eq '3' -and $jr.packCount -eq 1) ("old=" + $jr.packOld)
@@ -2543,7 +2552,11 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [r
 foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) { Invoke-Expression $fn.Extent.Text }
 $script:SignKey = [Convert]::FromBase64String($KeyB64)
 $script:DataDir = $DataDir; $script:SafeRoot = Join-Path $DataDir 'not-the-safe-root'; $null = New-Item -ItemType Directory -Force $script:SafeRoot; $script:TaskRun = $false
-$script:RootState = $null; $script:PortableTaskState = $null; $script:KnownJournal = $null
+# Под администратором замок журнала проверяет корень (Assert-SafeRoot) и права файла
+# замка (Test-KeyFileSecure): корень считается защищённым, его настоящие права
+# проверяются отдельными тестами; TrustedSids функции берут из переменной скрипта.
+$script:TrustedSids = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+$script:RootState = $true; $script:PortableTaskState = $null; $script:KnownJournal = $null
 $script:JournalFailed = $false; $script:JournalLockTries = 100; $script:JournalLockWaitMs = 200
 $script:Journal = New-Object System.Collections.Generic.List[object]; $script:JournalRetract = New-Object 'System.Collections.Generic.HashSet[string]'
 $script:RunId = [guid]::NewGuid().ToString('N'); $script:Failures = 0; $script:Changes = 0; $script:Already = 0; $script:Blocked = 0
@@ -2622,7 +2635,8 @@ $crJob = Start-Job -ArgumentList $engine, $crashChild -ScriptBlock {
     $childFile = Join-Path $root 'child.ps1'
     Set-Content -LiteralPath $childFile -Value $ChildText -Encoding UTF8
     $key = New-Object byte[] 32; (New-Object Random 13).NextBytes($key)
-    $script:SignKey = $key; $script:TaskRun = $false; $script:RootState = $null; $script:PortableTaskState = $null; $script:KnownJournal = $null
+    $script:TrustedSids = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+    $script:SignKey = $key; $script:TaskRun = $false; $script:RootState = $true; $script:PortableTaskState = $null; $script:KnownJournal = $null
     $script:JournalFailed = $false; $script:JournalLockTries = 100; $script:JournalLockWaitMs = 200
     $script:Journal = New-Object System.Collections.Generic.List[object]; $script:JournalRetract = New-Object 'System.Collections.Generic.HashSet[string]'
     $script:RunId = 'parent'; $script:Failures = 0; $DryRun = $false
