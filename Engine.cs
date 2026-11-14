@@ -150,18 +150,42 @@ namespace Win11Privacy
             catch { return false; }
         }
 
+        // Свежая пустая папка карантина со случайным хвостом в имени, которую
+        // мы сами создаём. Предсказуемый путь «<корень>.untrusted-<время>»
+        // обычный пользователь мог завести заранее папкой или junction, и
+        // перенос «чужого» с правами администратора ушёл бы по ссылке.
+        private static string FreshQuarantine(string root)
+        {
+            for (int i = 0; i < 20; i++)
+            {
+                string cand = root + ".untrusted-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+                if (Directory.Exists(cand) || File.Exists(cand)) continue;
+                try { Directory.CreateDirectory(cand); } catch { continue; }
+                if ((File.GetAttributes(cand) & FileAttributes.ReparsePoint) != 0)
+                {
+                    try { Directory.Delete(cand, true); } catch { }
+                    continue;
+                }
+                return cand;
+            }
+            throw new IOException("не удалось завести папку карантина рядом с " + root);
+        }
+
         internal static void SecureRoot(string root)
         {
-            string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             if (Directory.Exists(root) && !TrustedItem(root, true))
-                Directory.Move(root, root + ".untrusted-" + stamp);
+            {
+                string aside = FreshQuarantine(root);
+                // Move не идёт в уже существующую папку — кладём внутрь свежей
+                Directory.Move(root, Path.Combine(aside, Path.GetFileName(root)));
+            }
             if (!Directory.Exists(root)) { Directory.CreateDirectory(root, Rules()); return; }
             if (IsSecure(root)) return;
             // Прежняя папка: права наследовались от ProgramData, и обычный
             // пользователь мог завести файлы и папки на любой глубине, а не
             // только прямо в корне. Раньше проверялся только корень — и после
             // того как окно закрывало его, движок считал папку чистой.
-            Quarantine(root, "", root + ".untrusted-" + stamp);
+            Quarantine(root, "", FreshQuarantine(root));
             Directory.SetAccessControl(root, Rules());
             if (!IsSecure(root)) throw new UnauthorizedAccessException(root);
         }
@@ -306,6 +330,14 @@ namespace Win11Privacy
             psi.EnvironmentVariables["ProgramData"] = ProgramDataDir();
             psi.EnvironmentVariables["ComSpec"] = Path.Combine(sys, "cmd.exe");
             psi.EnvironmentVariables["PATH"] = sys + ";" + win + ";" + Path.Combine(sys, "Wbem") + ";" + pshome + "\\";
+            // Переменные, через которые .NET грузит в процесс чужой код
+            // (профайлер CLR, стартовые перехватчики, слой совместимости):
+            // убираем до запуска, чтобы PowerShell движка стартовал чистым.
+            foreach (string bad in new[] {
+                "COR_ENABLE_PROFILING", "COR_PROFILER", "COR_PROFILER_PATH", "COR_PROFILER_PATH_32", "COR_PROFILER_PATH_64",
+                "CORECLR_ENABLE_PROFILING", "CORECLR_PROFILER", "CORECLR_PROFILER_PATH", "CORECLR_PROFILER_PATH_32", "CORECLR_PROFILER_PATH_64",
+                "DOTNET_STARTUP_HOOKS", "DOTNET_ADDITIONAL_DEPS", "DOTNET_EnableDiagnostics", "__COMPAT_LAYER" })
+                psi.EnvironmentVariables.Remove(bad);
             psi.WorkingDirectory = sys;
         }
 

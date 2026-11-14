@@ -233,6 +233,20 @@ if ($script:UserProfileDir) {
     $env:TEMP         = $script:UserProfileDir + '\AppData\Local\Temp'
     $env:TMP          = $env:TEMP
 }
+# Переменные, через которые .NET и оболочка грузят в процесс чужой код:
+# профайлер CLR (COR_*/CORECLR_*), стартовые перехватчики .NET, слой
+# совместимости приложений. Задачи стража идут от имени администратора, чей
+# HKCU\Environment обычному пользователю не переписать, но эти переменные
+# убираются и у текущего процесса, и у всех, кого он запускает (reg.exe,
+# auditpol, powershell задач и де-повышенных задач от имени пользователя),
+# чтобы ни один из них нельзя было перехватить через унаследованную
+# переменную. Профайлер, уже загруженный в сам движок, этим не выгрузить —
+# но запуск движка окно задаёт с чистым окружением (EngineFile.Harden).
+foreach ($bad in @('COR_ENABLE_PROFILING', 'COR_PROFILER', 'COR_PROFILER_PATH', 'COR_PROFILER_PATH_32', 'COR_PROFILER_PATH_64',
+                   'CORECLR_ENABLE_PROFILING', 'CORECLR_PROFILER', 'CORECLR_PROFILER_PATH', 'CORECLR_PROFILER_PATH_32', 'CORECLR_PROFILER_PATH_64',
+                   'DOTNET_STARTUP_HOOKS', 'DOTNET_ADDITIONAL_DEPS', 'DOTNET_EnableDiagnostics', '__COMPAT_LAYER')) {
+    [Environment]::SetEnvironmentVariable($bad, $null, 'Process')
+}
 
 # --------------------------------------------------------------------------- #
 #  Списки модулей приходят из интерфейса одной строкой «a,b,c»: powershell.exe
@@ -995,17 +1009,42 @@ function Get-UntrustedItems {
     return $out.ToArray()
 }
 
+# Свежая пустая папка карантина рядом с корнем: имя со случайным хвостом,
+# которого заранее не угадать, и мы сами её создаём. Предсказуемый путь
+# «<корень>.untrusted-<время>» обычный пользователь мог завести заранее —
+# папкой или junction, — и перенос «чужого» с правами администратора ушёл бы
+# по ссылке в защищённую папку. Создать не вышло или на месте оказалась
+# ссылка — пустая строка, карантин не делается.
+function New-QuarantineDir {
+    param([string]$Dir)
+    for ($i = 0; $i -lt 20; $i++) {
+        $cand = "$Dir.untrusted-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+        if (Test-Path -LiteralPath $cand) { continue }
+        try { $null = [IO.Directory]::CreateDirectory($cand) } catch { continue }
+        if ((Get-Item -LiteralPath $cand -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            try { [IO.Directory]::Delete($cand, $true) } catch { }
+            continue
+        }
+        return $cand
+    }
+    return ''
+}
+
 function Protect-DataRoot {
     param([string]$Dir)
     if (-not (Test-Admin)) { return (Test-DirSecure $Dir) }
     try {
-        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
         if (Test-Path -LiteralPath $Dir) {
             $it = Get-Item -LiteralPath $Dir -Force
             if (($it.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($script:TrustedSids -notcontains (Get-OwnerSid $Dir))) {
-                # папку завёл не администратор — ничему внутри верить нельзя
-                [IO.Directory]::Move($Dir, "$Dir.untrusted-$stamp")
-                Write-Log ("   [!] папку данных завёл не администратор -- она отложена как {0}" -f (Split-Path "$Dir.untrusted-$stamp" -Leaf))
+                # папку завёл не администратор — ничему внутри верить нельзя.
+                # Переносим в свежесозданный карантин: Move на уже существующий
+                # путь не идёт, а предсказуемый путь можно было занять заранее.
+                $aside0 = New-QuarantineDir $Dir
+                if (-not $aside0) { Write-Log '   [!] не удалось завести папку карантина -- папка данных не тронута'; return $false }
+                # Move не умеет в существующую пустую папку — кладём внутрь неё
+                [IO.Directory]::Move($Dir, (Join-Path $aside0 (Split-Path $Dir -Leaf)))
+                Write-Log ("   [!] папку данных завёл не администратор -- она отложена как {0}" -f (Split-Path $aside0 -Leaf))
             }
         }
         $sec = New-Object System.Security.AccessControl.DirectorySecurity
@@ -1026,13 +1065,17 @@ function Protect-DataRoot {
         # проверялось только то, что лежит прямо в корне. Всё, что создал не
         # администратор, любые ссылки и всё, что чужим явным правом открыто
         # на запись, уносим в карантин рядом — с тем же путём внутри.
-        $aside = "$Dir.untrusted-$stamp"
-        foreach ($u in @(Get-UntrustedItems $Dir)) {
-            $to = Join-Path $aside $u.Rel
-            $toDir = Split-Path $to -Parent
-            if (-not (Test-Path -LiteralPath $toDir)) { New-Item -ItemType Directory -Path $toDir -Force | Out-Null }
-            if ($u.Item.PSIsContainer) { [IO.Directory]::Move($u.Item.FullName, $to) } else { [IO.File]::Move($u.Item.FullName, $to) }
-            Write-Log ("   [!] в папке данных лежал чужой файл, он отложен: {0}" -f $u.Rel)
+        $untrusted = @(Get-UntrustedItems $Dir)
+        if ($untrusted.Count -gt 0) {
+            $aside = New-QuarantineDir $Dir
+            if (-not $aside) { Write-Log '   [!] не удалось завести папку карантина -- чужое в папке данных не тронуто'; return $false }
+            foreach ($u in $untrusted) {
+                $to = Join-Path $aside $u.Rel
+                $toDir = Split-Path $to -Parent
+                if (-not (Test-Path -LiteralPath $toDir)) { New-Item -ItemType Directory -Path $toDir -Force | Out-Null }
+                if ($u.Item.PSIsContainer) { [IO.Directory]::Move($u.Item.FullName, $to) } else { [IO.File]::Move($u.Item.FullName, $to) }
+                Write-Log ("   [!] в папке данных лежал чужой файл, он отложен: {0}" -f $u.Rel)
+            }
         }
         [IO.Directory]::SetAccessControl($Dir, $sec)
         return (Test-DirSecure $Dir)
@@ -2207,6 +2250,16 @@ function Get-Edition {
 
 function Test-Exe { param([string[]]$Paths) foreach ($p in $Paths) { if ($p -and (Test-Path -LiteralPath $p)) { return $true } } return $false }
 
+# Включена ли «Защита от подделки» Защитника. При ней политики MAPS (облачная
+# защита, отправка образцов) могут лечь в реестр — проверка их увидит, — но
+# Защитник их игнорирует, и отправка продолжается. То есть «применено» по
+# реестру не значит «подействовало»: об этом надо сказать прямо.
+function Test-TamperProtection {
+    $v = Get-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows Defender\Features' 'TamperProtection'
+    # 5 — включена, 4 — выключена (наблюдалось); решаем по биту 0
+    return ($null -ne $v -and ([int]$v -band 1) -eq 1)
+}
+
 # --------------------------------------------------------------------------- #
 #  КТО СИДИТ ЗА КОМПЬЮТЕРОМ. Пароль администратора может ввести и обычный
 #  пользователь — тогда повышенный движок работает под администратором, а
@@ -3128,7 +3181,15 @@ function Write-FirefoxKey {
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
         $obj = $null
         if (Test-Path -LiteralPath $p -PathType Leaf) {
-            try { $obj = Get-Content -LiteralPath $p -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $obj = $null }
+            $ff = Get-Content -LiteralPath $p -Raw -ErrorAction Stop
+            if ("$ff".Trim()) {
+                try { $obj = $ff | ConvertFrom-Json -ErrorAction Stop } catch { $obj = $null }
+                # Файл есть, но не разобрался (комментарий, иная кодировка,
+                # политика, с которой не справился разбор PowerShell 5.1). Не
+                # перезаписываем: иначе пропали бы уже стоящие там политики, в
+                # том числе корпоративные, которые программа не ставила.
+                if ($null -eq $obj) { return @{ ok = $false; why = 'policies.json есть, но не разбирается как JSON -- не трогаем, чтобы не стереть чужие политики' } }
+            }
         }
         if (-not $obj) { $obj = New-Object PSObject }
         if (-not ($obj.PSObject.Properties.Name -contains 'policies')) { $obj | Add-Member -NotePropertyName 'policies' -NotePropertyValue (New-Object PSObject) }
@@ -4373,6 +4434,15 @@ function Invoke-AsUser {
         if ((Get-Item -LiteralPath $rf -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
             return @{ ok = $false; result = $null; why = 'на месте итога задачи лежит ссылка' }
         }
+        # Итог лежит в папке пользователя. Его должна была написать наша задача
+        # от имени этого же пользователя: сверяем владельца. Чужой владелец —
+        # файл подменили, итогу верить нельзя (из него всё равно берутся только
+        # числа и короткие строки, но лишним это не будет).
+        $rfOwner = ''
+        try { $rfOwner = (Get-Acl -LiteralPath $rf -ErrorAction Stop).GetOwner([Security.Principal.SecurityIdentifier]).Value } catch { }
+        if ($accountSid -and $rfOwner -and $rfOwner -ne $accountSid -and $script:TrustedSids -notcontains $rfOwner) {
+            return @{ ok = $false; result = $null; why = 'итог задачи принадлежит не тому пользователю -- подмена' }
+        }
         $txt = Read-TextShared $rf
         $res = $null
         try { $res = $txt | ConvertFrom-Json -ErrorAction Stop } catch { }
@@ -4607,8 +4677,15 @@ function Get-GdidStatus {
 # политики (/backup) пишет то же самое числом — по нему и сверяемся.
 function Get-AuditSetting {
     param([string]$Guid = $script:AuditGuid)
-    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('w11p-audit-' + [guid]::NewGuid().ToString('N') + '.csv')
+    # auditpol пишет копию политики в файл, а читаем мы её с правами
+    # администратора. Пишем в защищённый корень, если он уже есть (его завело
+    # окно или применение), а не во временную папку пользователя: туда он мог
+    # бы подложить на наш путь ссылку. Корня ещё нет — случайное имя во
+    # временной папке (чтение политики не должно заводить корень само).
+    $dir = $(if ($script:SafeRoot -and (Test-Path -LiteralPath $script:SafeRoot -PathType Container)) { $script:SafeRoot } else { [IO.Path]::GetTempPath() })
+    $tmp = Join-Path $dir ('w11p-audit-' + [guid]::NewGuid().ToString('N') + '.csv')
     try {
+        if ((Test-Path -LiteralPath $tmp) -and ((Get-Item -LiteralPath $tmp -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { return -1 }
         $null = & auditpol.exe /backup /file:$tmp 2>&1
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $tmp)) { return -1 }
         # Заголовки столбцов в копии тоже бывают переведены («GUID подкатегории»,
@@ -7051,6 +7128,12 @@ function Restore-BackupFolder {
     $folder = Split-Path $Path -Leaf
     $work = Join-Path $script:SafeRoot ('restore-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     try {
+        # Папка возврата — внутри защищённого корня (туда пишут только система
+        # и администраторы), со случайным именем. Секрета здесь не лежит: это
+        # копии тех же .reg, что у пользователя на рабочем столе; ключ подписи
+        # journal.key сюда не копируется и закрыт собственным ACL. Проверяем
+        # только, что имя ещё свободно, — на всякий случай.
+        if (Test-Path -LiteralPath $work) { throw 'папка возврата уже есть' }
         New-Item -ItemType Directory -Path $work -Force -ErrorAction Stop | Out-Null
         foreach ($f in @(Get-ChildItem -LiteralPath $Path -File -Filter '*.reg' -ErrorAction Stop)) {
             $p = $sigs.PSObject.Properties[$f.Name]
@@ -8210,6 +8293,13 @@ foreach ($m in $script:ModuleOrder) {
     $modDefs = @($script:Defs | Where-Object { $_.M -eq $m })
     if ($modDefs.Count -eq 0) { continue }
     Write-Section $script:ModuleTitles[$m]
+    # Защитник под «Защитой от подделки»: политики MAPS могут лечь в реестр,
+    # но Защитник их не применит, пока она включена. Предупреждаем заранее,
+    # чтобы «применено» по реестру не принимали за выключенную отправку.
+    if ($m -eq 'defender' -and -not $DryRun -and (Test-TamperProtection)) {
+        Write-Log '   [!] включена «Защита от подделки» Защитника: облачную защиту и отправку образцов Windows не отдаёт даже политикой.'
+        Write-Log '       Параметры этого модуля лягут в реестр, но подействуют, только если сначала выключить «Защиту от подделки» вручную: Безопасность Windows > Защита от вирусов и угроз > Управление настройками.'
+    }
     # Без сервера выдачи номера учётная запись Microsoft не работает вовсе —
     # при входе в Windows через неё запрет не ставим, а объясняем почему.
     if ($m -eq 'gdidlock' -and (Get-GdidLockRefusal)) {

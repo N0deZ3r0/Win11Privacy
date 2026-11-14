@@ -354,6 +354,15 @@ function Invoke-AsUser {
         if ((Get-Item -LiteralPath $rf -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
             return @{ ok = $false; result = $null; why = 'на месте итога задачи лежит ссылка' }
         }
+        # Итог лежит в папке пользователя. Его должна была написать наша задача
+        # от имени этого же пользователя: сверяем владельца. Чужой владелец —
+        # файл подменили, итогу верить нельзя (из него всё равно берутся только
+        # числа и короткие строки, но лишним это не будет).
+        $rfOwner = ''
+        try { $rfOwner = (Get-Acl -LiteralPath $rf -ErrorAction Stop).GetOwner([Security.Principal.SecurityIdentifier]).Value } catch { }
+        if ($accountSid -and $rfOwner -and $rfOwner -ne $accountSid -and $script:TrustedSids -notcontains $rfOwner) {
+            return @{ ok = $false; result = $null; why = 'итог задачи принадлежит не тому пользователю -- подмена' }
+        }
         $txt = Read-TextShared $rf
         $res = $null
         try { $res = $txt | ConvertFrom-Json -ErrorAction Stop } catch { }
@@ -588,8 +597,15 @@ function Get-GdidStatus {
 # политики (/backup) пишет то же самое числом — по нему и сверяемся.
 function Get-AuditSetting {
     param([string]$Guid = $script:AuditGuid)
-    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('w11p-audit-' + [guid]::NewGuid().ToString('N') + '.csv')
+    # auditpol пишет копию политики в файл, а читаем мы её с правами
+    # администратора. Пишем в защищённый корень, если он уже есть (его завело
+    # окно или применение), а не во временную папку пользователя: туда он мог
+    # бы подложить на наш путь ссылку. Корня ещё нет — случайное имя во
+    # временной папке (чтение политики не должно заводить корень само).
+    $dir = $(if ($script:SafeRoot -and (Test-Path -LiteralPath $script:SafeRoot -PathType Container)) { $script:SafeRoot } else { [IO.Path]::GetTempPath() })
+    $tmp = Join-Path $dir ('w11p-audit-' + [guid]::NewGuid().ToString('N') + '.csv')
     try {
+        if ((Test-Path -LiteralPath $tmp) -and ((Get-Item -LiteralPath $tmp -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { return -1 }
         $null = & auditpol.exe /backup /file:$tmp 2>&1
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $tmp)) { return -1 }
         # Заголовки столбцов в копии тоже бывают переведены («GUID подкатегории»,

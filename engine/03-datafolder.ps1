@@ -63,17 +63,42 @@ function Get-UntrustedItems {
     return $out.ToArray()
 }
 
+# Свежая пустая папка карантина рядом с корнем: имя со случайным хвостом,
+# которого заранее не угадать, и мы сами её создаём. Предсказуемый путь
+# «<корень>.untrusted-<время>» обычный пользователь мог завести заранее —
+# папкой или junction, — и перенос «чужого» с правами администратора ушёл бы
+# по ссылке в защищённую папку. Создать не вышло или на месте оказалась
+# ссылка — пустая строка, карантин не делается.
+function New-QuarantineDir {
+    param([string]$Dir)
+    for ($i = 0; $i -lt 20; $i++) {
+        $cand = "$Dir.untrusted-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+        if (Test-Path -LiteralPath $cand) { continue }
+        try { $null = [IO.Directory]::CreateDirectory($cand) } catch { continue }
+        if ((Get-Item -LiteralPath $cand -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            try { [IO.Directory]::Delete($cand, $true) } catch { }
+            continue
+        }
+        return $cand
+    }
+    return ''
+}
+
 function Protect-DataRoot {
     param([string]$Dir)
     if (-not (Test-Admin)) { return (Test-DirSecure $Dir) }
     try {
-        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
         if (Test-Path -LiteralPath $Dir) {
             $it = Get-Item -LiteralPath $Dir -Force
             if (($it.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($script:TrustedSids -notcontains (Get-OwnerSid $Dir))) {
-                # папку завёл не администратор — ничему внутри верить нельзя
-                [IO.Directory]::Move($Dir, "$Dir.untrusted-$stamp")
-                Write-Log ("   [!] папку данных завёл не администратор -- она отложена как {0}" -f (Split-Path "$Dir.untrusted-$stamp" -Leaf))
+                # папку завёл не администратор — ничему внутри верить нельзя.
+                # Переносим в свежесозданный карантин: Move на уже существующий
+                # путь не идёт, а предсказуемый путь можно было занять заранее.
+                $aside0 = New-QuarantineDir $Dir
+                if (-not $aside0) { Write-Log '   [!] не удалось завести папку карантина -- папка данных не тронута'; return $false }
+                # Move не умеет в существующую пустую папку — кладём внутрь неё
+                [IO.Directory]::Move($Dir, (Join-Path $aside0 (Split-Path $Dir -Leaf)))
+                Write-Log ("   [!] папку данных завёл не администратор -- она отложена как {0}" -f (Split-Path $aside0 -Leaf))
             }
         }
         $sec = New-Object System.Security.AccessControl.DirectorySecurity
@@ -94,13 +119,17 @@ function Protect-DataRoot {
         # проверялось только то, что лежит прямо в корне. Всё, что создал не
         # администратор, любые ссылки и всё, что чужим явным правом открыто
         # на запись, уносим в карантин рядом — с тем же путём внутри.
-        $aside = "$Dir.untrusted-$stamp"
-        foreach ($u in @(Get-UntrustedItems $Dir)) {
-            $to = Join-Path $aside $u.Rel
-            $toDir = Split-Path $to -Parent
-            if (-not (Test-Path -LiteralPath $toDir)) { New-Item -ItemType Directory -Path $toDir -Force | Out-Null }
-            if ($u.Item.PSIsContainer) { [IO.Directory]::Move($u.Item.FullName, $to) } else { [IO.File]::Move($u.Item.FullName, $to) }
-            Write-Log ("   [!] в папке данных лежал чужой файл, он отложен: {0}" -f $u.Rel)
+        $untrusted = @(Get-UntrustedItems $Dir)
+        if ($untrusted.Count -gt 0) {
+            $aside = New-QuarantineDir $Dir
+            if (-not $aside) { Write-Log '   [!] не удалось завести папку карантина -- чужое в папке данных не тронуто'; return $false }
+            foreach ($u in $untrusted) {
+                $to = Join-Path $aside $u.Rel
+                $toDir = Split-Path $to -Parent
+                if (-not (Test-Path -LiteralPath $toDir)) { New-Item -ItemType Directory -Path $toDir -Force | Out-Null }
+                if ($u.Item.PSIsContainer) { [IO.Directory]::Move($u.Item.FullName, $to) } else { [IO.File]::Move($u.Item.FullName, $to) }
+                Write-Log ("   [!] в папке данных лежал чужой файл, он отложен: {0}" -f $u.Rel)
+            }
         }
         [IO.Directory]::SetAccessControl($Dir, $sec)
         return (Test-DirSecure $Dir)

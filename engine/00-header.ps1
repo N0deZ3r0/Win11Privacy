@@ -233,6 +233,20 @@ if ($script:UserProfileDir) {
     $env:TEMP         = $script:UserProfileDir + '\AppData\Local\Temp'
     $env:TMP          = $env:TEMP
 }
+# Переменные, через которые .NET и оболочка грузят в процесс чужой код:
+# профайлер CLR (COR_*/CORECLR_*), стартовые перехватчики .NET, слой
+# совместимости приложений. Задачи стража идут от имени администратора, чей
+# HKCU\Environment обычному пользователю не переписать, но эти переменные
+# убираются и у текущего процесса, и у всех, кого он запускает (reg.exe,
+# auditpol, powershell задач и де-повышенных задач от имени пользователя),
+# чтобы ни один из них нельзя было перехватить через унаследованную
+# переменную. Профайлер, уже загруженный в сам движок, этим не выгрузить —
+# но запуск движка окно задаёт с чистым окружением (EngineFile.Harden).
+foreach ($bad in @('COR_ENABLE_PROFILING', 'COR_PROFILER', 'COR_PROFILER_PATH', 'COR_PROFILER_PATH_32', 'COR_PROFILER_PATH_64',
+                   'CORECLR_ENABLE_PROFILING', 'CORECLR_PROFILER', 'CORECLR_PROFILER_PATH', 'CORECLR_PROFILER_PATH_32', 'CORECLR_PROFILER_PATH_64',
+                   'DOTNET_STARTUP_HOOKS', 'DOTNET_ADDITIONAL_DEPS', 'DOTNET_EnableDiagnostics', '__COMPAT_LAYER')) {
+    [Environment]::SetEnvironmentVariable($bad, $null, 'Process')
+}
 
 # --------------------------------------------------------------------------- #
 #  Списки модулей приходят из интерфейса одной строкой «a,b,c»: powershell.exe

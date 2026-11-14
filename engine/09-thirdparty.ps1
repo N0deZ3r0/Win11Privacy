@@ -247,7 +247,15 @@ function Write-FirefoxKey {
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
         $obj = $null
         if (Test-Path -LiteralPath $p -PathType Leaf) {
-            try { $obj = Get-Content -LiteralPath $p -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $obj = $null }
+            $ff = Get-Content -LiteralPath $p -Raw -ErrorAction Stop
+            if ("$ff".Trim()) {
+                try { $obj = $ff | ConvertFrom-Json -ErrorAction Stop } catch { $obj = $null }
+                # Файл есть, но не разобрался (комментарий, иная кодировка,
+                # политика, с которой не справился разбор PowerShell 5.1). Не
+                # перезаписываем: иначе пропали бы уже стоящие там политики, в
+                # том числе корпоративные, которые программа не ставила.
+                if ($null -eq $obj) { return @{ ok = $false; why = 'policies.json есть, но не разбирается как JSON -- не трогаем, чтобы не стереть чужие политики' } }
+            }
         }
         if (-not $obj) { $obj = New-Object PSObject }
         if (-not ($obj.PSObject.Properties.Name -contains 'policies')) { $obj | Add-Member -NotePropertyName 'policies' -NotePropertyValue (New-Object PSObject) }

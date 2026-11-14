@@ -178,6 +178,82 @@ $realPd = [Environment]::GetFolderPath('CommonApplicationData')
 $seenPd = $(if ($envJson['-Detect']) { "$($envJson['-Detect'].buffer.path)" } else { '' })
 Check 'ProgramData берётся у системы, а не из окружения' ($seenPd -like ($realPd + '\*')) ("путь буфера: " + $seenPd)
 Remove-Item -LiteralPath $envRoot -Recurse -Force -ErrorAction SilentlyContinue
+# Переменные, через которые .NET грузит в процесс чужой код, движок убирает в
+# шапке (COR_*/CORECLR_* профайлер, стартовые перехватчики, слой совместимости)
+# — и у себя, и у всех дочерних процессов. С ними движок всё равно отвечает.
+$envText = [IO.File]::ReadAllText($engine, [Text.Encoding]::UTF8)
+Check 'шапка убирает COR_PROFILER и стартовые перехватчики .NET' (
+      ($envText -match "'COR_PROFILER'") -and ($envText -match "'DOTNET_STARTUP_HOOKS'") -and
+      ($envText -match "\[Environment\]::SetEnvironmentVariable\(\`$bad, \`$null, 'Process'\)"))
+$csHarden = Join-Path (Split-Path $engine) 'Engine.cs'
+if (Test-Path $csHarden) {
+    Check 'окно тоже чистит окружение запуска движка от профайлера' (
+          [regex]::Match((Get-Content $csHarden -Raw -Encoding UTF8), '(?s)void Harden\(.*?\n        \}').Value -match 'EnvironmentVariables\.Remove\(bad\)')
+}
+$envPsi2 = New-Object System.Diagnostics.ProcessStartInfo
+$envPsi2.FileName = (Get-Command powershell.exe).Source
+$envPsi2.UseShellExecute = $false; $envPsi2.RedirectStandardOutput = $true; $envPsi2.RedirectStandardError = $true
+$envPsi2.StandardOutputEncoding = [Text.Encoding]::UTF8
+$envPsi2.EnvironmentVariables['COR_ENABLE_PROFILING'] = '1'
+$envPsi2.EnvironmentVariables['COR_PROFILER'] = '{00000000-0000-0000-0000-000000000099}'
+$envPsi2.EnvironmentVariables['DOTNET_STARTUP_HOOKS'] = 'C:\nope\hook.dll'
+$envPsi2.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $engine + '" -Detect'
+$p2 = [System.Diagnostics.Process]::Start($envPsi2)
+$o2 = $p2.StandardOutput.ReadToEnd(); $null = $p2.StandardError.ReadToEnd(); $p2.WaitForExit()
+Check 'с выставленным профайлером .NET движок всё равно отвечает' (($o2 -split "`n" | Where-Object { $_ -match '###JSON###' }).Count -ge 1)
+
+# --------------------------------------------------------------------------- #
+#  Карантин папки данных: путь со случайным хвостом, который нельзя занять
+#  заранее (ссылкой или папкой), и мы сами его создаём и проверяем.
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Карантин папки данных, отказ Firefox, Защита от подделки'
+# Стабы (Get-RegValue, Get-FirefoxPoliciesPath, Write-Log) объявляются внутри
+# & { } — в области скрипта они затёрли бы настоящие и сломали бы следующие
+# тесты. Проверяемые функции движка грузятся в область скрипта и видны внутри.
+foreach ($fn in $envAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('New-QuarantineDir', 'Write-FirefoxKey', 'Test-TamperProtection') }, $true)) { Invoke-Expression $fn.Extent.Text }
+& {
+    function Write-Log { param([string]$Message = '') }
+    $qRoot = Join-Path $env:TEMP ('w11p-q-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $q1 = New-QuarantineDir $qRoot
+    $q2 = New-QuarantineDir $qRoot
+    Check 'карантин: свежая пустая папка, не ссылка, со случайным именем' (
+          $q1 -and (Test-Path -LiteralPath $q1) -and (@(Get-ChildItem -LiteralPath $q1 -Force).Count -eq 0) -and
+          (-not ((Get-Item -LiteralPath $q1 -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) -and
+          ((Split-Path $q1 -Leaf) -match '^w11p-q-[0-9a-f]+\.untrusted-\d{8}-\d{6}-[0-9a-f]{8}$'))
+    Check 'карантин: два вызова — разные папки' ($q1 -ne $q2)
+    $planted = "$qRoot.untrusted-" + (Get-Date -Format 'yyyyMMdd-HHmmss')
+    New-Item -ItemType Directory -Force $planted | Out-Null
+    $q3 = New-QuarantineDir $qRoot
+    Check 'карантин: занятый предсказуемый путь не мешает' ($q3 -and (Test-Path -LiteralPath $q3) -and $q3 -ne $planted)
+    Remove-Item -LiteralPath $planted, $q1, $q2, $q3 -Recurse -Force -ErrorAction SilentlyContinue
+}
+& {
+    function Write-Log { param([string]$Message = '') }
+    $ffDir = Join-Path $env:TEMP ('w11p-ff-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force (Join-Path $ffDir 'distribution') | Out-Null
+    $ffFile = Join-Path $ffDir 'distribution\policies.json'
+    function Get-FirefoxPoliciesPath { $ffFile }
+    $ffOrig = "{`r`n  // корпоративный комментарий, ломающий ConvertFrom-Json 5.1`r`n  `"policies`": { `"DisableTelemetry`": true }`r`n}"
+    Set-Content -LiteralPath $ffFile -Value $ffOrig -Encoding UTF8
+    # эталон — то, что реально легло на диск (у Set-Content свой перевод строки)
+    $ffBaseline = [IO.File]::ReadAllBytes($ffFile)
+    $ffRes = Write-FirefoxKey 'DisableFirefoxStudies' $true
+    Check 'Firefox: неразбираемый policies.json не перезаписывается' (
+          (-not $ffRes.ok) -and ("$($ffRes.why)" -match 'не трогаем') -and
+          ([Convert]::ToBase64String([IO.File]::ReadAllBytes($ffFile)) -eq [Convert]::ToBase64String($ffBaseline)))
+    Remove-Item -LiteralPath $ffDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+& {
+    $script:TpVal = $null
+    function Get-RegValue { param($Path, $Name) if ($Name -eq 'TamperProtection') { return $script:TpVal } return $null }
+    $script:TpVal = 5; $tpOn = Test-TamperProtection
+    $script:TpVal = 4; $tpOff = Test-TamperProtection
+    $script:TpVal = $null; $tpNone = Test-TamperProtection
+    Check 'Защита от подделки: 5 — включена, 4 — нет, отсутствует — нет' ($tpOn -and -not $tpOff -and -not $tpNone)
+}
+Check 'применение предупреждает про Защиту от подделки для модуля defender' (
+      ($envText -match "Test-TamperProtection\)\) \{") -and ($envText -match 'Защита от подделки'))
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
@@ -1870,7 +1946,7 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
     $want = @('ConvertTo-Fields', 'Get-JournalKey', 'Compress-Journal', 'Use-JournalLock', 'Get-JournalLockPath', 'Open-JournalLockFile', 'Read-JournalFile', 'Read-JournalFileUnlocked', 'Read-TextShared', 'Write-JournalFile',
               'Save-JournalEntries', 'Save-Json', 'Load-Json', 'Ensure-DataDir', 'Test-DataTrusted', 'Assert-SafeRoot', 'Test-DirSecure',
-              'Protect-DataRoot', 'Get-OwnerSid', 'Get-StartName', 'Restore-JournalEntry', 'Test-JournalWritable',
+              'Protect-DataRoot', 'New-QuarantineDir', 'Get-OwnerSid', 'Get-StartName', 'Restore-JournalEntry', 'Test-JournalWritable',
               'Get-RegRaw', 'Test-RegKind', 'Restore-RegValue', 'Get-JournalEntryId', 'Remove-JournalEntries',
               'Open-RegKeyRead', 'Test-RegKeyExists', 'Test-RegSameRaw', 'Replace-FileAtomic',
               'Get-TopMissingKey', 'Test-KeyTreeEmpty', 'Remove-CreatedKeys',
@@ -2290,7 +2366,16 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
         Set-Content (Join-Path $snap 'own.json') '{}' -Encoding UTF8
         $acl = Get-Acl (Join-Path $snap 'own.json'); $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544'))); Set-Acl (Join-Path $snap 'own.json') $acl
         $r.deepOwner = Get-OwnerSid (Join-Path $snap 'evil.json')
+        # Предсказуемый путь карантина заранее занят junction'ом на папку-
+        # приманку: раньше перенос чужого ушёл бы по нему. Теперь карантин —
+        # свежая папка со случайным именем, приманка остаётся пустой.
+        $bait = Join-Path $Root 'bait'
+        New-Item -ItemType Directory -Force $bait | Out-Null
+        $plantedAside = Join-Path $Root ('legacy.untrusted-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        $null = & cmd.exe /c ('mklink /J "' + $plantedAside + '" "' + $bait + '"')
         $r.legacyFixed = Protect-DataRoot $legacy
+        $r.baitEmpty = (@(Get-ChildItem -LiteralPath $bait -Force -Recurse -ErrorAction SilentlyContinue).Count -eq 0)
+        & cmd.exe /c ('rmdir "' + $plantedAside + '"') | Out-Null
         $r.deepGone = -not (Test-Path (Join-Path $snap 'evil.json'))
         $r.deepAside = @(Get-ChildItem $Root -Directory -Filter 'legacy.untrusted-*' | Where-Object { Test-Path (Join-Path $_.FullName 'snapshots\evil.json') }).Count
         $r.deepOwnKept = Test-Path (Join-Path $snap 'own.json')
@@ -2390,6 +2475,7 @@ if ($jr) {
         Check 'свой файл глубже корня остаётся' ([bool]$jr.deepOwnKept)
         Check 'свои данные при этом остаются' ([bool]$jr.dataKept)
         Check 'по ссылке ничего не тронуто' ([bool]$jr.windowsIntact)
+        Check 'заранее подложенный путь карантина (junction) не получает чужого' ([bool]$jr.baitEmpty)
     } else { Write-Host '  [--]   защита папки данных: нужны права администратора, пропущено' }
 }
 # ВАЖНО: только rmdir. Remove-Item -Recurse в Windows PowerShell 5.1 проходит

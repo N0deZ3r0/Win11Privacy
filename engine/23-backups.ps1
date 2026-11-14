@@ -49,6 +49,12 @@ function Restore-BackupFolder {
     $folder = Split-Path $Path -Leaf
     $work = Join-Path $script:SafeRoot ('restore-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     try {
+        # Папка возврата — внутри защищённого корня (туда пишут только система
+        # и администраторы), со случайным именем. Секрета здесь не лежит: это
+        # копии тех же .reg, что у пользователя на рабочем столе; ключ подписи
+        # journal.key сюда не копируется и закрыт собственным ACL. Проверяем
+        # только, что имя ещё свободно, — на всякий случай.
+        if (Test-Path -LiteralPath $work) { throw 'папка возврата уже есть' }
         New-Item -ItemType Directory -Path $work -Force -ErrorAction Stop | Out-Null
         foreach ($f in @(Get-ChildItem -LiteralPath $Path -File -Filter '*.reg' -ErrorAction Stop)) {
             $p = $sigs.PSObject.Properties[$f.Name]

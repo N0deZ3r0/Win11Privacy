@@ -18,8 +18,12 @@ true, that is a bug.
 
 **Data folder.** `C:\ProgramData\Win11Privacy` is created with an explicit ACL:
 SYSTEM and Administrators — full control, Users — read. A folder created
-earlier by someone else is set aside (`*.untrusted-<time>`), foreign files and
-links inside an older folder are moved to quarantine at any depth. The engine
+earlier by someone else is set aside, foreign files and
+links inside an older folder are moved to quarantine at any depth. The quarantine
+folder is created fresh with a random, unguessable name (`*.untrusted-<time>-<rnd>`)
+and checked not to be a reparse point: the old predictable `*.untrusted-<time>`
+path could be pre-planted by a non-admin as a junction, and the admin move of
+the foreign items would then follow it elsewhere. The engine
 copy that scheduled tasks run lives there and is compared with the embedded one
 by SHA-256 before it is replaced.
 
@@ -48,7 +52,16 @@ profile folders from the system itself (`GetSystemDirectory`, HKLM, the
 `HKCU\Environment` can override. The window starts the engine with the same
 values (`EngineFile.Harden`) and a system working directory. A test runs the
 engine with a planted `ScheduledTasks` module and a spoofed `ProgramData` and
-checks that neither is used.
+checks that neither is used. The header also removes the environment variables
+through which .NET or the shell load code into a process — the CLR profiler
+(`COR_*`/`CORECLR_*`), .NET startup hooks (`DOTNET_STARTUP_HOOKS`,
+`DOTNET_ADDITIONAL_DEPS`), and the application-compatibility layer
+(`__COMPAT_LAYER`) — so that none of the children the elevated engine spawns
+(`reg.exe`, `auditpol`, the task PowerShell, the de-elevated user task) can be
+hijacked through an inherited variable; the window clears the same set before
+launching the engine. The guard and watch tasks run as the administrator account
+that installed them (whose `HKCU\Environment` a non-admin cannot write), not as a
+standard logged-on user.
 
 **Folders of the user (cleanup, VS Code).** Deleting or writing *by path* as
 administrator in a folder the user's programs can write to cannot be tied to what
@@ -219,6 +232,9 @@ guarantees; kill during `reg.exe load/unload` itself.
   de-elevated task (see *Folders of the user*); a link on the path is refused.
   Firefox `policies.json` is in Program Files (administrators only) and written
   directly, with a JSON depth of 20 so that deep corporate policies are not cut.
+  An existing `policies.json` that does not parse (a comment, another encoding) is
+  left untouched instead of overwritten, so policies already there — corporate ones
+  included — are not lost.
 * Entries are shape-checked on rollback: known program, a valid key name, and the
   old value must be a single JSON scalar.
 
@@ -300,7 +316,10 @@ number and CSV columns by position (checked on a Russian VM).
 * A release is built by CI with provenance attestation, but the exe is not
   Authenticode-signed and the compiler (`csc`) does not produce reproducible
   builds: two builds of the same sources give different exe hashes. The engine
-  *is* reproducible, and CI compares it with the build from `engine/`.
+  *is* reproducible, and CI compares it with the build from `engine/`. The winget
+  package is machine-scope (`Scope: machine`), so the self-elevating exe lands in
+  the admin-only `Program Files\WinGet` store rather than a user-writable folder
+  where it could be swapped before being run elevated.
 * A few values are written to a store Windows does not document as a policy
   interface (`PolicyManager\default`, `MaxTelemetryAllowed` under `Policies`): Windows may
   rewrite them, and the guard puts them back. The program does not claim that
@@ -348,8 +367,12 @@ number and CSV columns by position (checked on a Russian VM).
 
 **Папка данных.** `C:\ProgramData\Win11Privacy` создаётся с явными правами:
 SYSTEM и администраторы — полный доступ, пользователи — чтение. Папка, заведённая
-кем-то другим, откладывается (`*.untrusted-<время>`), чужие файлы и ссылки в
-прежней папке уходят в карантин на любой глубине. Копия движка для задач лежит
+кем-то другим, откладывается, чужие файлы и ссылки в
+прежней папке уходят в карантин на любой глубине. Папка карантина создаётся
+заново со случайным именем (`*.untrusted-<время>-<rnd>`) и проверяется, что это
+не ссылка: прежний предсказуемый путь `*.untrusted-<время>` обычный пользователь
+мог занять заранее junction'ом, и перенос чужого с правами администратора ушёл
+бы по нему. Копия движка для задач лежит
 там же и перед заменой сверяется со встроенной по SHA-256.
 
 **Переносимый режим** (`-DataRoot` рядом с exe). Окно верит этой папке так же,
@@ -376,7 +399,16 @@ SYSTEM и администраторы — полный доступ, польз
 переменных, которые можно переопределить в `HKCU\Environment`. Окно запускает
 движок с теми же значениями (`EngineFile.Harden`) и системной рабочей папкой.
 Тест запускает движок с подложенным модулем `ScheduledTasks` и подменённой
-`ProgramData` и проверяет, что ни то ни другое не используется.
+`ProgramData` и проверяет, что ни то ни другое не используется. Шапка ещё
+убирает переменные окружения, через которые .NET или оболочка грузят в процесс
+код, — профайлер CLR (`COR_*`/`CORECLR_*`), стартовые перехватчики .NET
+(`DOTNET_STARTUP_HOOKS`, `DOTNET_ADDITIONAL_DEPS`), слой совместимости
+(`__COMPAT_LAYER`), — чтобы ни один дочерний процесс повышенного движка
+(`reg.exe`, `auditpol`, PowerShell задач, де-повышенная задача пользователя) не
+перехватили через унаследованную переменную; тот же набор чистит окно перед
+запуском. Задачи стража и наблюдения идут от учётной записи администратора,
+который их поставил (его `HKCU\Environment` обычному пользователю не переписать),
+а не от обычного вошедшего пользователя.
 
 **Папки пользователя (чистка, VS Code).** Удалять или писать *по пути* с
 правами администратора там, куда могут писать программы пользователя, нельзя:
@@ -548,7 +580,9 @@ SYSTEM и администраторы — полный доступ, польз
   повышения (см. *Папки пользователя*); ссылка на пути — отказ. `policies.json`
   Firefox лежит в Program Files (писать могут только администраторы) и пишется
   напрямую, с глубиной JSON 20, чтобы глубокие корпоративные политики не
-  обрезались.
+  обрезались. Уже лежащий `policies.json`, который не разбирается (комментарий,
+  иная кодировка), не перезаписывается, а оставляется как есть — чтобы не стереть
+  уже стоящие там политики, в том числе корпоративные.
 * Записи проверяются по форме при откате: программа из известных, допустимое имя
   ключа, прежнее значение — одно значение JSON.
 
@@ -631,7 +665,10 @@ ConstrainedLanguage (WDAC/AppLocker) движок сразу останавли�
 * Релиз собирает CI с аттестацией происхождения, но exe не подписан Authenticode, а
   компилятор (`csc`) не даёт воспроизводимой сборки: две сборки одних исходников
   дают разные хеши exe. Движок воспроизводим, и CI сверяет его со сборкой из
-  `engine/`.
+  `engine/`. Пакет winget — общесистемный (`Scope: machine`): самоповышающийся
+  exe ложится в папку `Program Files\WinGet`, доступную на запись только
+  администраторам, а не в профиль пользователя, где его можно было бы подменить
+  до запуска с повышением.
 * Часть значений пишется в хранилище, которое Windows не описывает как интерфейс
   политик (`PolicyManager\default`, `MaxTelemetryAllowed` в `Policies`): Windows
   может их переписать, и страж возвращает их. Программа не утверждает, что каждое
