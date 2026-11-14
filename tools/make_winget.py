@@ -73,11 +73,11 @@ Commands:
   - Win11Privacy
 # Программа меняет системные настройки и сама запрашивает права администратора
 ElevationRequirement: elevatesSelf
-# Ставим в общесистемную папку winget (Program Files), а не в профиль
-# пользователя: иначе самоповышающийся exe лежал бы там, куда пишет любая
-# программа пользователя, и её можно было бы подменить до запуска с правами
-# администратора. Machine-scope требует администратора уже при установке.
-Scope: machine
+# Поле Scope у portable-пакетов winget не поддерживает (winget validate:
+# «Scope is not supported for InstallerType portable») — область выбирает
+# тот, кто ставит: «winget install ... --scope machine» кладёт exe в папку
+# WinGet внутри Program Files, куда пишут только администраторы. Это сказано в
+# описании пакета и в README.
 ReleaseDate: {date}
 Installers:
   - Architecture: x64
@@ -108,6 +108,9 @@ Description: |-
   Settings changes are journalled and can be reverted one item at a time.
   What the optional cleanup deletes (temporary files, the telemetry buffer,
   removed apps) cannot be brought back.
+  The program runs with administrator rights; install it machine-wide so the
+  exe sits in a folder only administrators can write to:
+  winget install N0deZ3r0.Win11Privacy --scope machine
 Tags:
   - privacy
   - telemetry

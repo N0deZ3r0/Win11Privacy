@@ -122,10 +122,14 @@ English, to pin one language.
 **Via winget:**
 
 ```
-winget install N0deZ3r0.Win11Privacy
+winget install N0deZ3r0.Win11Privacy --scope machine
 ```
 
-Then start it with `Win11Privacy` from a new terminal window. Or download it by hand:
+`--scope machine` puts the exe in the machine-wide winget folder (inside Program
+Files), which only administrators can write to. Without it winget installs the
+package into your profile, where any program of yours could replace the exe
+before it is next run with administrator rights. Then start it with
+`Win11Privacy` from a new terminal window. Or download it by hand:
 
 1. Take `Win11Privacy.exe` from [Releases](https://github.com/N0deZ3r0/Win11Privacy/releases/latest).
 2. Right-click the file → **Properties** → tick **Unblock** at the bottom → OK.

@@ -46,6 +46,11 @@ FOOTER = u"""
 Get-FileHash Win11Privacy.exe -Algorithm SHA256
 ```
 
+Проверить, что файл собран этим репозиторием из помеченного коммита (аттестация сборки GitHub, нужен GitHub CLI) / Check that the file was built by this repository from the tagged commit (GitHub build attestation, needs the GitHub CLI):
+```
+gh attestation verify Win11Privacy.exe --repo N0deZ3r0/Win11Privacy
+```
+
 Все изменения по версиям / All changes by version: [CHANGELOG.md]({repo}/blob/main/CHANGELOG.md)
 """
 

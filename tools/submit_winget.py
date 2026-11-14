@@ -88,11 +88,13 @@ def run_winget_validate(src):
     if not exe:
         print('winget на этой машине нет — проверка манифеста не запускалась')
         return False
-    p = subprocess.run([exe, 'validate', '--manifest', src],
+    p = subprocess.run([exe, 'validate', '--manifest', src, '--disable-interactivity'],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out = p.stdout.decode('utf-8', 'replace').strip()
-    if p.returncode == 0:
-        print('winget validate: манифест в порядке')
+    # «succeeded with warnings» winget возвращает ненулевым кодом, но манифест
+    # годен: каталог принимает его, а предупреждения печатаем, чтобы их видели
+    if p.returncode == 0 or 'validation succeeded' in out.lower():
+        print('winget validate: манифест в порядке' + ('' if p.returncode == 0 else ' (с предупреждениями):\n' + out))
         return True
     print('winget validate не прошёл (код %d):\n%s' % (p.returncode, out))
     sys.exit('манифест не отправляется: сначала исправьте то, на что указал winget validate')

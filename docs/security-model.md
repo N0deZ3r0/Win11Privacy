@@ -316,10 +316,12 @@ number and CSV columns by position (checked on a Russian VM).
 * A release is built by CI with provenance attestation, but the exe is not
   Authenticode-signed and the compiler (`csc`) does not produce reproducible
   builds: two builds of the same sources give different exe hashes. The engine
-  *is* reproducible, and CI compares it with the build from `engine/`. The winget
-  package is machine-scope (`Scope: machine`), so the self-elevating exe lands in
-  the admin-only `Program Files\WinGet` store rather than a user-writable folder
-  where it could be swapped before being run elevated.
+  *is* reproducible, and CI compares it with the build from `engine/`. winget does
+  not let a portable package choose its scope: installed without `--scope machine`,
+  the self-elevating exe sits in the user's profile, where any program of that user
+  could replace it before it is next run elevated. The package description and the
+  README say to install with `--scope machine`, which puts it in the machine-wide
+  winget folder that only administrators can write to.
 * A few values are written to a store Windows does not document as a policy
   interface (`PolicyManager\default`, `MaxTelemetryAllowed` under `Policies`): Windows may
   rewrite them, and the guard puts them back. The program does not claim that
@@ -665,10 +667,12 @@ ConstrainedLanguage (WDAC/AppLocker) движок сразу останавли�
 * Релиз собирает CI с аттестацией происхождения, но exe не подписан Authenticode, а
   компилятор (`csc`) не даёт воспроизводимой сборки: две сборки одних исходников
   дают разные хеши exe. Движок воспроизводим, и CI сверяет его со сборкой из
-  `engine/`. Пакет winget — общесистемный (`Scope: machine`): самоповышающийся
-  exe ложится в папку `Program Files\WinGet`, доступную на запись только
-  администраторам, а не в профиль пользователя, где его можно было бы подменить
-  до запуска с повышением.
+  `engine/`. Portable-пакету winget
+  выбрать область не даёт: поставленный без `--scope machine` самоповышающийся exe
+  лежит в профиле пользователя, где его может подменить любая программа этого
+  пользователя до следующего запуска с повышением. Описание пакета и README велят
+  ставить с `--scope machine` — тогда exe ложится в общесистемную папку winget, куда
+  пишут только администраторы.
 * Часть значений пишется в хранилище, которое Windows не описывает как интерфейс
   политик (`PolicyManager\default`, `MaxTelemetryAllowed` в `Policies`): Windows
   может их переписать, и страж возвращает их. Программа не утверждает, что каждое

@@ -8,7 +8,7 @@ The text of every release comes from this file: a build of tag `vX.Y.Z` looks fo
 the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 «Не выпущено» (Unreleased), which is renamed to the version number before release.
 
-## Не выпущено
+## 2.0.0 — 2026-11-14
 
 ### Что нового
 
@@ -61,7 +61,7 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - Карантин папки данных прежней версии больше не идёт в предсказуемую папку «...untrusted-<время>»: её обычный пользователь мог завести заранее ссылкой, и перенос чужих файлов с правами администратора ушёл бы по ней. Теперь папка карантина каждый раз новая, со случайным именем, и проверяется, что это не ссылка.
 - Движок и окно перед запуском убирают переменные окружения, через которые .NET и оболочка подгружают в процесс чужой код (профайлер CLR, стартовые перехватчики, слой совместимости), — ни один процесс, который запускает движок с правами администратора, через них не перехватить.
 - Копия политики аудита для монитора пишется в защищённую папку программы, а не во временную папку пользователя; итог задачи от имени пользователя сверяется по владельцу файла.
-- Пакет winget ставится для всего компьютера: самоповышающийся exe лежит в папке, куда пишут только администраторы, а не в профиле пользователя.
+- winget: описание пакета и README велят ставить с ключом `--scope machine` — тогда самоповышающийся exe лежит в папке, куда пишут только администраторы, а не в профиле пользователя (сам portable-пакет winget выбрать область не даёт).
 
 **Исправления**
 - Проверка утечек честнее о своих пределах: она проверяет, отвечают ли известные серверы сбора на TCP 443, а не наблюдает трафик. «Ни один сервер не ответил» больше не подаётся как «телеметрия не дойдёт»; окно говорит, чего проверка не видит (новые адреса, другие порты, UDP/QUIC, сторонние службы), а в ответе движка доступность адресов (`endpointReachability`) отделена от наблюдения телеметрии (`telemetryObserved` — не измерялось).
@@ -167,7 +167,7 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - The quarantine of an older data folder no longer goes to the predictable «...untrusted-<time>» folder: a standard user could create it in advance as a link, and the administrator's move of foreign files would follow it. The quarantine folder is now new every time, with a random name, and checked not to be a link.
 - Before starting, the engine and the window remove the environment variables through which .NET and the shell load foreign code into a process (the CLR profiler, startup hooks, the compatibility layer), so none of the processes the engine starts as administrator can be hijacked through them.
 - The monitor's copy of the audit policy is written to the program's protected folder, not to the user's temp folder; the result of a task run as the user is checked by the file owner.
-- The winget package installs machine-wide: the self-elevating exe lies in a folder only administrators can write to, not in the user's profile.
+- winget: the package description and README say to install with `--scope machine`, so the self-elevating exe lies in a folder only administrators can write to, not in the user's profile (winget does not let a portable package choose its scope itself).
 
 **Fixes**
 - The leak test is honest about its limits: it checks whether known data-collection servers answer on TCP 443; it does not watch traffic. "No server answered" is no longer presented as "telemetry will not get through"; the window says what the test cannot see (new addresses, other ports, UDP/QUIC, third-party services), and the engine's answer keeps endpoint reachability (`endpointReachability`) apart from observed telemetry (`telemetryObserved` — not measured).
