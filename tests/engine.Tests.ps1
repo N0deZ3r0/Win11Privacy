@@ -324,9 +324,13 @@ Describe 'Движок Win11Privacy: точечные проверки' {
         It 'опись: копий нет, но профиль не проверен — Unverified, а не «чисто»' {
             $script:GdidUnreadable = New-Object System.Collections.Generic.List[string]
             function Get-GdidCopies { $script:GdidUnreadable.Clear(); return @() }
-            function Get-UncheckedProfiles { return 1 }
+            function Get-UncheckedProfiles { return @{ loadedProfiles = 1; unloadedProfiles = 1; unloadedSids = @('S-1-5-21-1-2-3-1002'); enumerationFailed = $false; unverified = $true; places = @(); errors = @(); state = 'Unloaded' } }
             Assert-True ((Get-GdidScan).state -eq 'Unverified') 'опись назвала непроверенное чистым'
-            function Get-UncheckedProfiles { return 0 }
+            # список профилей не прочитался — тоже не «чисто», и это не «0 профилей»
+            function Get-UncheckedProfiles { return @{ loadedProfiles = 0; unloadedProfiles = 0; unloadedSids = @(); enumerationFailed = $true; unverified = $true; places = @('Registry::HKEY_USERS'); errors = @('нет доступа'); state = 'EnumerationFailed' } }
+            $sc = Get-GdidScan
+            Assert-True ($sc.state -eq 'Unverified' -and @($sc.unreadable) -contains 'Registry::HKEY_USERS') 'непрочитанный список профилей назван «чистым»'
+            function Get-UncheckedProfiles { return @{ loadedProfiles = 1; unloadedProfiles = 0; unloadedSids = @(); enumerationFailed = $false; unverified = $false; places = @(); errors = @(); state = 'Complete' } }
             Assert-True ((Get-GdidScan).state -eq 'NotFound') 'опись без пропусков названа не «чистой»'
         }
         It 'hosts: блок без закрывающей метки не уносит строку «0.0.0.0» человека' {

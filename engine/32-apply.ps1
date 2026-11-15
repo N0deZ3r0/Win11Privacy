@@ -76,6 +76,8 @@ foreach ($m in $script:ModuleOrder) {
         $otherMsa = @(Get-OtherMsaAccounts)
         if ($otherMsa.Count -gt 0) {
             Write-Log ("   [!] на компьютере есть и другие учётные записи Microsoft: {0}. Пока стоит запрет, их вход в учётную запись Microsoft, Магазин, Xbox и OneDrive работать не будут." -f ($otherMsa -join ', '))
+        } elseif ($script:GdidOtherMsaError) {
+            Write-Log ("   [!] не удалось проверить, есть ли на компьютере другие учётные записи Microsoft ({0}). Если есть -- пока стоит запрет, их вход в учётную запись Microsoft работать не будет." -f $script:GdidOtherMsaError)
         }
     }
     $failBefore = $script:Failures + $script:Blocked

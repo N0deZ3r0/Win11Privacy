@@ -104,12 +104,14 @@ function Restore-ChangeKey {
     } else {
         $r = Restore-JournalEntry $first
     }
-    if (-not $r.ok) { return @{ ok = $false; error = "$($r.error)" } }
+    # denied — Windows не дала; missing — того, что возвращать, больше нет.
+    # Запись журнала убирается только после сверки (её делает возврат записи).
+    if (-not $r.ok) { return @{ ok = $false; denied = [bool]$r.denied; error = "$($r.error)" } }
     if ("$($first.kind)" -eq 'reg' -and "$($first.createdKey)") { Remove-CreatedKeys @("$($first.createdKey)") }
     # журнал перечитывается под замком: дописанное другим запуском остаётся
     try { Remove-JournalKey $Key }
     catch { return @{ ok = $false; error = ('возвращено, но журнал не переписался: ' + $_.Exception.Message) } }
-    return @{ ok = $true }
+    return @{ ok = $true; missing = [bool]$r.missing; note = "$($r.note)" }
 }
 
 if ($ChangeLog) {

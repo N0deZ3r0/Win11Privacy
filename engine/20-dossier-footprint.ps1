@@ -38,9 +38,10 @@ function Get-Footprint {
     # Простое стирание бесполезно — работа с ним на своей вкладке.
     $gdid = ConvertTo-Gdid "$(Get-RegValue 'HKCU:\SOFTWARE\Microsoft\IdentityCRL\ExtendedProperties' 'LID')"
     # «не передаётся» — той же проверкой, что и на вкладке номера: все три
-    # службы, копии CDPUserSvc у пользователей, и только когда всё прочиталось
-    $gdidOff = [bool](Get-GdidTransmitState).off
-    $gdidWarn = $(if ($gdid -and -not $gdidOff) { 'передаётся' } else { '' })
+    # службы, копии CDPUserSvc у пользователей, и только когда всё прочиталось.
+    # Не прочиталось (Unknown) — так и сказано, а не «передаётся».
+    $gdidTx = Get-GdidTransmitState
+    $gdidWarn = $(if (-not $gdid -or $gdidTx.off) { '' } elseif ("$($gdidTx.state)" -eq 'Unknown') { 'не проверено' } else { 'передаётся' })
     & $add 'gdid' 'Номер устройства в учётной записи Microsoft (GDID)' 'По этому номеру Microsoft узнаёт компьютер даже через VPN и выдаёт его по запросу властей. Не передавать, сменить или запретить выдачу — на вкладке «Номер устройства».' $(if ($gdid) { $gdid } else { '—' }) 0 $(if ($gdid) { 1 } else { 0 }) $false $gdidWarn
 
     # История сетей

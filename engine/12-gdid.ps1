@@ -28,44 +28,143 @@ $script:CdpCache = Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform'
 # Подключённые кусты реестра — одними именами, без открытия каждого
 function Get-GdidHiveNames { return @([Microsoft.Win32.Registry]::Users.GetSubKeyNames()) }
 
+# Профили людей: локальные и доменные учётные записи (S-1-5-21-…) и
+# учётные записи Entra ID (S-1-12-1-…). Раньше вторые не считались вовсе.
+$script:GdidUserSidRx = '^S-1-(5-21|12-1)-[\d-]+$'
+$script:GdidProfileListKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+
 function Get-IdCrlRoots {
     $roots = New-Object System.Collections.Generic.List[object]
     foreach ($r in $script:IdCrlRoots) { $roots.Add($r) }
     $me = ''
     try { $me = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value } catch { }
     # Список подключённых кустов не прочитался — копии номера у других
-    # вошедших пользователей не искались, и это записано. Раньше ошибка
+    # вошедших пользователей не искались, и это записано: опись тогда
+    # Unverified, а стирание не начинается (Get-GdidPreflight). Раньше ошибка
     # глоталась, и «копий нет» говорилось, не заглянув к ним.
     $names = @()
     try { $names = @(Get-GdidHiveNames) } catch { $script:GdidUnreadable.Add('Registry::HKEY_USERS') }
     foreach ($sid in $names) {
-        if ($sid -notmatch '^S-1-5-21-[\d-]+$' -or $sid -eq $me) { continue }
+        if ($sid -notmatch $script:GdidUserSidRx -or $sid -eq $me) { continue }
         $roots.Add(@{ who = 'other'; path = "Registry::HKEY_USERS\$sid\Software\Microsoft\IdentityCRL" })
     }
     return $roots.ToArray()
 }
 
-# Профили пользователей, которые сейчас не вошли в Windows: их копии номера
-# не проверяются (куст не подключён). Не прочитался список профилей или
-# кустов — сколько их, неизвестно: место записывается как непрочитанное
-# (раньше ответ был «0», то есть «проверены все»).
+# Профили пользователей: какие подключены (их копии номера проверяются) и
+# какие нет — тех, кто сейчас не вошёл в Windows: их куст не подключён, и
+# программа его не подключает и не трогает. Ответ — не число, а опись:
+#   loadedProfiles / unloadedProfiles (+ unloadedSids) — сколько каких;
+#   enumerationFailed — список кустов (HKEY_USERS) или профилей (ProfileList)
+#       не прочитался: сколько профилей не проверено, неизвестно. Раньше в
+#       этом случае отвечалось «0», то есть «проверены все»;
+#   unverified — проверены не все (есть неподключённые или список не прочитался);
+#   places — что не прочиталось (для описи), errors — почему.
+# state: Complete, Unloaded, EnumerationFailed.
 function Get-UncheckedProfiles {
-    $loaded = @()
-    try { $loaded = @(Get-GdidHiveNames) } catch { $script:GdidUnreadable.Add('Registry::HKEY_USERS'); return 0 }
-    $plPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
-    $listed = @()
+    $errs = New-Object System.Collections.Generic.List[string]
+    $places = New-Object System.Collections.Generic.List[string]
+    $loaded = $null
+    try { $loaded = @(Get-GdidHiveNames) }
+    catch { $places.Add('Registry::HKEY_USERS'); $errs.Add(("HKEY_USERS: {0}" -f $_.Exception.Message)) }
+    $listed = $null
     $pl = $null
     try {
-        $pl = Open-RegKeyRead $plPath
-        if ($null -eq $pl) { $script:GdidUnreadable.Add($plPath); return 0 }
-        $listed = @($pl.GetSubKeyNames())
-    } catch { $script:GdidUnreadable.Add($plPath); return 0 }
+        $pl = Open-RegKeyRead $script:GdidProfileListKey
+        # список профилей есть в любой Windows: его нет — прочитать не вышло
+        if ($null -eq $pl) { $places.Add($script:GdidProfileListKey); $errs.Add('ProfileList: ключа нет') }
+        else { $listed = @($pl.GetSubKeyNames()) }
+    } catch { $places.Add($script:GdidProfileListKey); $errs.Add(("ProfileList: {0}" -f $_.Exception.Message)) }
     finally { if ($null -ne $pl) { $pl.Close() } }
-    $n = 0
-    foreach ($sid in $listed) {
-        if ($sid -match '^S-1-5-21-[\d-]+$' -and $loaded -notcontains $sid) { $n++ }
+    $loadedN = 0
+    $unloaded = New-Object System.Collections.Generic.List[string]
+    if ($null -ne $loaded -and $null -ne $listed) {
+        foreach ($sid in $listed) {
+            if ($sid -notmatch $script:GdidUserSidRx) { continue }
+            if ($loaded -contains $sid) { $loadedN++ } else { $unloaded.Add($sid) }
+        }
     }
-    return $n
+    $failed = ($errs.Count -gt 0)
+    return @{ loadedProfiles = $loadedN; unloadedProfiles = $unloaded.Count; unloadedSids = $unloaded.ToArray()
+              enumerationFailed = $failed; unverified = ($failed -or $unloaded.Count -gt 0)
+              places = $places.ToArray(); errors = $errs.ToArray()
+              state = $(if ($failed) { 'EnumerationFailed' } elseif ($unloaded.Count -gt 0) { 'Unloaded' } else { 'Complete' }) }
+}
+
+# Ключ реестра для чтения — снимок: state ok, missing (ключа нет) или denied
+# (Windows не дала открыть); имена значений и подключей и нужные значения.
+# Через API реестра, а не провайдер PowerShell: Get-ChildItem открывает
+# каждый подключ сам и путает «не пустили в подключ» с ошибкой перечисления.
+function Read-GdidKey {
+    param([string]$Path, [string[]]$Values = @())
+    $k = $null
+    try {
+        $k = Open-RegKeyRead $Path
+        if ($null -eq $k) { return @{ state = 'missing'; path = $Path; valueNames = @(); subKeys = @(); values = @{}; error = '' } }
+        $vn = @($k.GetValueNames())
+        $vals = @{}
+        foreach ($n in @($Values)) { if ($vn -contains $n) { $vals[$n] = $k.GetValue($n) } }
+        return @{ state = 'ok'; path = $Path; valueNames = $vn; subKeys = @($k.GetSubKeyNames()); values = $vals; error = '' }
+    } catch {
+        return @{ state = 'denied'; path = $Path; valueNames = @(); subKeys = @(); values = @{}; error = "$($_.Exception.Message)" }
+    } finally { if ($null -ne $k) { $k.Close() } }
+}
+
+# Тот же ключ для записи (удаления). Нет ключа — $null; нет доступа — исключение.
+function Open-GdidKeyWrite {
+    param([string]$Path)
+    $hive = $null; $sub = ''
+    switch -Regex ($Path) {
+        '^(HKLM:|Registry::HKEY_LOCAL_MACHINE)(\\(.*))?$' { $hive = [Microsoft.Win32.Registry]::LocalMachine; $sub = $Matches[3]; break }
+        '^(HKCU:|Registry::HKEY_CURRENT_USER)(\\(.*))?$'  { $hive = [Microsoft.Win32.Registry]::CurrentUser; $sub = $Matches[3]; break }
+        '^(HKU:|Registry::HKEY_USERS)(\\(.*))?$'          { $hive = [Microsoft.Win32.Registry]::Users; $sub = $Matches[3]; break }
+    }
+    if ($null -eq $hive -or -not "$sub".Trim('\')) { throw ("ключ не для записи: {0}" -f $Path) }
+    return $hive.OpenSubKey("$sub".TrimEnd('\'), $true)
+}
+
+# Удалить одно значение и проверить, что его нет: removed, absent, denied
+function Remove-GdidRegValue {
+    param([string]$Path, [string]$Name)
+    $k = $null
+    try {
+        $k = Open-GdidKeyWrite $Path
+        if ($null -eq $k) { return 'absent' }
+        if (@($k.GetValueNames()) -notcontains $Name) { return 'absent' }
+        $k.DeleteValue($Name, $false)
+    } catch { return 'denied' }
+    finally { if ($null -ne $k) { $k.Close() } }
+    # «команда прошла» — ещё не «значения нет»: сверяем
+    $chk = Read-GdidKey $Path
+    if ($chk.state -eq 'missing' -or ($chk.state -eq 'ok' -and @($chk.valueNames) -notcontains $Name)) { return 'removed' }
+    return 'denied'
+}
+
+# Удалить один подключ и проверить, что его нет. Без -Tree удаляется только
+# ключ без подключей: если внутри есть что-то ещё, ключ остаётся целым (kept)
+# — удалять то, чего программа не опознала, нельзя.
+# Ответ: removed, absent, denied, kept.
+function Remove-GdidRegKey {
+    param([string]$Parent, [string]$Name, [switch]$Tree)
+    $pk = $null
+    try {
+        $pk = Open-GdidKeyWrite $Parent
+        if ($null -eq $pk) { return 'absent' }
+        if (@($pk.GetSubKeyNames()) -notcontains $Name) { return 'absent' }
+        if (-not $Tree) {
+            $ck = $pk.OpenSubKey($Name, $false)
+            $n = $(if ($null -ne $ck) { try { $ck.SubKeyCount } finally { $ck.Close() } } else { 0 })
+            if ($n -gt 0) { return 'kept' }
+            $pk.DeleteSubKey($Name, $false)
+        } else { $pk.DeleteSubKeyTree($Name, $false) }
+    } catch {
+        $ex = $_.Exception
+        if ($ex -is [System.InvalidOperationException] -or $ex.InnerException -is [System.InvalidOperationException]) { return 'kept' }
+        return 'denied'
+    } finally { if ($null -ne $pk) { $pk.Close() } }
+    $chk = Read-GdidKey ("{0}\{1}" -f $Parent.TrimEnd('\'), $Name)
+    if ($chk.state -eq 'missing') { return 'removed' }
+    return 'denied'
 }
 
 # Удаление одной записи с ответом: removed — было и убрано, absent — не было,
@@ -87,8 +186,14 @@ function Remove-RegStatus {
         } else {
             Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
         }
-        return 'removed'
     } catch { return 'denied' } finally { if ($key) { $key.Close() } }
+    # «Команда прошла» — ещё не «удалено»: сверяем, что записи и правда нет
+    try {
+        $now = Get-Item -LiteralPath $Path -ErrorAction Stop
+        try { if (-not $Name -or @($now.GetValueNames()) -contains $Name) { return 'denied' } } finally { $now.Close() }
+    } catch [System.Management.Automation.ItemNotFoundException] { }
+    catch { return 'denied' }
+    return 'removed'
 }
 $script:DevicePuidRegex = '^0018[0-9A-Fa-f]{12}$'
 # Учётные данные «личности» устройства — у пользователя и у самой системы
@@ -140,14 +245,38 @@ function Get-SvcScmView {
     $s = Get-Service -Name $Name -ErrorAction SilentlyContinue -ErrorVariable ev
     if (-not $s) {
         $errs = @($ev | Where-Object { $_ -and "$($_.FullyQualifiedErrorId)" -notlike 'NoServiceFoundForGivenName*' })
-        if ($errs.Count -eq 0) { return @{ ok = $true; found = $false; running = $false; start = ''; error = '' } }
-        return @{ ok = $false; found = $false; running = $false; start = ''; error = "$($errs[0])" }
+        if ($errs.Count -eq 0) { return @{ ok = $true; found = $false; running = $false; status = ''; start = ''; error = '' } }
+        return @{ ok = $false; found = $false; running = $false; status = ''; start = ''; error = "$($errs[0])" }
     }
     $s = @($s)[0]
     $run = ("$($s.Status)" -ne 'Stopped')
     try { $st = "$($s.StartType)" }
-    catch { return @{ ok = $false; found = $true; running = $run; start = ''; error = $_.Exception.Message } }
-    return @{ ok = $true; found = $true; running = $run; start = $st; error = '' }
+    catch { return @{ ok = $false; found = $true; running = $run; status = "$($s.Status)"; start = ''; error = $_.Exception.Message } }
+    return @{ ok = $true; found = $true; running = $run; status = "$($s.Status)"; start = $st; error = '' }
+}
+
+# Служба целиком — одной записью: тип запуска по реестру (start, state —
+# см. Get-SvcStartInfo) и глазами диспетчера служб (scmStart, running,
+# status). Её же читают проверка передачи и снимок перед стиранием.
+#   config  — Disabled, Manual, Automatic, Missing (службы нет), Unknown
+#             (тип запуска не прочитался);
+#   runtime — Running, Stopped, Missing, Unknown (диспетчер не ответил:
+#             служба, к которой нет доступа, — «неизвестно», а не «стоит»);
+#   readable — прочиталось всё, что нужно, чтобы судить о службе.
+function Get-GdidSvcEntry {
+    param([string]$Name)
+    $i = Get-SvcStartInfo $Name
+    $v = Get-SvcScmView $Name
+    $i['running'] = [bool]$v.running
+    $i['status'] = "$($v.status)"
+    $i['scmStart'] = "$($v.start)"
+    $i['scmOk'] = [bool]$v.ok
+    $i['scmFound'] = [bool]$v.found
+    $i['scmError'] = "$($v.error)"
+    $i['config'] = $(switch ("$($i.state)") { 'Disabled' { 'Disabled' } 'Manual' { 'Manual' } { $_ -in @('Automatic', 'Boot', 'System') } { 'Automatic' } 'Missing' { 'Missing' } default { 'Unknown' } })
+    $i['runtime'] = $(if (-not $v.ok) { 'Unknown' } elseif (-not $v.found) { 'Missing' } elseif ($v.running) { 'Running' } else { 'Stopped' })
+    $i['readable'] = ("$($i.state)" -ne 'ReadError' -and [bool]$v.ok)
+    return $i
 }
 
 # Копии CDPUserSvc у каждого вошедшего пользователя (CDPUserSvc_1a2b3) — по
@@ -183,18 +312,16 @@ $script:GdidSvcNames = @('CDPSvc', 'CDPUserSvc', 'DoSvc')
 function Get-GdidTransmitState {
     $problems = New-Object System.Collections.Generic.List[string]
     $look = {
-        param($Info)
-        $v = Get-SvcScmView $Info.name
-        $Info['running'] = [bool]$v.running
-        $Info['scmStart'] = "$($v.start)"
-        if (-not $v.ok) { $problems.Add(("{0}: диспетчер служб не ответил ({1})" -f $Info.name, $v.error)) }
+        param([string]$SvcName)
+        $Info = Get-GdidSvcEntry $SvcName
+        if (-not $Info.scmOk) { $problems.Add(("{0}: диспетчер служб не ответил ({1})" -f $Info.name, $Info.scmError)) }
         if ($Info.state -eq 'ReadError') { $problems.Add(("{0}: тип запуска не прочитался ({1})" -f $Info.name, $Info.error)) }
         $Info
     }
     $out = New-Object System.Collections.Generic.List[object]
     $allOff = $true; $settled = $true; $on = $false
     foreach ($n in $script:GdidSvcNames) {
-        $i = & $look (Get-SvcStartInfo $n)
+        $i = & $look $n
         if ($i.state -in @('Boot', 'System', 'Automatic', 'Manual')) { $on = $true }
         if ($i.state -notin @('Disabled', 'Missing')) { $allOff = $false }
         if ($i.running) { $settled = $false }
@@ -204,7 +331,7 @@ function Get-GdidTransmitState {
             if (-not $inst.ok) { $problems.Add(("копии CDPUserSvc не перечислились: {0}" -f $inst.error)) }
             $il = New-Object System.Collections.Generic.List[object]
             foreach ($nm in @($inst.names)) {
-                $ii = & $look (Get-SvcStartInfo $nm)
+                $ii = & $look $nm
                 if ($ii.state -notin @('Disabled', 'Missing') -or $ii.running) { $settled = $false }
                 if ($ii.running) { $i['running'] = $true }
                 $il.Add($ii)
@@ -220,80 +347,136 @@ function Get-GdidTransmitState {
               services = $out.ToArray(); problems = $problems.ToArray() }
 }
 
-# Где лежат копии номера. Только чтение.
+# Снимок служб перед стиранием — всех, которые стирание трогает: wlidsvc
+# (её отключают на время стирания), CDPSvc, DoSvc, шаблон CDPUserSvc и его
+# копии у вошедших пользователей (CDPUserSvc_1a2b3). У каждой — тип запуска
+# по реестру и диспетчеру служб и работает ли она (Get-GdidSvcEntry).
+# complete — прочиталось всё; без этого стирание не начинается: вернуть
+# службы как были было бы не по чему. Раньше состояния собирались по
+# отдельности, а ошибки Get-Service глотались — и служба, о которой ничего
+# не узнали, после стирания оставалась остановленной.
+function Get-GdidServiceSnapshot {
+    $list = New-Object System.Collections.Generic.List[object]
+    $problems = New-Object System.Collections.Generic.List[string]
+    foreach ($n in @(@('wlidsvc') + @($script:GdidSvcNames))) { $list.Add((Get-GdidSvcEntry $n)) }
+    $inst = Get-GdidUserSvcInstances
+    if (-not $inst.ok) { $problems.Add(("копии CDPUserSvc не перечислились: {0}" -f $inst.error)) }
+    foreach ($nm in @($inst.names)) {
+        if (-not $nm) { continue }
+        $e = Get-GdidSvcEntry $nm
+        $e['instance'] = $true
+        $list.Add($e)
+    }
+    foreach ($e in $list.ToArray()) {
+        if ("$($e.state)" -eq 'ReadError') { $problems.Add(("{0}: тип запуска не прочитался ({1})" -f $e.name, $e.error)) }
+        if (-not $e.scmOk) { $problems.Add(("{0}: диспетчер служб не ответил ({1})" -f $e.name, $e.scmError)) }
+    }
+    return @{ complete = ($problems.Count -eq 0); services = $list.ToArray(); problems = $problems.ToArray()
+              time = (Get-Date).ToString('s') }
+}
+
+# Записи номера в реестре — одна опись и для поиска, и для стирания: стирание
+# удаляет ровно найденное здесь, а не ветки целиком. Раньше опись пропускала
+# DeviceIdentities\production\Logs, а стирание удаляло весь production вместе
+# с ним и со всем, чего программа не опознала. Записи:
+#   lid      — значение LID в ExtendedProperties (сам номер);
+#   property — значения с именем-номером в Immersive\production\Property;
+#   token    — значения DeviceId и DeviceTicket билета приложения (прочие
+#              значения билета — ApplicationFlags, UserId, UserTicket — не его);
+#   identity — «личность» устройства DeviceIdentities\production\<SID>\<имя>
+#              со значением DeviceId; указатель на неё (ValidDeviceId в
+#              разделе <SID>) — часть той же записи. Logs (история выдачи),
+#              DeviceLicenseUpdateFailureCount и подключи без DeviceId — не
+#              записи номера: они не считаются и не удаляются;
+#   cache    — запись NegativeCache с именем «<номер>_<SID>»: весь ключ и
+#              есть кэш этого номера.
+# Каждое место, куда Windows не пустила, записывается само по себе в
+# $script:GdidUnreadable: «не нашли» там — не то же самое, что «нет».
+# $script:GdidUnknown — подключи личностей без DeviceId: оставлены как есть.
+$script:GdidUnknown = New-Object System.Collections.Generic.List[string]
 function Get-GdidCopies {
     $found = New-Object System.Collections.Generic.List[object]
     $script:GdidUnreadable.Clear()
+    if ($null -eq $script:GdidUnknown) { $script:GdidUnknown = New-Object System.Collections.Generic.List[string] }
+    $script:GdidUnknown.Clear()
     $seenSystem = $false
     $me = ''
     try { $me = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value } catch { }
-    # Каждое место, куда Windows не пустила, записывается само по себе: «не
-    # нашли» там — не то же самое, что «нет». Раньше так отмечалось только всё
-    # хранилище целиком, а закрытые ключи внутри (свойства, личности, кэш)
-    # молча считались пустыми.
-    $open = {
-        param($path)
-        try { return (Get-Item -LiteralPath $path -ErrorAction Stop) }
-        catch [System.Management.Automation.ItemNotFoundException] { return $null }
-        catch { $script:GdidUnreadable.Add("$path"); return $null }
-    }
-    $list = {
-        param($path)
-        $ev = $null
-        $items = @(Get-ChildItem -LiteralPath $path -ErrorAction SilentlyContinue -ErrorVariable ev)
-        foreach ($e in @($ev)) {
-            if ($e.Exception -is [System.Management.Automation.ItemNotFoundException]) { continue }
-            # закрытый подключ называет себя сам; иначе — то, что перечисляли
-            $script:GdidUnreadable.Add($(if ($e.TargetObject -is [string] -and $e.TargetObject) { "$($e.TargetObject)" } else { "$path" }))
-        }
-        $items
+    $read = {
+        param([string]$KeyPath, [string[]]$Want = @())
+        $k = Read-GdidKey $KeyPath $Want
+        if ($k.state -eq 'denied') { $script:GdidUnreadable.Add($KeyPath) }
+        $k
     }
     foreach ($r in (Get-IdCrlRoots)) {
-        if (-not (& $open $r.path)) { continue }
+        $rk = & $read $r.path
+        if ($rk.state -ne 'ok') { continue }
         # .DEFAULT и S-1-5-18 — один и тот же куст SYSTEM: считаем его один раз
         if ($r.who -eq 'system') { if ($seenSystem) { continue }; $seenSystem = $true }
-        $ek = & $open "$($r.path)\ExtendedProperties"
-        if ($ek -and "$($ek.GetValue('LID'))") { $found.Add(@{ who = $r.who; place = 'lid'; puid = "$($ek.GetValue('LID'))" }) }
-        $pk = & $open "$($r.path)\Immersive\production\Property"
-        if ($pk) {
-            foreach ($vn in @($pk.GetValueNames())) {
-                if ($vn -match $script:DevicePuidRegex) { $found.Add(@{ who = $r.who; place = 'property'; puid = $vn }) }
-            }
+        $ep = "$($r.path)\ExtendedProperties"
+        $ek = & $read $ep @('LID')
+        if ($ek.state -eq 'ok' -and "$($ek.values['LID'])") {
+            $found.Add(@{ who = $r.who; place = 'lid'; puid = "$($ek.values['LID'])"; path = $ep; values = @('LID'); key = $false })
         }
-        foreach ($tk in @(& $list "$($r.path)\Immersive\production\Token")) {
-            $tn = @($tk.GetValueNames())
-            if ($tn -contains 'DeviceId' -or $tn -contains 'DeviceTicket') {
-                $found.Add(@{ who = $r.who; place = 'token'; puid = "$($tk.GetValue('DeviceId'))" })
-            }
+        $pp = "$($r.path)\Immersive\production\Property"
+        $pk = & $read $pp
+        foreach ($vn in @($pk.valueNames)) {
+            if ($vn -match $script:DevicePuidRegex) { $found.Add(@{ who = $r.who; place = 'property'; puid = $vn; path = $pp; values = @($vn); key = $false }) }
         }
-        foreach ($sk in @(& $list "$($r.path)\DeviceIdentities\production")) {
-            if ($sk.PSChildName -eq 'Logs') { continue }
+        $tp = "$($r.path)\Immersive\production\Token"
+        $tl = & $read $tp
+        foreach ($tn in @($tl.subKeys)) {
+            $tk = & $read "$tp\$tn" @('DeviceId')
+            if ($tk.state -ne 'ok') { continue }
+            $tv = @(@('DeviceId', 'DeviceTicket') | Where-Object { @($tk.valueNames) -contains $_ })
+            if ($tv.Count -gt 0) { $found.Add(@{ who = $r.who; place = 'token'; puid = "$($tk.values['DeviceId'])"; path = "$tp\$tn"; values = $tv; key = $false }) }
+        }
+        $dp = "$($r.path)\DeviceIdentities\production"
+        $dl = & $read $dp
+        foreach ($sn in @($dl.subKeys)) {
+            if ($sn -eq 'Logs') { continue }
             # Чья личность: в кусте пользователя — его; в системном — по SID
             # раздела. Раньше любая S-1-5-21-* шла как «своя», и копии другого
             # пользователя считались копиями того, кто смотрит.
-            $idWho = $(if ($r.who -ne 'system') { $r.who } elseif ($sk.PSChildName -notlike 'S-1-5-21-*') { 'system' }
-                       elseif ($sk.PSChildName -eq $me) { 'user' } else { 'other' })
-            foreach ($ik in @(& $list $sk.PSPath)) {
-                $found.Add(@{ who = $idWho; place = 'identity'; puid = "$($ik.GetValue('DeviceId'))" })
+            $idWho = $(if ($r.who -ne 'system') { $r.who } elseif ($sn -notmatch $script:GdidUserSidRx) { 'system' }
+                       elseif ($sn -eq $me) { 'user' } else { 'other' })
+            $cp = "$dp\$sn"
+            $ck = & $read $cp @('ValidDeviceId')
+            if ($ck.state -ne 'ok') { continue }
+            foreach ($inm in @($ck.subKeys)) {
+                $ik = & $read "$cp\$inm" @('DeviceId')
+                if ($ik.state -ne 'ok') { continue }
+                if (@($ik.valueNames) -notcontains 'DeviceId') { $script:GdidUnknown.Add("$cp\$inm"); continue }
+                $found.Add(@{ who = $idWho; place = 'identity'; puid = "$($ik.values['DeviceId'])"; path = "$cp\$inm"; values = @(); key = $true
+                              parent = $cp; name = $inm; children = @($ik.subKeys).Count
+                              pointer = $(if ("$($ck.values['ValidDeviceId'])" -eq $inm) { $cp } else { '' }) })
             }
         }
     }
-    foreach ($nk in @(& $list $script:IdCrlNegCache)) {
-        if ($nk.PSChildName -match '^(0018[0-9A-Fa-f]{12})_') { $found.Add(@{ who = 'system'; place = 'cache'; puid = $Matches[1] }) }
+    $nk = & $read $script:IdCrlNegCache
+    foreach ($nn in @($nk.subKeys)) {
+        if ($nn -match '^(0018[0-9A-Fa-f]{12})_') {
+            $found.Add(@{ who = 'system'; place = 'cache'; puid = $Matches[1]; path = "$($script:IdCrlNegCache)\$nn"; values = @(); key = $true
+                          parent = $script:IdCrlNegCache; name = $nn; tree = $true })
+        }
     }
     return $found.ToArray()
 }
 
 # Опись копий номера с ответом, можно ли ей верить. state: Found — копии есть;
 # NotFound — копий нет и проверено всё; Unverified — копий не нашлось, но часть
-# мест не прочиталась или профили других пользователей не проверялись. «Не
-# нашли» там, куда не пустили, — не то же самое, что «нет».
+# мест не прочиталась, профили других пользователей не проверялись или их
+# список не прочитался. «Не нашли» там, куда не пустили, — не то же самое,
+# что «нет». profiles — опись профилей (Get-UncheckedProfiles).
 function Get-GdidScan {
     $copies = @(Get-GdidCopies)
-    $unchecked = [int](Get-UncheckedProfiles)
+    $prof = Get-UncheckedProfiles
+    foreach ($pl in @($prof.places)) { $script:GdidUnreadable.Add("$pl") }
+    $unchecked = [int]$prof.unloadedProfiles
     $unread = @($script:GdidUnreadable | Select-Object -Unique)
-    $state = $(if ($copies.Count -gt 0) { 'Found' } elseif ($unread.Count -gt 0 -or $unchecked -gt 0) { 'Unverified' } else { 'NotFound' })
-    return @{ copies = $copies; unreadable = $unread; unchecked = $unchecked; state = $state }
+    $state = $(if ($copies.Count -gt 0) { 'Found' } elseif ($unread.Count -gt 0 -or $prof.unverified) { 'Unverified' } else { 'NotFound' })
+    return @{ copies = $copies; unreadable = $unread; unchecked = $unchecked; profiles = $prof; state = $state
+              unknown = @($script:GdidUnknown | Select-Object -Unique) }
 }
 
 # Кусты реестра людей, о которых речь: самого движка (HKCU) и того, кто сидит
@@ -315,18 +498,56 @@ function Test-GdidKeyHasChildren {
     finally { if ($null -ne $k) { $k.Close() } }
 }
 
-# Учётная запись с этим SID — учётная запись Microsoft. Не локальная (домен,
-# Entra ID) или модуля учётных записей нет — судим по профилю: есть в нём
-# учётная запись Microsoft — считаем, что вход через неё. Не прочиталось —
-# тоже «да»: осторожная сторона, запрет выдачи тогда не ставится.
-function Test-MsaAccount {
+# Учётная запись человека: чем он входит в Windows и подключена ли учётная
+# запись Microsoft только к приложениям. Ответ:
+#   source       — MicrosoftAccount (вход в Windows через неё), Local,
+#                  ActiveDirectory (домен), AzureAD (Entra ID), Unknown;
+#   signInMsa    — вход в Windows через учётную запись Microsoft. Не
+#                  удалось узнать — «да»: осторожная сторона, запрет выдачи
+#                  тогда не ставится;
+#   connectedMsa — в профиле есть учётная запись Microsoft (Магазин, Почта,
+#                  OneDrive), $null — профиль не прочитался. У локальной
+#                  учётной записи это ещё не вход через неё;
+#   known        — источник определился точно (по SAM или по виду SID).
+# Раньше локальная учётная запись, у которой Microsoft подключена только к
+# Магазину, и учётная запись без модуля LocalAccounts судились одним правилом.
+function Get-GdidAccountKind {
     param([string]$Sid, [string]$Root)
+    $conn = Test-GdidKeyHasChildren "$Root\SOFTWARE\Microsoft\IdentityCRL\UserExtendedProperties"
+    $o = @{ sid = $Sid; source = 'Unknown'; signInMsa = $true; connectedMsa = $conn; known = $false; error = '' }
+    # SID S-1-12-1-… — учётная запись Entra ID: это не учётная запись Microsoft
+    if ($Sid -like 'S-1-12-1-*') { $o.source = 'AzureAD'; $o.signInMsa = $false; $o.known = $true; return $o }
     try {
         $u = Get-LocalUser -SID $Sid -ErrorAction Stop
-        return ("$($u.PrincipalSource)" -eq 'MicrosoftAccount')
-    } catch { }
-    $has = Test-GdidKeyHasChildren "$Root\SOFTWARE\Microsoft\IdentityCRL\UserExtendedProperties"
-    return ($has -ne $false)
+        $src = "$($u.PrincipalSource)"
+        if ($src -in @('MicrosoftAccount', 'Local', 'ActiveDirectory', 'AzureAD')) {
+            $o.source = $src; $o.known = $true; $o.signInMsa = ($src -eq 'MicrosoftAccount')
+            return $o
+        }
+        $o.error = ("источник учётной записи не назван ({0})" -f $src)
+    } catch { $o.error = "$($_.Exception.Message)" }
+    # Не локальная учётная запись (домен) или модуля учётных записей нет —
+    # судим по профилю: есть в нём учётная запись Microsoft (или профиль не
+    # прочитался) — считаем, что вход через неё.
+    $o.signInMsa = ($conn -ne $false)
+    return $o
+}
+
+# Учётные записи тех, о ком речь (движок и тот, кто сидит за компьютером)
+function Get-GdidAccounts {
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($h in @(Get-GdidUserHiveRoots)) {
+        if (-not $h.sid) { continue }
+        $out.Add((Get-GdidAccountKind "$($h.sid)" "$($h.root)"))
+    }
+    return $out.ToArray()
+}
+
+# Учётная запись с этим SID — вход в Windows через учётную запись Microsoft
+# (см. Get-GdidAccountKind)
+function Test-MsaAccount {
+    param([string]$Sid, [string]$Root)
+    return [bool](Get-GdidAccountKind $Sid $Root).signInMsa
 }
 
 # Входит ли в Windows через учётную запись Microsoft тот, кто сидит за
@@ -345,19 +566,39 @@ function Test-MsaLogon {
 # Другие учётные записи Microsoft на этом компьютере (кроме своей и того, кто
 # сидит за ним): запрет выдачи закрывает сервер для всех, и их вход в учётную
 # запись Microsoft тоже перестанет работать. Список — для предупреждения.
+# Список не прочитался — $script:GdidOtherMsaError: предупреждение тогда
+# говорит, что проверить не удалось (раньше это молча было «других нет»).
+$script:GdidOtherMsaError = ''
 function Get-OtherMsaAccounts {
+    $script:GdidOtherMsaError = ''
     $skip = @(@(Get-GdidUserHiveRoots) | ForEach-Object { "$($_.sid)" })
     try { return @(Get-LocalUser -ErrorAction Stop | Where-Object { "$($_.PrincipalSource)" -eq 'MicrosoftAccount' -and $skip -notcontains "$($_.SID)" } | ForEach-Object { "$($_.Name)" }) }
-    catch { return @() }
+    catch { $script:GdidOtherMsaError = "$($_.Exception.Message)"; return @() }
 }
 
 # Компьютер организации: там номер устройства связан с её учётной записью,
-# и трогать его — сломать вход на работе. Встроенные «поставщики» Local, Deploy
-# и Cloud Authority есть на любом домашнем компьютере — их не считаем.
-# Не удалось проверить — тоже отказ: раньше ошибка WMI или чтения реестра
-# глоталась, и компьютер организации с неисправным WMI считался домашним.
-# Считается один раз за запуск.
+# и трогать его — сломать вход на работе. Ответ (считается один раз за запуск):
+#   kind — domain (в домене), entra (Entra ID), hybrid (домен и Entra ID
+#          сразу), mdm (под управлением организации), workAccount (добавлена
+#          рабочая или учебная учётная запись — устройство при этом
+#          организацией не управляется), unknown (проверить не удалось), '';
+#   managed — устройством управляет организация (или это неизвестно);
+#   workAccount — рабочая учётная запись подключена (отдельно от управления);
+#   reason — то же словами, для окна и журнала работы.
+# Встроенные «поставщики» Local, Deploy и Cloud Authority есть на любом
+# домашнем компьютере — их не считаем. Не удалось проверить — отказ, а не
+# «домашний»: раньше ошибка WMI или чтения реестра глоталась, и компьютер
+# организации с неисправным WMI считался домашним.
+# Рабочая учётная запись без управления тоже отказ (осторожная сторона: её
+# вход привязан к регистрации устройства), но называется своим словом.
 $script:GdidManagedCache = $null
+$script:GdidManagementCache = $null
+function Get-GdidManagement {
+    if ($null -ne $script:GdidManagementCache) { return $script:GdidManagementCache }
+    $script:GdidManagementCache = Get-GdidManagementNow
+    return $script:GdidManagementCache
+}
+
 function Get-ManagedReason {
     if ($null -ne $script:GdidManagedCache) { return $script:GdidManagedCache }
     $script:GdidManagedCache = Get-ManagedReasonNow
@@ -365,37 +606,56 @@ function Get-ManagedReason {
 }
 
 function Get-ManagedReasonNow {
+    $script:GdidManagementCache = Get-GdidManagementNow
+    return "$($script:GdidManagementCache.reason)"
+}
+
+function Get-GdidManagementNow {
     $unknown = 'не удалось проверить, принадлежит ли компьютер организации'
-    try { if ((Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).PartOfDomain) { return 'компьютер в домене организации' } }
-    catch { return $unknown }
+    $o = @{ kind = ''; managed = $false; workAccount = $false; reason = ''; domain = $null; entra = $null; mdm = $null; errors = (New-Object System.Collections.Generic.List[string]) }
+    $fail = { param([string]$Why) $o.errors.Add($Why); $o.kind = 'unknown'; $o.managed = $true; $o.reason = $unknown; $o }
+    try { $o.domain = [bool](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).PartOfDomain }
+    catch { return (& $fail ("WMI: {0}" -f $_.Exception.Message)) }
     $aad = Test-GdidKeyHasChildren 'HKLM:\SYSTEM\CurrentControlSet\Control\CloudDomainJoin\JoinInfo'
-    if ($null -eq $aad) { return $unknown }
-    if ($aad) { return 'компьютер подключён к Entra ID организации' }
-    # рабочая или учебная учётная запись — у того, кто сидит за компьютером,
-    # и у самого движка (раньше смотрелся только HKCU движка)
-    foreach ($h in @(Get-GdidUserHiveRoots)) {
-        $wp = Test-GdidKeyHasChildren "$($h.root)\SOFTWARE\Microsoft\Windows NT\CurrentVersion\WorkplaceJoin\JoinInfo"
-        if ($null -eq $wp) { return $unknown }
-        if ($wp) { return 'в Windows добавлена рабочая или учебная учётная запись' }
-    }
+    if ($null -eq $aad) { return (& $fail 'CloudDomainJoin\JoinInfo не читается') }
+    $o.entra = [bool]$aad
+    if ($o.domain -and $o.entra) { $o.kind = 'hybrid'; $o.managed = $true; $o.reason = 'компьютер в домене организации и подключён к её Entra ID'; return $o }
+    if ($o.domain) { $o.kind = 'domain'; $o.managed = $true; $o.reason = 'компьютер в домене организации'; return $o }
+    if ($o.entra) { $o.kind = 'entra'; $o.managed = $true; $o.reason = 'компьютер подключён к Entra ID организации'; return $o }
+    # Управление организацией (MDM): запись в Enrollments от внешнего
+    # поставщика в состоянии «зарегистрировано» или учётная запись OMA-DM
     $en = $null
     try {
         $en = Open-RegKeyRead 'HKLM:\SOFTWARE\Microsoft\Enrollments'
-        if ($null -eq $en) { return '' }
-        foreach ($sub in @($en.GetSubKeyNames())) {
-            $ek = $en.OpenSubKey($sub, $false)
-            if ($null -eq $ek) { continue }
-            try {
-                $prov = "$($ek.GetValue('ProviderID'))"
-                if ($prov -and $prov -notin @('Local Authority', 'Deploy Authority', 'Cloud Authority') -and "$($ek.GetValue('EnrollmentState'))" -eq '1') {
-                    return 'компьютер под управлением организации (MDM)'
-                }
-            } finally { $ek.Close() }
+        if ($null -ne $en) {
+            foreach ($sub in @($en.GetSubKeyNames())) {
+                $ek = $en.OpenSubKey($sub, $false)
+                if ($null -eq $ek) { continue }
+                try {
+                    $prov = "$($ek.GetValue('ProviderID'))"
+                    if ($prov -and $prov -notin @('Local Authority', 'Deploy Authority', 'Cloud Authority') -and "$($ek.GetValue('EnrollmentState'))" -eq '1') { $o.mdm = $true }
+                } finally { $ek.Close() }
+            }
         }
-    } catch { return $unknown }
+    } catch { return (& $fail ("Enrollments: {0}" -f $_.Exception.Message)) }
     finally { if ($null -ne $en) { $en.Close() } }
-    return ''
+    if (-not $o.mdm) {
+        $om = Test-GdidKeyHasChildren 'HKLM:\SOFTWARE\Microsoft\Provisioning\OMADM\Accounts'
+        if ($null -eq $om) { return (& $fail 'OMADM\Accounts не читается') }
+        $o.mdm = [bool]$om
+    }
+    if ($o.mdm) { $o.kind = 'mdm'; $o.managed = $true; $o.reason = 'компьютер под управлением организации (MDM)'; return $o }
+    # Рабочая или учебная учётная запись — у того, кто сидит за компьютером,
+    # и у самого движка (раньше смотрелся только HKCU движка)
+    foreach ($h in @(Get-GdidUserHiveRoots)) {
+        $wp = Test-GdidKeyHasChildren "$($h.root)\SOFTWARE\Microsoft\Windows NT\CurrentVersion\WorkplaceJoin\JoinInfo"
+        if ($null -eq $wp) { return (& $fail 'WorkplaceJoin\JoinInfo не читается') }
+        if ($wp) { $o.workAccount = $true }
+    }
+    if ($o.workAccount) { $o.kind = 'workAccount'; $o.reason = 'в Windows добавлена рабочая или учебная учётная запись (компьютером организация не управляет)' }
+    return $o
 }
+
 
 # 'msa' — вход в Windows через учётную запись Microsoft, 'managed' — компьютер
 # организации, '' — запрет выдачи номера доступен. Считается один раз за запуск.
@@ -433,8 +693,10 @@ function Disable-GdidWlid {
     if (-not $prev) {
         if ("$($svc.StartType)" -eq 'Disabled') { return @{ ok = $true; changed = $false; entry = $null; why = '' } }
         $entry = Get-SvcJournalState 'wlidsvc' $svc
-        # тип запуска не прочитался — вернуть его потом было бы нечем
-        if ("$($entry.old)" -notmatch '^[0-4]$') { return @{ ok = $true; changed = $false; entry = $null; why = 'тип запуска wlidsvc не прочитался -- на время стирания она не отключается' } }
+        # Тип запуска не прочитался — вернуть его потом было бы нечем: тогда
+        # не стираем вовсе. Раньше стирание шло дальше с включённой wlidsvc,
+        # и она могла завести номер заново посреди стирания.
+        if ("$($entry.old)" -notmatch '^[0-4]$') { return @{ ok = $false; changed = $false; entry = $null; why = 'тип запуска wlidsvc не прочитался -- вернуть его потом было бы нечем' } }
         if (-not (Write-AheadEntry $entry)) { return @{ ok = $false; changed = $false; entry = $null; why = 'журнал отката не пишется' } }
     }
     try { Set-Service -Name wlidsvc -StartupType Disabled -ErrorAction Stop }
@@ -458,26 +720,67 @@ function Restore-GdidWlid {
 
 # Вернуть службы как были — и проверить, что вернулись. Раньше ошибка запуска
 # глоталась: служба, работавшая до стирания, могла остаться стоять, а
-# стирание всё равно считалось успешным. Возвращает то, что не вернулось.
-# $Wlid — ответ Disable-GdidWlid.
+# стирание всё равно считалось успешным.
+#   $Running  — службы, которые остановило само стирание и которые работали
+#               до него (по снимку): запускаются только они. Те, что стояли
+#               до стирания, не запускаются;
+#   $Wlid     — ответ Disable-GdidWlid: тип запуска wlidsvc — по журналу;
+#   $Snapshot — снимок до стирания (Get-GdidServiceSnapshot): с ним
+#               сверяется итог. «Start-Service отработал» — ещё не «работает».
+# Ответ: notBack — что не вернулось; states — каждая служба до и после.
 function Restore-GdidServices {
-    param([string[]]$Running, $Wlid)
+    param([string[]]$Running, $Wlid, $Snapshot)
     $bad = New-Object System.Collections.Generic.List[string]
+    $states = New-Object System.Collections.Generic.List[object]
     $w = Restore-GdidWlid $Wlid
     if (-not $w.ok) { $bad.Add('wlidsvc (тип запуска)'); Write-Log ("   [!] тип запуска wlidsvc не вернулся: {0}" -f $w.why) }
     foreach ($n in @($Running)) {
         if (-not $n) { continue }
+        $why = ''
         try {
             Start-Service -Name $n -ErrorAction Stop -WarningAction SilentlyContinue
             (Get-Service -Name $n -ErrorAction Stop).WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
-        } catch { $bad.Add($n) }
+        } catch { $why = "$($_.Exception.Message)" }
+        # «Start-Service отработал» — ещё не «работает»: сверяем сами
+        $v = Get-SvcScmView $n
+        # копия CDPUserSvc исчезла вместе с выходом пользователя — запускать нечего
+        if ($v.ok -and -not $v.found -and $n -like 'CDPUserSvc_*') { continue }
+        if (-not ($v.ok -and $v.found -and "$($v.status)" -eq 'Running')) {
+            $bad.Add($n)
+            if ($why) { Write-Log ("   [!] служба {0} не запустилась: {1}" -f $n, $why) }
+        }
     }
-    return $bad.ToArray()
+    if ($null -ne $Snapshot) {
+        foreach ($e in @($Snapshot.services)) {
+            $after = Get-GdidSvcEntry "$($e.name)"
+            # тип запуска wlidsvc, оставленной прерванным прежде стиранием, —
+            # тот, что в журнале, а не «отключена» из снимка
+            $wantStart = [int]$e.start
+            if ("$($e.name)" -eq 'wlidsvc' -and $Wlid -and $Wlid.changed -and $Wlid.entry -and "$($Wlid.entry.old)" -match '^[0-4]$') { $wantStart = [int]"$($Wlid.entry.old)" }
+            # копия CDPUserSvc пропала — пользователь вышел из Windows, и
+            # Windows убрала её сама: это не «не вернулась»
+            $gone = ([bool]$e.instance -and "$($after.state)" -eq 'Missing')
+            $startOk = ("$($e.state)" -eq 'Missing' -or $gone -or [int]$after.start -eq $wantStart)
+            $runOk = ((-not $e.running) -or $gone -or [bool]$after.running -or @($Running) -notcontains "$($e.name)")
+            $states.Add(@{ name = "$($e.name)"; before = @{ start = [int]$e.start; running = [bool]$e.running; status = "$($e.status)" }
+                           after = @{ start = [int]$after.start; running = [bool]$after.running; status = "$($after.status)" }
+                           stopped = (@($Running) -contains "$($e.name)"); restored = ($startOk -and $runOk) })
+            if (-not $startOk -and -not ("$($e.name)" -eq 'wlidsvc' -and $bad -contains 'wlidsvc (тип запуска)')) {
+                $bad.Add(("{0} (тип запуска: был {1}, сейчас {2})" -f $e.name, (Get-StartName "$wantStart"), (Get-StartName "$($after.start)")))
+            }
+        }
+    }
+    return @{ notBack = $bad.ToArray(); states = $states.ToArray() }
 }
 
 function Stop-ServiceWait {
     param([string]$Name)
-    $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    # «Службы нет» — только когда диспетчер служб так и ответил. Раньше любая
+    # ошибка Get-Service означала «остановлена», и стирание шло при работающей
+    # службе, которая держала номер.
+    $svc = $null
+    try { $svc = Get-Service -Name $Name -ErrorAction Stop }
+    catch { return ("$($_.FullyQualifiedErrorId)" -like 'NoServiceFoundForGivenName*') }
     if (-not $svc -or $svc.Status -eq 'Stopped') { return $true }
     for ($i = 1; $i -le 3; $i++) {
         # -WarningAction: иначе в журнал работы сыпалось «WARNING: Waiting for
@@ -749,49 +1052,52 @@ function Clear-GdidUserCreds {
     return @{ state = $(if ($fails -eq 0) { 'Clean' } elseif ($done -gt 0) { 'Partial' } else { 'Failed' }); fails = $fails; done = $done }
 }
 
-# Шаг «реестр»: сам номер, его метка, билеты приложений, личности, кэш. У
-# каждой записи свой ответ: убрана, не было или Windows не дала.
+# Шаг «реестр»: удаляется ровно то, что нашла опись (Get-GdidCopies), —
+# каждое значение и каждый ключ по отдельности, и каждое удаление сверяется.
+# Ветки целиком больше не удаляются: раньше уходил весь
+# DeviceIdentities\production вместе с Logs и чужими значениями.
+# Ответы: removed (было и убрано — проверено), absent (уже не было), denied
+# (Windows не дала, или после удаления запись осталась), kept (личность с
+# подключами, которых программа не знает: оставлена целой). Места, которые
+# опись не прочитала, — unreadable: о них «убрано» сказать нельзя.
 # state: Clean (что было — убрано), NotFound (ничего не было), Partial,
-# AccessDenied (не убрано ничего, Windows не дала).
+# AccessDenied (не убрано ничего, Windows не дала), Unverified (не убрано
+# ничего не из-за отказа, но часть мест не прочиталась).
 function Remove-GdidRegistryCopies {
-    $st = @{ removed = 0; absent = 0; denied = 0; deniedAt = (New-Object System.Collections.Generic.List[string]) }
-    $note = { param($res, $where) $st[$res]++; if ($res -eq 'denied') { $st.deniedAt.Add($where) } }
-    foreach ($r in (Get-IdCrlRoots)) {
-        if (-not (Test-Path -LiteralPath $r.path)) { continue }
-        & $note (Remove-RegStatus "$($r.path)\ExtendedProperties" 'LID') "$($r.path)\ExtendedProperties"
-        $pk = "$($r.path)\Immersive\production\Property"
-        try {
-            foreach ($vn in @((Get-Item -LiteralPath $pk -ErrorAction Stop).GetValueNames())) {
-                if ($vn -match $script:DevicePuidRegex) { & $note (Remove-RegStatus $pk $vn) $pk }
+    $st = @{ removed = 0; absent = 0; denied = 0; kept = 0; records = 0; unreadable = 0
+             deniedAt = (New-Object System.Collections.Generic.List[string]); keptAt = (New-Object System.Collections.Generic.List[string]) }
+    $note = { param($res, $where) $st[$res]++; if ($res -eq 'denied') { $st.deniedAt.Add($where) } elseif ($res -eq 'kept') { $st.keptAt.Add($where) } }
+    $recs = @(Get-GdidCopies)
+    $st.unreadable = @($script:GdidUnreadable | Select-Object -Unique).Count
+    foreach ($rec in $recs) {
+        $st.records++
+        if ($rec.key) {
+            $res = Remove-GdidRegKey "$($rec.parent)" "$($rec.name)" -Tree:([bool]$rec.tree)
+            & $note $res "$($rec.path)"
+            # указатель раздела на эту личность (ValidDeviceId) — её же
+            # запись: убирается, только если указывает ровно на неё
+            if ($res -eq 'removed' -and "$($rec.pointer)") {
+                $pv = Read-GdidKey "$($rec.pointer)" @('ValidDeviceId')
+                if ($pv.state -eq 'ok' -and "$($pv.values['ValidDeviceId'])" -eq "$($rec.name)") {
+                    & $note (Remove-GdidRegValue "$($rec.pointer)" 'ValidDeviceId') "$($rec.pointer)\ValidDeviceId"
+                } elseif ($pv.state -eq 'denied') { & $note 'denied' "$($rec.pointer)\ValidDeviceId" }
             }
-        } catch [System.Management.Automation.ItemNotFoundException] { }
-        catch { & $note 'denied' $pk }
-        $tev = $null
-        $tks = @(Get-ChildItem -LiteralPath "$($r.path)\Immersive\production\Token" -ErrorAction SilentlyContinue -ErrorVariable tev)
-        foreach ($e in @($tev)) {
-            if (-not ($e.Exception -is [System.Management.Automation.ItemNotFoundException])) { & $note 'denied' "$($r.path)\Immersive\production\Token"; break }
+        } else {
+            foreach ($vn in @($rec.values)) { & $note (Remove-GdidRegValue "$($rec.path)" "$vn") ("{0}\{1}" -f $rec.path, $vn) }
         }
-        foreach ($tk in $tks) {
-            foreach ($vn in @('DeviceId', 'DeviceTicket')) { & $note (Remove-RegStatus $tk.PSPath $vn) "$($tk.PSPath)" }
-        }
-        & $note (Remove-RegStatus "$($r.path)\DeviceIdentities\production") "$($r.path)\DeviceIdentities"
-    }
-    # Кэш, который не перечислился, — тоже «не дала»: раньше ошибка здесь
-    # глоталась, и закрытые записи кэша выглядели отсутствующими
-    $nev = $null
-    $negs = @(Get-ChildItem -LiteralPath $script:IdCrlNegCache -ErrorAction SilentlyContinue -ErrorVariable nev)
-    foreach ($e in @($nev)) {
-        if (-not ($e.Exception -is [System.Management.Automation.ItemNotFoundException])) { & $note 'denied' $script:IdCrlNegCache; break }
-    }
-    foreach ($nk in $negs) {
-        if ($nk.PSChildName -match '^0018[0-9A-Fa-f]{12}_') { & $note (Remove-RegStatus $nk.PSPath) "$($nk.PSPath)" }
     }
     Write-Log ("   [+] записи номера в реестре: убрано {0}, не было {1}" -f $st.removed, $st.absent)
     if ($st.denied -gt 0) {
         Write-Log ("   [!] Windows не дала убрать: {0}" -f $st.denied)
         foreach ($w in @($st.deniedAt | Select-Object -Unique -First 5)) { Write-Log ("       {0}" -f ($w -replace '^Microsoft\.PowerShell\.Core\\Registry::', '')) }
     }
-    $st['state'] = $(if ($st.denied -eq 0) { if ($st.removed -gt 0) { 'Clean' } else { 'NotFound' } } elseif ($st.removed -gt 0) { 'Partial' } else { 'AccessDenied' })
+    if ($st.kept -gt 0) {
+        Write-Log ("   [!] личности устройства с незнакомым содержимым оставлены как есть: {0}" -f $st.kept)
+        foreach ($w in @($st.keptAt | Select-Object -Unique -First 3)) { Write-Log ("       {0}" -f ($w -replace '^Registry::', '')) }
+    }
+    $bad = $st.denied + $st.kept
+    $st['state'] = $(if ($bad -eq 0 -and $st.unreadable -eq 0) { if ($st.removed -gt 0) { 'Clean' } else { 'NotFound' } }
+                     elseif ($st.removed -gt 0) { 'Partial' } elseif ($st.denied -gt 0) { 'AccessDenied' } elseif ($st.kept -gt 0) { 'Partial' } else { 'Unverified' })
     return $st
 }
 
@@ -804,21 +1110,75 @@ function Remove-GdidRegistryCopies {
 # смотрела не туда. others — сколько других вошедших пользователей: их кэш
 # не чистится, и «стёрто отовсюду» тогда сказать нельзя.
 # state: Clean, NotFound, Partial (файлы остались), Unverified (не проверить).
+#
+# Проверка — своим обходом (Get-GdidDirLeft): по ссылкам (junction,
+# символическим) он не ходит, а сама ссылка внутри кэша считается тем, что
+# осталось. Раньше проверка (Get-ChildItem -Recurse -File) ссылок не видела
+# вовсе, папку без доступа считала пустой, а «папки нет» решала Test-Path —
+# и при отказе в доступе тоже говорила «нет».
+function Get-GdidDirLeft {
+    param([string]$Dir, [int]$MaxDepth = 32)
+    $out = @{ files = 0; links = 0; errors = 0; samples = (New-Object System.Collections.Generic.List[string]); errorAt = (New-Object System.Collections.Generic.List[string]) }
+    $stack = New-Object System.Collections.Generic.Stack[object]
+    $stack.Push(@($Dir, 0))
+    while ($stack.Count -gt 0) {
+        $cur = $stack.Pop()
+        $d = [string]$cur[0]; $depth = [int]$cur[1]
+        $items = $null
+        try { $items = ([IO.DirectoryInfo]$d).GetFileSystemInfos() }
+        catch { $out.errors++; if ($out.errorAt.Count -lt 3) { $out.errorAt.Add(("{0}: {1}" -f $d, $_.Exception.Message)) }; continue }
+        foreach ($it in @($items)) {
+            if ($it.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                $out.links++
+                if ($out.samples.Count -lt 3) { $out.samples.Add($it.FullName) }
+                continue
+            }
+            if ($it -is [IO.DirectoryInfo]) {
+                if ($depth -ge $MaxDepth) { $out.errors++; if ($out.errorAt.Count -lt 3) { $out.errorAt.Add(("{0}: слишком глубоко" -f $it.FullName)) }; continue }
+                $stack.Push(@($it.FullName, ($depth + 1)))
+                continue
+            }
+            $out.files++
+            if ($out.samples.Count -lt 3) { $out.samples.Add($it.FullName) }
+        }
+    }
+    return $out
+}
+
 function Clear-GdidCdpCache {
     $dir = Convert-ToSessionPath $script:CdpCache
     $others = @(@(Get-GdidCredUsers) | Where-Object { -not $_.session }).Count
     if ($others -gt 0) { Write-Log ("   [i] кэш платформы подключённых устройств других пользователей, которые сейчас в Windows, не чистится: {0}" -f $others) }
-    $null = Clear-Folder $dir 'кэш платформы подключённых устройств'
-    if (-not (Test-Path -LiteralPath $dir)) { return @{ state = 'NotFound'; left = 0; dir = $dir; others = $others } }
-    $cev = $null
-    $left = @(Get-ChildItem -LiteralPath $dir -Force -Recurse -File -ErrorAction SilentlyContinue -ErrorVariable cev)
-    if ($left.Count -gt 0) {
-        Write-Log ("   [!] в кэше платформы подключённых устройств осталось файлов: {0} -- Windows их не отдала" -f $left.Count)
-        foreach ($f in @($left | Select-Object -First 3)) { Write-Log ("       {0}" -f $f.FullName) }
-        return @{ state = 'Partial'; left = $left.Count; dir = $dir; others = $others }
+    # Сама папка: «нет» — только когда Windows так и ответила; ссылка вместо
+    # папки не чистится (задача от имени пользователя тоже откажется)
+    $root = $null
+    try { $root = Get-Item -LiteralPath $dir -Force -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { return @{ state = 'NotFound'; left = 0; dir = $dir; others = $others } }
+    catch {
+        Write-Log ("   [!] папку кэша платформы подключённых устройств не удалось открыть: {0} -- очищена ли она, неизвестно" -f $_.Exception.Message)
+        return @{ state = 'Unverified'; left = 0; dir = $dir; others = $others }
     }
-    if (@($cev | Where-Object { $_ -and -not ($_.Exception -is [System.Management.Automation.ItemNotFoundException]) }).Count -gt 0) {
-        Write-Log '   [!] кэш платформы подключённых устройств не удалось проверить (нет доступа) -- очищен ли он, неизвестно'
+    if ($root.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        Write-Log ("   [!] на месте кэша платформы подключённых устройств лежит ссылка ({0}) -- не очищается" -f $dir)
+        return @{ state = 'Partial'; left = 1; dir = $dir; others = $others }
+    }
+    $null = Clear-Folder $dir 'кэш платформы подключённых устройств'
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+        # папки не стало — это ещё надо подтвердить тем же способом
+        try { $null = Get-Item -LiteralPath $dir -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { return @{ state = 'Clean'; left = 0; dir = $dir; others = $others } }
+        catch { Write-Log '   [!] кэш платформы подключённых устройств не удалось проверить (нет доступа) -- очищен ли он, неизвестно'; return @{ state = 'Unverified'; left = 0; dir = $dir; others = $others } }
+    }
+    $lf = Get-GdidDirLeft $dir
+    $left = [int]$lf.files + [int]$lf.links
+    if ($left -gt 0) {
+        Write-Log ("   [!] в кэше платформы подключённых устройств осталось: файлов {0}, ссылок {1} -- Windows их не отдала" -f $lf.files, $lf.links)
+        foreach ($f in @($lf.samples)) { Write-Log ("       {0}" -f $f) }
+        return @{ state = 'Partial'; left = $left; dir = $dir; others = $others }
+    }
+    if ([int]$lf.errors -gt 0) {
+        Write-Log ("   [!] кэш платформы подключённых устройств не удалось проверить целиком (папок без доступа: {0}) -- очищен ли он, неизвестно" -f $lf.errors)
+        foreach ($f in @($lf.errorAt)) { Write-Log ("       {0}" -f $f) }
         return @{ state = 'Unverified'; left = 0; dir = $dir; others = $others }
     }
     return @{ state = 'Clean'; left = 0; dir = $dir; others = $others }
@@ -828,73 +1188,190 @@ function Clear-GdidCdpCache {
 # выдачи открыт, Windows при следующем обращении получит новый номер — это
 # смена. Под запретом выдачи — номера не станет вовсе.
 #
-# Порядок: ограничения → как были службы (wlidsvc — в журнал отката) →
-# остановка служб → учётные данные у пользователей → у системы → реестр →
-# кэш платформы подключённых устройств → проверка → службы как были → итог.
-# Проверка — пока службы стоят: раньше она шла после их возврата, и
-# поднявшаяся wlidsvc успевала завести новый номер, а он считался «копией,
-# которую Windows не отдала». Службы возвращаются в finally: исключение
-# посреди стирания раньше оставляло их остановленными, а wlidsvc — отключённой.
-# Итог каждого шага и общий — в $script:GdidWipeResult; state: Clean,
-# NotFound (копий и не было), Partial, Failed (ничего не стёрто), AccessDenied
-# (Windows не дала убрать ни одной копии), Unverified (копий не нашлось, но
-# проверено не всё). Успех ($true) — только Clean и NotFound.
+# Порядок: ограничения → предварительная проверка (только чтение) →
+# wlidsvc — в журнал отката и отключить → остановка служб → учётные данные у
+# пользователей → у системы → реестр → кэш платформы подключённых устройств →
+# проверка → службы как были → итог.
+# Предварительная проверка (Get-GdidPreflight) идёт до любого изменения:
+# опись копий без мест без доступа, список профилей и полный снимок служб.
+# Чего-то из этого нет — не меняется ничего. Раньше стирание начиналось,
+# даже если часть мест не прочиталась, а состояния служб собирались без
+# проверки ошибок.
+# Проверка итога — пока службы стоят: иначе поднявшаяся wlidsvc успевала
+# завести новый номер. Службы возвращаются в finally — на любом пути, и при
+# исключении тоже: раньше ранний отказ возвращал службы по пустому списку.
+# Итог — $script:GdidWipeResult (New-GdidResult); state:
+#   Clean        — копии были и стёрты, проверено всё;
+#   NotFound     — копий не было, проверено всё;
+#   Partial      — что-то стёрто, а что-то нет (или не вернулись службы);
+#   AccessDenied — Windows не дала убрать ни одной копии;
+#   Unverified   — копий не нашлось, но проверено не всё: профили тех, кто
+#                  не вошёл в Windows, места без доступа, чужие кэши;
+#   Failed       — не стёрто ничего: отказ, предварительная проверка не
+#                  прошла или службы не остановились;
+#   DryRun       — пробный запуск: стирание началось бы и могло бы дойти до
+#                  проверенного итога.
+# Успех ($true) — только Clean, NotFound и DryRun.
 $script:GdidWipeResult = $null
 
+# Итог операции с номером — одна форма для стирания и возврата: окно, журнал
+# работы и код выхода берут его отсюда и не расходятся.
+#   operation — wipe или restore; status (и прежнее имя state) — итог;
+#   success   — всё прошло и проверено (тогда exitCode 0, иначе 2);
+#   complete  — проверено всё, что нужно для такого ответа;
+#   checked   — сколько копий нашла опись до стирания (у возврата — стадий);
+#   removed   — сколько записей убрано; remaining — сколько копий осталось;
+#   failed    — сколько шагов не удалось; unverified — мест без доступа;
+#   uncheckedProfiles — профили вне Windows и чужие непроверенные кэши;
+#   serviceStates — службы до и после; warnings, errors; timestamp.
+# Пустой итог — ещё не «чисто»: начальное состояние — Failed.
+function New-GdidResult {
+    param([string]$Operation)
+    return [ordered]@{
+        operation = $Operation; status = 'Failed'; state = 'Failed'; success = $false; complete = $false
+        checked = 0; removed = 0; remaining = 0; failed = 0; unverified = 0; uncheckedProfiles = 0
+        serviceStates = @(); warnings = (New-Object System.Collections.Generic.List[string]); errors = (New-Object System.Collections.Generic.List[string])
+        timestamp = (Get-Date).ToString('s'); exitCode = 2
+        # прежние поля ответа — их читают проверки и окно
+        before = 0; after = 0; denied = 0; unreadable = 0; unchecked = 0; stages = [ordered]@{}; notBack = @(); preflight = @()
+    }
+}
+
+# Итог — одним вызовом: состояние, успех, полнота и код выхода вместе
+function Set-GdidResultState {
+    param($Result, [string]$State)
+    $Result['state'] = $State; $Result['status'] = $State
+    $Result['success'] = ($State -in @('Clean', 'NotFound', 'DryRun', 'Restored', 'NotModified'))
+    $Result['complete'] = [bool]$Result['success']
+    $Result['exitCode'] = $(if ($Result['success']) { 0 } else { 2 })
+}
+
+# Предварительная проверка стирания — только чтение, до любого изменения.
+# ok — можно начинать. blockers — почему нельзя: места без доступа (копии в
+# них остались бы, и Windows вернула бы номер), список профилей не прочитался
+# (чьи копии на месте, неизвестно), снимок служб неполный (вернуть их потом
+# было бы не по чему). warnings — то, что стиранию не мешает, но полного
+# «стёрто отовсюду» не даст: профили тех, кто не вошёл в Windows, и
+# незнакомые подключи личностей (они не трогаются).
+function Get-GdidPreflight {
+    $p = @{ ok = $false; blockers = (New-Object System.Collections.Generic.List[string]); warnings = (New-Object System.Collections.Generic.List[string])
+            scan = $null; snapshot = $null }
+    $scan = Get-GdidScan
+    $p.scan = $scan
+    if ($scan.profiles.enumerationFailed) {
+        $p.blockers.Add(("список профилей пользователей не прочитался ({0}) -- чьи копии номера на месте, неизвестно" -f (@($scan.profiles.errors) -join '; ')))
+    }
+    $regUnread = @(@($scan.unreadable) | Where-Object { @($scan.profiles.places) -notcontains $_ })
+    if ($regUnread.Count -gt 0) {
+        $p.blockers.Add(("мест без доступа на чтение: {0} ({1}) -- копии номера в них остались бы, и Windows вернула бы его" -f $regUnread.Count,
+                         ((@($regUnread | Select-Object -First 3) | ForEach-Object { "$_" -replace '^Registry::', '' }) -join '; ')))
+    }
+    if ([int]$scan.profiles.unloadedProfiles -gt 0) {
+        $p.warnings.Add(("профили пользователей, которые сейчас не вошли в Windows, не проверяются: {0}" -f $scan.profiles.unloadedProfiles))
+    }
+    if (@($scan.unknown).Count -gt 0) {
+        $p.warnings.Add(("подключи личностей устройства без DeviceId оставлены как есть: {0}" -f @($scan.unknown).Count))
+    }
+    $snap = Get-GdidServiceSnapshot
+    $p.snapshot = $snap
+    if (-not $snap.complete) { foreach ($x in @($snap.problems)) { $p.blockers.Add(("службы: {0}" -f $x)) } }
+    $p.ok = ($p.blockers.Count -eq 0)
+    return $p
+}
+
 function Invoke-GdidWipe {
-    $res = @{ state = 'Failed'; before = 0; after = 0; removed = 0; denied = 0; unreadable = 0; unchecked = 0
-              stages = [ordered]@{}; notBack = @(); errors = (New-Object System.Collections.Generic.List[string]) }
+    $res = New-GdidResult 'wipe'
     $script:GdidWipeResult = $res
     $why = Get-ManagedReason
     if ($why) {
         Write-Log ("   [!] номер устройства не тронут: {0}. На таком компьютере он связан с учётной записью организации." -f $why)
-        $res.stages['restrictions'] = 'refused'
+        $res.stages['restrictions'] = 'refused'; $res.errors.Add("$why"); $res.failed = 1
+        Set-GdidResultState $res 'Failed'
         $script:Failures++; return $false
     }
     $res.stages['restrictions'] = 'ok'
-    $before = @((Get-GdidScan).copies)
-    $res.before = $before.Count
-    if ($DryRun) {
-        Write-Log ("   [тест] копий номера устройства: {0} -- будут стёрты вместе с «личностью» устройства" -f $before.Count)
-        $res.state = 'DryRun'; return $true
-    }
-    Write-Log ("   найдено копий номера: {0}" -f $before.Count)
 
-    # Службы держат номер в памяти и вернули бы его на место. DoSvc тоже:
-    # именно она сообщает номер, и посреди стирания могла его держать
-    $wasRunning = @(Get-Service -ErrorAction SilentlyContinue |
-                    Where-Object { ($_.Name -in @('wlidsvc', 'CDPSvc', 'DoSvc') -or $_.Name -like 'CDPUserSvc_*') -and $_.Status -eq 'Running' } |
-                    ForEach-Object { $_.Name })
-    $wlid = $null
-    try { $wlid = Disable-GdidWlid } catch { $wlid = @{ ok = $false; changed = $false; entry = $null; why = $_.Exception.Message } }
-    if (-not $wlid.ok) {
-        Write-Log ("   [!] номер устройства не тронут: {0} -- службу учётных записей Microsoft нельзя отключить на время стирания, не записав, как было." -f $wlid.why)
-        $res.stages['services'] = 'refused'
+    # 0. предварительная проверка — только чтение: до неё не меняется ничего
+    $pre = Get-GdidPreflight
+    $before = @($pre.scan.copies)
+    $res.before = $before.Count; $res.checked = $before.Count
+    $res.unreadable = @($pre.scan.unreadable).Count; $res.unverified = $res.unreadable
+    $res.unchecked = [int]$pre.scan.unchecked; $res.uncheckedProfiles = $res.unchecked
+    $res.preflight = $pre.blockers.ToArray()
+    foreach ($w in $pre.warnings.ToArray()) { $res.warnings.Add("$w") }
+    $res.serviceStates = @(@($pre.snapshot.services) | ForEach-Object { @{ name = "$($_.name)"; before = @{ start = [int]$_.start; running = [bool]$_.running; status = "$($_.status)" } } })
+    $res.stages['preflight'] = $(if ($pre.ok) { 'ok' } else { 'Failed' })
+    $tag = $(if ($DryRun) { '[тест]' } else { '[!]' })
+    if (-not $pre.ok) {
+        Write-Log ("   {0} номер устройства не тронут: предварительная проверка не прошла -- ничего не изменено" -f $tag)
+        foreach ($b in $pre.blockers.ToArray()) { Write-Log ("       {0}" -f $b); $res.errors.Add("$b") }
+        $res.failed = 1
+        # копий не нашлось, но проверить всё не вышло — «не проверено», а не «чисто»
+        Set-GdidResultState $res $(if ($before.Count -eq 0) { 'Unverified' } else { 'Failed' })
         $script:Failures++; return $false
     }
-    if ($wlid.why) { Write-Log ("   [i] {0}" -f $wlid.why) }
-    $res.stages['services'] = 'saved'
+    if ($DryRun) {
+        Write-Log ("   [тест] копий номера устройства: {0} -- будут стёрты вместе с «личностью» устройства" -f $before.Count)
+        # Пробный запуск не обещает больше, чем даст настоящий: раньше он
+        # отвечал «успех» всегда, даже когда часть мест не проверялась
+        $othersN = @(@(Get-GdidCredUsers) | Where-Object { -not $_.session }).Count
+        $res.uncheckedProfiles = $res.unchecked + $othersN
+        if ([bool]$pre.scan.profiles.unverified -or $othersN -gt 0) {
+            Write-Log ("   [тест] проверено будет не всё: профилей вне Windows {0}, других вошедших пользователей {1} -- «стёрто отовсюду» стирание не скажет" -f $res.unchecked, $othersN)
+            Set-GdidResultState $res 'Unverified'
+            $script:Failures++; return $false
+        }
+        Set-GdidResultState $res 'DryRun'
+        return $true
+    }
+    Write-Log ("   найдено копий номера: {0}" -f $before.Count)
+    foreach ($w in $pre.warnings.ToArray()) { Write-Log ("   [i] {0}" -f $w) }
+
+    # Службы, которые работали до стирания, — по снимку. Их стирание
+    # останавливает (они держат номер в памяти и вернули бы его) и потом
+    # запускает снова; стоявшие до стирания не запускаются.
+    $snap = $pre.snapshot
+    $runningBefore = @(@($snap.services) | Where-Object { $_.running -and $_.scmFound } | ForEach-Object { "$($_.name)" })
+    # что стирание пыталось остановить — возвращается всё это (из тех, что работали)
+    $touched = New-Object System.Collections.Generic.List[string]
     $notBackMsg = '   [!] службы не вернулись в прежнее состояние: {0}. Перезагрузка компьютера вернёт их.'
+    $wlid = $null
     $fails = 0
     $aborted = ''
     $verify = $null
-    $reg = @{ removed = 0; denied = 0 }
+    $reg = @{ removed = 0; denied = 0; kept = 0 }
     $cdp = @{ others = 0 }
+    $restore = $null
     try {
-        if (-not (Stop-ServiceWait 'wlidsvc')) {
-            Write-Log '   [!] служба учётных записей Microsoft (wlidsvc) занята и не остановилась. Закройте Магазин и Параметры и повторите или перезагрузите компьютер. Ничего не стёрто.'
-            $aborted = 'stop'
+        $wlid = Disable-GdidWlid
+        if (-not $wlid.ok) {
+            Write-Log ("   [!] номер устройства не тронут: {0} -- службу учётных записей Microsoft нельзя отключить на время стирания, не записав, как было." -f $wlid.why)
+            $res.stages['services'] = 'refused'; $res.errors.Add("$($wlid.why)")
+            $aborted = 'refused'
         } else {
-            # Служба, которая не остановилась, держит номер в памяти и записала
-            # бы его обратно посреди стирания. Тогда не стираем ничего и
-            # возвращаем всё как было.
-            $stuck = @($wasRunning | Where-Object { $_ -ne 'wlidsvc' -and -not (Stop-ServiceWait $_) })
-            if ($stuck.Count -gt 0) {
-                Write-Log ("   [!] служба не остановилась: {0}. Она держит номер устройства и вернула бы его на место. Ничего не стёрто -- повторите позже или после перезагрузки." -f ($stuck -join ', '))
+            if ($wlid.why) { Write-Log ("   [i] {0}" -f $wlid.why) }
+            $res.stages['services'] = 'saved'
+            $touched.Add('wlidsvc')
+            if (-not (Stop-ServiceWait 'wlidsvc')) {
+                Write-Log '   [!] служба учётных записей Microsoft (wlidsvc) занята и не остановилась. Закройте Магазин и Параметры и повторите или перезагрузите компьютер. Ничего не стёрто.'
                 $aborted = 'stop'
+            } else {
+                # Служба, которая не остановилась, держит номер в памяти и
+                # записала бы его обратно посреди стирания. Тогда не стираем
+                # ничего и возвращаем всё как было.
+                $stuck = New-Object System.Collections.Generic.List[string]
+                foreach ($n in $runningBefore) {
+                    if ($n -eq 'wlidsvc') { continue }
+                    $touched.Add($n)
+                    if (-not (Stop-ServiceWait $n)) { $stuck.Add($n) }
+                }
+                if ($stuck.Count -gt 0) {
+                    Write-Log ("   [!] служба не остановилась: {0}. Она держит номер устройства и вернула бы его на место. Ничего не стёрто -- повторите позже или после перезагрузки." -f ($stuck.ToArray() -join ', '))
+                    $aborted = 'stop'
+                }
             }
+            $res.stages['stop'] = $(if ($aborted) { 'Failed' } else { 'ok' })
         }
-        $res.stages['stop'] = $(if ($aborted) { 'Failed' } else { 'ok' })
         if (-not $aborted) {
             # 1. учётные данные «личности» устройства — у пользователей и у системы
             $cu = Clear-GdidUserCreds
@@ -903,10 +1380,10 @@ function Invoke-GdidWipe {
             $sysCmd = (@($script:GdidCredSystem | ForEach-Object { 'cmdkey /delete:' + $_ + ' >nul 2>&1' }) -join ' & ') + ' & ' + (Get-CredCheckCmd $script:GdidCredSystem)
             if (Invoke-OneShotTask 'Win11Privacy GDID system' $sysCmd -AsSystem) { Write-Log '   [+] учётные данные устройства у системы убраны'; $res.stages['systemCredentials'] = 'Clean' }
             else { Write-Log '   [!] учётные данные устройства у системы убрать не удалось'; $fails++; $res.stages['systemCredentials'] = 'Failed' }
-            # 2. копии номера в реестре
+            # 2. копии номера в реестре — ровно найденные записи
             $reg = Remove-GdidRegistryCopies
             $res.stages['registry'] = $reg.state
-            if ([int]$reg.denied -gt 0) { $fails++ }
+            if ([int]$reg.denied -gt 0 -or [int]$reg.kept -gt 0) { $fails++ }
             # 3. кэш платформы подключённых устройств
             $cdp = Clear-GdidCdpCache
             $res.stages['cdp'] = $cdp.state
@@ -921,27 +1398,36 @@ function Invoke-GdidWipe {
         Write-Log ("   [!] стирание прервалось: {0}" -f $_.Exception.Message)
     } finally {
         # 5. службы — как были, что бы ни случилось выше
-        $notBack = @()
-        try { $notBack = @(Restore-GdidServices $wasRunning $wlid) }
-        catch { $notBack = @(('службы (возврат прервался: {0})' -f $_.Exception.Message)) }
-        $res.notBack = $notBack
-        $res.stages['restore'] = $(if ($notBack.Count -gt 0) { 'Failed' } else { 'ok' })
-        if ($notBack.Count -gt 0) { Write-Log ($notBackMsg -f ($notBack -join ', ')) }
+        $back = @($touched.ToArray() | Where-Object { $runningBefore -contains $_ })
+        try { $restore = Restore-GdidServices $back $wlid $snap }
+        catch { $restore = @{ notBack = @(('службы (возврат прервался: {0})' -f $_.Exception.Message)); states = @() } }
+        $res.notBack = @($restore.notBack)
+        if (@($restore.states).Count -gt 0) { $res.serviceStates = @($restore.states) }
+        $res.stages['restore'] = $(if (@($restore.notBack).Count -gt 0) { 'Failed' } else { 'ok' })
+        if (@($restore.notBack).Count -gt 0) { Write-Log ($notBackMsg -f (@($restore.notBack) -join ', ')) }
     }
     $res.removed = [int]$reg.removed; $res.denied = [int]$reg.denied
-    if ($aborted -eq 'stop') { $res.state = 'Failed'; $script:Failures++; return $false }
+    if (@($res.notBack).Count -gt 0) { $fails++ }
+    if ($aborted -in @('refused', 'stop')) {
+        $res.failed = $fails + 1
+        Set-GdidResultState $res 'Failed'; $script:Failures++; return $false
+    }
     if ($aborted -eq 'exception') {
         # что успело стереться до сбоя, неизвестно наверняка
-        $res.state = $(if ($res.removed -gt 0) { 'Partial' } else { 'Failed' })
+        $res.failed = $fails + 1
+        Set-GdidResultState $res $(if ($res.removed -gt 0) { 'Partial' } else { 'Failed' })
         Write-Log '   [!] стирание прошло не полностью -- повторите его; службы возвращены, как были'
         $script:Failures++; return $false
     }
-    if ($notBack.Count -gt 0) { $fails++ }
 
     $after = @($verify.copies)
     $unread = @($verify.unreadable)
     $unchecked = [int]$verify.unchecked + [int]$cdp.others
-    $res.after = $after.Count; $res.unreadable = $unread.Count; $res.unchecked = $unchecked
+    $profUnverified = [bool]$verify.profiles.unverified
+    $res.after = $after.Count; $res.remaining = $after.Count
+    $res.unreadable = $unread.Count; $res.unverified = $unread.Count
+    $res.unchecked = $unchecked; $res.uncheckedProfiles = $unchecked
+    $res.failed = $fails
     if ($after.Count -gt 0) { Write-Log ("   [!] осталось копий номера: {0} -- Windows их не отдала" -f $after.Count) }
     if ($unread.Count -gt 0) {
         # «не нашли» там, куда не пустили, — не то же самое, что «стёрто»
@@ -950,46 +1436,80 @@ function Invoke-GdidWipe {
     }
     if ([int]$verify.unchecked -gt 0) {
         Write-Log ("   [i] профили пользователей, которые сейчас не вошли в Windows, не проверялись: {0}. У тех из них, кто входит через учётную запись Microsoft, может остаться прежний номер." -f $verify.unchecked)
+        $res.warnings.Add(("профили пользователей вне Windows не проверялись: {0} -- в них может остаться прежний номер" -f $verify.unchecked))
     }
     # Успех — только когда прошло всё: копий нет, учётные данные убраны, кэш
-    # пуст, службы вернулись и проверено всё. Раньше «стёрт отовсюду» писалось
-    # и тогда, когда что-то из этого не вышло, а непроверенные профили и места
-    # без доступа успеху не мешали.
-    $state = $(if ($fails -eq 0 -and $after.Count -eq 0 -and $unread.Count -eq 0 -and $unchecked -eq 0) { if ($before.Count -eq 0 -and $res.removed -eq 0) { 'NotFound' } else { 'Clean' } }
+    # пуст, службы вернулись и проверено всё, включая список профилей.
+    $state = $(if ($fails -eq 0 -and $after.Count -eq 0 -and $unread.Count -eq 0 -and $unchecked -eq 0 -and -not $profUnverified) { if ($before.Count -eq 0 -and $res.removed -eq 0) { 'NotFound' } else { 'Clean' } }
                elseif ($fails -eq 0 -and $after.Count -eq 0) { 'Unverified' }
                elseif ($after.Count -gt 0 -and $res.removed -eq 0 -and $res.denied -gt 0) { 'AccessDenied' }
                else { 'Partial' })
-    $res.state = $state
-    $ok = ($state -in @('Clean', 'NotFound'))
+    Set-GdidResultState $res $state
     if ($state -eq 'Clean') { Write-Log '   [+] номер устройства стёрт отовсюду, где программа его ищет'; $script:Changes++ }
     elseif ($state -eq 'NotFound') { Write-Log '   [+] копий номера не нашлось -- проверено всё, где программа его ищет' }
     else {
         if ($state -eq 'Unverified') { Write-Log '   [!] там, где программа смогла проверить, копий номера не осталось, но проверено не всё -- см. выше' }
         elseif ($after.Count -eq 0) { Write-Log '   [!] копий номера в реестре не осталось, но стирание прошло не полностью -- см. выше' }
+        if ($res.removed -gt 0) { $script:Changes++ }
         $script:Failures++
     }
-    return $ok
+    return [bool]$res.success
 }
 
 # «Вернуть как было», службы: тип запуска — из журнала отката, ровно для тех
 # служб, которые меняла программа (wlidsvc — если её оставило отключённой
-# прерванное стирание). result: restored, notChanged (программа не меняла),
-# failed. Раньше любой отказ — журналу нельзя верить, тип запуска не
-# вернулся — назывался «программа её не меняла» и ошибкой не считался.
+# прерванное стирание). result:
+#   restored     — возвращён, и тип запуска сверен с журналом;
+#   notChanged   — программа её не меняла (записи в журнале нет);
+#   notFound     — запись есть, а службы на этой системе больше нет: возвращать
+#                  некуда, запись в журнале остаётся (это не ошибка);
+#   accessDenied — тип запуска не читается или Windows не дала его записать;
+#   failed       — не вернулся (или журналу нельзя верить).
+# Запись журнала убирается только после сверки (это делает Restore-ChangeKey).
+# Раньше любой отказ — журналу нельзя верить, тип запуска не вернулся —
+# назывался «программа её не меняла» и ошибкой не считался, а пропавшая
+# служба — «возвращена».
 function Restore-GdidServiceStarts {
     $out = New-Object System.Collections.Generic.List[object]
     $jf = Read-JournalFile -ReadOnly
-    $have = @{}
-    if ($jf.trusted) { foreach ($it in @($jf.items)) { $have[(Get-JournalKey (ConvertTo-Fields $it))] = $true } }
+    $first = @{}
+    if ($jf.trusted) {
+        foreach ($it in @($jf.items)) {
+            $f = ConvertTo-Fields $it
+            $k = Get-JournalKey $f
+            if (-not $first.ContainsKey($k)) { $first[$k] = $f }
+        }
+    }
     foreach ($n in @($script:GdidSvcNames + 'wlidsvc')) {
         $key = $(if ($n -eq 'wlidsvc') { 'svc|wlidsvc' } else { ("reg|HKLM:\SYSTEM\CurrentControlSet\Services\{0}|Start" -f $n).ToLowerInvariant() })
         if (-not $jf.trusted) { $out.Add(@{ name = $n; result = 'failed'; error = 'журналу отката нельзя верить: подпись не сошлась или он не прочитался' }); continue }
-        if (-not $have.ContainsKey($key)) { $out.Add(@{ name = $n; result = 'notChanged'; error = '' }); continue }
+        if (-not $first.ContainsKey($key)) { $out.Add(@{ name = $n; result = 'notChanged'; error = '' }); continue }
+        $want = "$($first[$key]['old'])"
+        $now = Get-SvcStartInfo $n
+        if ("$($now.state)" -eq 'Missing') { $out.Add(@{ name = $n; result = 'notFound'; error = 'службы на этой системе больше нет' }); continue }
+        if ("$($now.state)" -eq 'ReadError') { $out.Add(@{ name = $n; result = 'accessDenied'; error = ("тип запуска не читается: {0}" -f $now.error) }); continue }
         $r = Restore-ChangeKey $key
-        if ($r.ok) { $out.Add(@{ name = $n; result = 'restored'; error = '' }) }
-        else { $out.Add(@{ name = $n; result = 'failed'; error = "$($r.error)" }) }
+        if (-not $r.ok) {
+            $out.Add(@{ name = $n; result = $(if ($r.denied) { 'accessDenied' } elseif ($r.missing) { 'notFound' } else { 'failed' }); error = "$($r.error)" })
+            continue
+        }
+        if ($r.missing) { $out.Add(@{ name = $n; result = 'notFound'; error = 'службы на этой системе больше нет' }); continue }
+        # сверка: тип запуска — тот, что был до программы
+        $chk = Get-SvcStartInfo $n
+        if ($want -match '^[0-4]$' -and "$($chk.start)" -ne $want) {
+            $out.Add(@{ name = $n; result = 'failed'; error = ("после возврата тип запуска {0}, а было {1}" -f (Get-StartName "$($chk.start)"), (Get-StartName $want)) })
+            continue
+        }
+        $out.Add(@{ name = $n; result = 'restored'; error = '' })
     }
     return $out.ToArray()
+}
+
+# Сколько блоков этого вида в hosts (вместе с осиротевшими метками);
+# -1 — hosts не прочитался
+function Get-GdidHostsFound {
+    param([string]$Kind)
+    try { return [int](Get-HostsLinesWithout (Read-HostsLines) $Kind).found } catch { return -1 }
 }
 
 # После возврата типа запуска в реестре диспетчер служб до перезагрузки
@@ -1004,28 +1524,55 @@ function Sync-GdidRestoredServices {
     $pending = New-Object System.Collections.Generic.List[string]
     $failed = New-Object System.Collections.Generic.List[string]
     $toScm = { param($n) switch ((Get-SvcStartInfo $n).start) { 2 { 'Automatic' } 3 { 'Manual' } default { '' } } }
+    # Код ошибки Windows в исключении (по цепочке InnerException); 0 — нет кода
+    $winCode = {
+        param($Ex)
+        for ($x = $Ex; $null -ne $x; $x = $x.InnerException) {
+            if ($x -is [System.ComponentModel.Win32Exception]) { return [int]$x.NativeErrorCode }
+        }
+        if ("$($Ex.Message)" -match '\b1058\b') { return 1058 }
+        return 0
+    }
     $bring = {
         param([string]$Svc, [string]$Want, [string]$Later)
         $v = Get-SvcScmView $Svc
         if (-not $v.found) { return }
-        if ($v.start -eq 'Disabled') {
-            try { Set-Service -Name $Svc -StartupType $Want -ErrorAction Stop } catch { }
-            $v = Get-SvcScmView $Svc
-        }
+        # Тип запуска передаётся диспетчеру служб всегда. Спрашивать его, какой
+        # тип запуска он помнит, бесполезно: Get-Service и sc qc отвечают по
+        # реестру («автоматически»), а сам диспетчер до перезагрузки держит
+        # «отключена» и не запускает службу (ошибка 1058). Раньше Set-Service
+        # звался, только когда Get-Service говорил «отключена», — и после
+        # перезагрузки с отключёнными службами CDPSvc не запускалась (VM,
+        # 2026-11-16).
+        $setOk = $true
+        try { Set-Service -Name $Svc -StartupType $Want -ErrorAction Stop } catch { $setOk = $false }
+        $v = Get-SvcScmView $Svc
         if ($v.start -eq 'Disabled') { $pending.Add(("{0} ({1})" -f $Svc, $Later)); return }
-        if ($Want -ne 'Automatic' -or $v.running) { return }
+        if ($Want -ne 'Automatic' -or $v.running) {
+            # не запускаем (вручную) — но если диспетчер не принял тип запуска
+            # (DoSvc Windows не даёт менять и администратору), он может помнить
+            # «отключена» до перезагрузки: так и сказано
+            if (-not $setOk -and -not $v.running) { $pending.Add(("{0} ({1})" -f $Svc, $Later)) }
+            return
+        }
         try {
             Start-Service -Name $Svc -ErrorAction Stop -WarningAction SilentlyContinue
             (Get-Service -Name $Svc -ErrorAction Stop).WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
-        } catch { $failed.Add(("{0}: {1}" -f $Svc, $_.Exception.Message)) }
+        } catch {
+            # 1058 — диспетчер помнит «отключена», а передать ему тип запуска
+            # Windows не дала: служба заработает после перезагрузки. Это не сбой.
+            if (-not $setOk -and (& $winCode $_.Exception) -eq 1058) { $pending.Add(("{0} ({1})" -f $Svc, $Later)); return }
+            $failed.Add(("{0}: {1}" -f $Svc, $_.Exception.Message))
+        }
     }
     foreach ($n in @($Names)) {
         $want = & $toScm $n
         if (-not $want) { continue }
         if ($n -eq 'CDPUserSvc') {
             # сам шаблон не запускается — запускаются его копии у пользователей
+            # и ему тип запуска — диспетчеру служб всегда (см. выше): по нему заводятся новые копии
             $v = Get-SvcScmView $n
-            if ($v.found -and $v.start -eq 'Disabled') { try { Set-Service -Name $n -StartupType $want -ErrorAction Stop } catch { } }
+            if ($v.found) { try { Set-Service -Name $n -StartupType $want -ErrorAction Stop } catch { } }
             foreach ($inst in @((Get-GdidUserSvcInstances).names)) { & $bring $inst $want 'после выхода из Windows и нового входа' }
             continue
         }
@@ -1042,10 +1589,7 @@ function Get-GdidStatus {
     $userLid = Get-RegValue 'HKCU:\SOFTWARE\Microsoft\IdentityCRL\ExtendedProperties' 'LID'
     $svcs = New-Object System.Collections.Generic.List[object]
     foreach ($s in @($tx.services)) { $svcs.Add($s) }
-    $w = Get-SvcStartInfo 'wlidsvc'
-    $wv = Get-SvcScmView 'wlidsvc'
-    $w['running'] = [bool]$wv.running; $w['scmStart'] = "$($wv.start)"
-    $svcs.Add($w)
+    $svcs.Add((Get-GdidSvcEntry 'wlidsvc'))
     $nums = @($copies | ForEach-Object { "$($_.puid)" } | Where-Object { $_ -match $script:DevicePuidRegex } | Select-Object -Unique)
     # Номер для плитки: свой, а если своего нет — из любого найденного хранилища.
     # Раньше брался только свой, и рядом с «Копий на диске: 3» стояло «нет».
@@ -1079,6 +1623,13 @@ function Get-GdidStatus {
         locked = (Test-HostsBlockCurrent -Kind 'lock'); lockPresent = (Test-HostsBlock -Kind 'lock')
         wlidBlocked = (Test-FwRule 'svc' 'wlidsvc')
         msaLogon = (Test-MsaLogon); managed = (Get-ManagedReason)
+        # вид принадлежности организации (Get-GdidManagement): domain, entra,
+        # hybrid, mdm, workAccount, unknown или ''; учётные записи — по людям
+        managedKind = "$((Get-GdidManagement).kind)"
+        workAccount = [bool](Get-GdidManagement).workAccount
+        accounts = @(Get-GdidAccounts)
+        profiles = $scan.profiles
+        unknownIdentities = @($scan.unknown).Count
         admin = (Test-Admin)
         services = $svcs.ToArray()
     }

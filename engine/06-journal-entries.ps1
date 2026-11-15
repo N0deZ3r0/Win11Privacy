@@ -156,12 +156,17 @@ function Restore-RegValue {
             New-ItemProperty -LiteralPath $Path -Name $Name -Value $v -PropertyType $Type -Force -ErrorAction Stop | Out-Null
         } else {
             $was = Get-RegRaw $Path $Name
-            if (-not $was.ok) { return @{ ok = $false; error = ("параметр не прочитался: {0}" -f $was.error) } }
+            if (-not $was.ok) { return @{ ok = $false; denied = [bool]$was.denied; error = ("параметр не прочитался: {0}" -f $was.error) } }
             if ($was.exists) { Remove-ItemProperty -LiteralPath $Path -Name $Name -Force -ErrorAction Stop }
         }
-    } catch { return @{ ok = $false; error = $_.Exception.Message } }
+    } catch {
+        $ex = $_.Exception
+        $den = ($ex -is [System.UnauthorizedAccessException] -or $ex -is [System.Security.SecurityException] -or
+                $ex.InnerException -is [System.UnauthorizedAccessException] -or $ex.InnerException -is [System.Security.SecurityException])
+        return @{ ok = $false; denied = [bool]$den; error = $ex.Message }
+    }
     $now = Get-RegRaw $Path $Name
-    if (-not $now.ok) { return @{ ok = $false; error = ("после возврата параметр не прочитался: {0}" -f $now.error) } }
+    if (-not $now.ok) { return @{ ok = $false; denied = [bool]$now.denied; error = ("после возврата параметр не прочитался: {0}" -f $now.error) } }
     if (-not $Existed) {
         if ($now.exists) { return @{ ok = $false; error = 'параметр не убрался' } }
         return @{ ok = $true }
@@ -197,11 +202,24 @@ function Restore-JournalEntry {
         switch ("$($e.kind)") {
             'svc' {
                 $name = "$($e.name)"
-                if (-not (Get-Service -Name $name -ErrorAction SilentlyContinue)) { return @{ ok = $true; note = 'службы больше нет' } }
-                $start = "$($e.old)"
                 $k = "HKLM:\SYSTEM\CurrentControlSet\Services\$name"
+                # «Службы больше нет» — только когда нет и её ключа в реестре.
+                # Раньше так называлась любая ошибка Get-Service (например,
+                # отказ в доступе): тип запуска не возвращался, а запись
+                # журнала убиралась как возвращённая.
+                $svcObj = $null
+                try { $svcObj = Get-Service -Name $name -ErrorAction Stop } catch { }
+                $viaReg = $false
+                if (-not $svcObj) {
+                    $kx = Test-RegKeyExists $k
+                    if ($kx -eq $false) { return @{ ok = $true; missing = $true; note = 'службы больше нет' } }
+                    if ($null -eq $kx) { return @{ ok = $false; denied = $true; error = 'служба не видна диспетчеру служб, а её ключ в реестре не читается' } }
+                    # ключ есть, а диспетчер служб её не назвал — тип запуска пишется в реестр
+                    $viaReg = $true
+                }
+                $start = "$($e.old)"
                 $type = switch ($start) { '2' { 'Automatic' } '3' { 'Manual' } '4' { 'Disabled' } default { '' } }
-                if ($type) { Set-Service -Name $name -StartupType $type -ErrorAction Stop }
+                if ($type -and -not $viaReg) { Set-Service -Name $name -StartupType $type -ErrorAction Stop }
                 elseif ($start -ne '') { Set-ItemProperty -LiteralPath $k -Name 'Start' -Value ([int]$start) -Type DWord -ErrorAction Stop }
                 # тип запуска сверяется: «команда прошла» — ещё не «вернулось»
                 if ($start -ne '' -and "$(Get-RegValue $k 'Start')" -ne $start) {
@@ -288,5 +306,12 @@ function Restore-JournalEntry {
                 return (Restore-RegValue "$($e.path)" "$($e.name)" ([bool]$e.existed) $e.old "$($e.type)")
             }
         }
-    } catch { return @{ ok = $false; error = $_.Exception.Message } }
+    } catch {
+        # отказ в доступе — отдельно от прочих сбоев: «Windows не дала», а не «не вышло»
+        $ex = $_.Exception
+        $den = ($ex -is [System.UnauthorizedAccessException] -or $ex -is [System.Security.SecurityException] -or
+                $ex.InnerException -is [System.UnauthorizedAccessException] -or $ex.InnerException -is [System.Security.SecurityException] -or
+                "$($ex.Message)" -match 'Access is denied|Отказано в доступе')
+        return @{ ok = $false; denied = [bool]$den; error = $ex.Message }
+    }
 }
