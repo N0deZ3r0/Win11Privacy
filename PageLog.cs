@@ -55,12 +55,15 @@ namespace Win11Privacy
 
             // Фон карточки — как у самого журнала: раньше тёмное поле сидело
             // в более светлой рамке, и выходила двойная обводка.
-            // Отступ текста от края — как у текста карточек на других страницах:
-            // раньше строки журнала почти касались левой кромки поля.
-            Card card = new Card(); card.Dock = DockStyle.Fill;
-            card.Padding = new Padding((int)(u * 1.1F), (int)(u * 0.8F), (int)(u * 0.4F), (int)(u * 0.6F));
+            Card card = new Card(); card.Dock = DockStyle.Fill; card.Padding = new Padding((int)(u*0.6F));
             card.Margin = new Padding(0,(int)(u*0.5F),0,(int)(u*0.3F));
             card.BackColor = Theme.LogBg;
+            // Отступ текста — внутри тёмного поля: строки журнала прижимались
+            // к его левому краю. Поле того же цвета, что и журнал, с полями.
+            Panel logField = new Panel();
+            logField.Dock = DockStyle.Fill; logField.BackColor = Theme.LogBg;
+            logField.Padding = new Padding((int)(u * 1.0F), (int)(u * 0.75F), (int)(u * 0.3F), (int)(u * 0.5F));
+            card.Controls.Add(logField);
             _log = new RichTextBox();
             _log.Dock = DockStyle.Fill; _log.ReadOnly = true; _log.BorderStyle = BorderStyle.None;
             _log.BackColor = Theme.LogBg; _log.ForeColor = Theme.TextDim;
@@ -68,7 +71,7 @@ namespace Win11Privacy
             _log.WordWrap = true; _log.ScrollBars = RichTextBoxScrollBars.Vertical; _log.DetectUrls = false;
             _log.TextChanged += delegate { UpdateLogEmpty(); };
             Dwm.DarkScrollbars(_log);
-            card.Controls.Add(_log);
+            logField.Controls.Add(_log);
 
             // Пока в журнале ничего нет — пояснение, а не «вывод»: подсказка
             // больше не попадает в сохранённый файл и не мешает понять, что
@@ -80,7 +83,7 @@ namespace Win11Privacy
             _logEmpty.Glyph = "";
             _logEmpty.Title = L.T("Журнал пока пуст");
             _logEmpty.Note = L.T("Здесь по шагам видно, что программа делает: применение и откат настроек, работа автозащиты и наблюдения за сетью. Если что-то пошло не так, сохраните журнал и приложите его к сообщению об ошибке.");
-            card.Controls.Add(_logEmpty);
+            logField.Controls.Add(_logEmpty);
             _logEmpty.BringToFront();
             page.Controls.Add(card, 0, 1);
             return page;
