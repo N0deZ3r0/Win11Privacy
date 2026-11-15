@@ -842,13 +842,10 @@ namespace Win11Privacy
     internal class TileGrid : Panel
     {
         public float MinTileWidthU = 13.5F;   // минимальная ширина плитки, в высотах шрифта
+        public float NarrowTileWidthU = 10.0F; // а так узко — только чтобы все встали в один ряд
         public float TileHeightU = 6.0F;      // высота плитки: хватает на две строки подписи
         public float GapU = 0.55F;            // зазор
         public int MaxCols = 4;
-        // Полоса фиксированной высоты вмещает только один ряд: если плитки
-        // не влезли по ширине, они должны сузиться, а не уехать во второй ряд,
-        // где их просто не видно.
-        public bool SingleRow;
         private bool _busy;
 
         public TileGrid()
@@ -864,20 +861,70 @@ namespace Win11Privacy
 
         private int CalcCols(int width, int count)
         {
-            if (SingleRow) return Math.Max(1, count);
+            if (count <= 0) return 1;
             int u = Font.Height;
             int gap = (int)(u * GapU);
             int minW = Math.Max(40, (int)(u * MinTileWidthU));
-            int cols = (width + gap) / (minW + gap);
-            if (cols < 1) cols = 1;
             int cap = Math.Min(MaxCols, Math.Max(1, count));
+            int cols = (width + gap) / (minW + gap);
+            if (cols < cap)
+            {
+                // Все в один ряд не влезли. Сначала — узкие плитки: заголовок и
+                // подпись у плитки сами переносятся на вторую строку и сжимаются,
+                // а лишний ряд отнимает место у списка под плитками (при 150 % в
+                // окне поменьше список сжимался в полоску внизу).
+                int narrowW = Math.Max(40, (int)(u * NarrowTileWidthU));
+                if ((width + gap) / (narrowW + gap) >= cap) cols = cap;
+            }
+            if (cols < 1) cols = 1;
             if (cols > cap) cols = cap;
-            return cols;
+            // Ряды — ровные: 4 плитки встают 2 × 2, а не 3 + 1 с одной плиткой
+            // во втором ряду, из-за которой страница выглядела развалившейся.
+            int rows = (count + cols - 1) / cols;
+            return Math.Max(1, (count + rows - 1) / rows);
+        }
+
+        // В очень невысоком окне (сжатом почти до минимума) сводка в два ряда
+        // плиток забирала всю высоту страницы, и список под ней пропадал
+        // совсем. Тогда сводка прячется: список — главное на странице. В окне
+        // обычного размера и на маленьких экранах плитки стоят в один ряд, и
+        // это правило не срабатывает.
+        private Control _host;
+        private bool _collapsed;
+
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (_host != null) _host.Resize -= OnHostResize;
+            _host = Parent;
+            if (_host != null) _host.Resize += OnHostResize;
+        }
+
+        private void OnHostResize(object sender, EventArgs e)
+        {
+            bool c = WantCollapsed(ClientSize.Width, Controls.Count);
+            if (c == _collapsed) return;
+            Arrange();
+            // высоту строки страницы пересчитывает её раскладка — следующим шагом
+            if (IsHandleCreated)
+                BeginInvoke((MethodInvoker)delegate { if (Parent != null) Parent.PerformLayout(); });
+        }
+
+        private bool WantCollapsed(int width, int count)
+        {
+            if (_host == null || count == 0 || width < 40) return false;
+            int cols = CalcCols(width, count);
+            int rows = (count + cols - 1) / cols;
+            if (rows < 2) return false;
+            int u = Font.Height;
+            int full = rows * ((int)(u * TileHeightU) + (int)(u * GapU));
+            return full > _host.ClientSize.Height * 0.34F;
         }
 
         private int GridHeight(int width, int count)
         {
             if (count == 0) return 0;
+            if (WantCollapsed(width, count)) return 0;
             int u = Font.Height;
             int gap = (int)(u * GapU);
             int th = (int)(u * TileHeightU);
@@ -903,10 +950,13 @@ namespace Win11Privacy
                 int th = (int)(u * TileHeightU);
                 int w = ClientSize.Width;
                 if (w < 40) return;
+                _collapsed = WantCollapsed(w, Controls.Count);
                 int cols = CalcCols(w, Controls.Count);
                 int tw = (w - gap * (cols - 1)) / cols;
                 for (int i = 0; i < Controls.Count; i++)
                 {
+                    Controls[i].Visible = !_collapsed;
+                    if (_collapsed) continue;
                     int r = i / cols, c = i % cols;
                     Controls[i].SetBounds(c * (tw + gap), r * (th + gap), tw, th);
                 }

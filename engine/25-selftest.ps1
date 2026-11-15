@@ -54,23 +54,21 @@ if ($SelfTest) {
     if ($p.error) { Write-Log ("   [!] {0}" -f $p.error) }
     Write-Log ("   [{0}] запись в реестр системы (HKLM) — сюда идут политики" -f $(if ($r.hklm) { '+' } else { '!' }))
 
-    # --- резервная копия на рабочий стол ---
+    # --- хранилище резервных копий ---
+    # Копии лежат в ProgramData\Win11Privacy\backups (W11P-005): защищённый
+    # корень и путь до него, само хранилище — не ссылка и без чужих прав.
+    # Пробная выгрузка не делается: на рабочий стол движок больше не пишет.
     $r.backup = $false
-    $root = if ($BackupRoot) { $BackupRoot } else { [Environment]::GetFolderPath('Desktop') }
-    Write-Log ("   папка для копий       : {0}" -f $root)
+    $store = Get-BackupStoreDir
+    Write-Log ("   папка для копий       : {0}" -f $store)
     try {
-        # имя с случайным хвостом и без Remove-Item -Recurse: папка на рабочем
-        # столе, куда пишет любая программа пользователя (см. Ensure-Backup)
-        $probeDir = Join-Path $root ('Win11Privacy-SelfTest-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-        $null = [IO.Directory]::CreateDirectory($probeDir)
-        if ((Get-Item -LiteralPath $probeDir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'на месте пробной папки оказалась ссылка' }
-        $probeFile = Join-Path $probeDir 'probe.reg'
-        $null = & reg.exe export 'HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo' "$probeFile" /y 2>&1
-        $r.backup = (Test-Path -LiteralPath $probeDir)
-        $rmProbe = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
-        Remove-TreeNoFollow $probeDir $rmProbe
+        if (-not (Assert-SafeRoot)) { throw 'папка ProgramData\Win11Privacy не защищена' }
+        if (Test-Path -LiteralPath $store) {
+            if (-not (Test-ItemTrusted (Get-Item -LiteralPath $store -Force))) { throw 'хранилище копий не защищено (ссылка или чужие права)' }
+        }
+        $r.backup = $true
     } catch { Write-Log ("   [!] {0}" -f $_.Exception.Message) }
-    Write-Log ("   [{0}] создание папки резервной копии" -f $(if ($r.backup) { '+' } else { '!' }))
+    Write-Log ("   [{0}] хранилище резервных копий" -f $(if ($r.backup) { '+' } else { '!' }))
 
     # --- службы, задачи, брандмауэр, hosts ---
     $r.services = $false
@@ -95,7 +93,7 @@ if ($SelfTest) {
     $bad = @()
     if (-not $r.admin)  { $bad += 'нет прав администратора' }
     if (-not $r.hklm)   { $bad += 'нельзя писать в реестр системы' }
-    if (-not $r.backup) { $bad += 'нельзя создать папку резервной копии' }
+    if (-not $r.backup) { $bad += 'хранилище резервных копий не защищено' }
     if ($bad.Count -eq 0) {
         Write-Log 'ИТОГ: всё работает — программа может применять настройки на этом компьютере.'
         Write-Log 'Если изменения всё равно не применяются, пришлите этот журнал целиком.'

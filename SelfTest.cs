@@ -1,6 +1,7 @@
 ﻿#if SELFTEST
 using System;
 using System.Collections.Generic;
+using System.IO;
 
 namespace Win11Privacy
 {
@@ -39,15 +40,31 @@ namespace Win11Privacy
 
             Versions();
             Commands();
+            Requests();
+            Boundary();
             Arguments();
+            SensorKeys();
+            WindowSize();
             Profiles();
             Verdict();
             Answers();
             Language();
+            DataRootChain();
 
             Console.WriteLine();
             Console.WriteLine("Пройдено: " + _passed + ", провалено: " + _failed);
             return _failed > 0 ? 1 : 0;
+        }
+
+        // --- путь до папки данных (W11P-006) --------------------------------- //
+        private static void DataRootChain()
+        {
+            Console.WriteLine("Путь до папки данных");
+            string win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            Check("путь до папки Windows подменить нельзя", EngineFile.ChainSecure(Path.Combine(win, "System32")));
+            Check("путь до ProgramData подменить нельзя", EngineFile.ChainSecure(EngineFile.ProgramDataDir()));
+            Check("временная папка пользователя — путь не защищён", !EngineFile.ChainSecure(Path.GetTempPath()));
+            Check("несуществующая папка — не защищена", !EngineFile.ChainSecure(Path.Combine(Path.GetTempPath(), "w11p-no-such-" + Guid.NewGuid().ToString("N"))));
         }
 
         // --- язык интерфейса ------------------------------------------------- //
@@ -88,24 +105,233 @@ namespace Win11Privacy
         {
             Console.WriteLine();
             Console.WriteLine("Что считается изменением системы");
-            Check("применение модулей меняет", MainForm.EngineWrites("-Modules telemetry,ads"));
-            Check("тестовый прогон не меняет", !MainForm.EngineWrites("-Modules telemetry -DryRun"));
-            Check("проверка не меняет", !MainForm.EngineWrites("-Audit -Modules telemetry"));
-            Check("проверка с доказательством не меняет", !MainForm.EngineWrites("-Audit -WithProof"));
-            Check("откат меняет", MainForm.EngineWrites("-Revert"));
-            Check("возврат записей меняет", MainForm.EngineWrites("-RestoreItems -ChangeItems abc"));
-            Check("удаление приложений меняет", MainForm.EngineWrites("-RemoveApps -AppItems a,b -AllUsers"));
-            Check("стирание следа меняет", MainForm.EngineWrites("-FootprintWipe -WipeItems ads"));
-            Check("чтение следа не меняет", !MainForm.EngineWrites("-Footprint"));
-            Check("смена номера устройства меняет", MainForm.EngineWrites("-GdidReissue"));
-            Check("возврат номера устройства меняет", MainForm.EngineWrites("-GdidRestore"));
-            Check("чтение номера устройства не меняет", !MainForm.EngineWrites("-GdidStatus"));
-            Check("досье не меняет", !MainForm.EngineWrites("-Spy"));
-            Check("список настроек не меняет", !MainForm.EngineWrites("-ListDefs"));
-            Check("хронология не меняет", !MainForm.EngineWrites("-Timeline -TimelineDays 30"));
-            Check("сканирование рентгена не меняет", !MainForm.EngineWrites("-XrayScan -XrayHours 24"));
-            Check("включение записи рентгена меняет", MainForm.EngineWrites("-XrayEnable"));
-            Check("пустая строка ничего не меняет", !MainForm.EngineWrites(""));
+            Check("применение модулей меняет", MainForm.EngineWrites(new EngineRequest("Apply").List("Modules", new[] { "telemetry", "ads" })));
+            Check("тестовый прогон не меняет", !MainForm.EngineWrites(new EngineRequest("Apply").List("Modules", new[] { "telemetry" }).Switch("DryRun")));
+            Check("проверка не меняет", !MainForm.EngineWrites(new EngineRequest("Audit").List("Modules", new[] { "telemetry" })));
+            Check("проверка с доказательством не меняет", !MainForm.EngineWrites(new EngineRequest("Audit").Switch("WithProof")));
+            Check("откат меняет", MainForm.EngineWrites(new EngineRequest("Revert")));
+            Check("возврат записей меняет", MainForm.EngineWrites(new EngineRequest("RestoreItems").List("ChangeItems", new[] { "abc" })));
+            Check("удаление приложений меняет", MainForm.EngineWrites(new EngineRequest("RemoveApps").List("AppItems", new[] { "a", "b" }).Switch("AllUsers")));
+            Check("стирание следа меняет", MainForm.EngineWrites(new EngineRequest("FootprintWipe").List("WipeItems", new[] { "ads" })));
+            Check("чтение следа не меняет", !MainForm.EngineWrites(new EngineRequest("Footprint")));
+            Check("смена номера устройства меняет", MainForm.EngineWrites(new EngineRequest("GdidReissue")));
+            Check("возврат номера устройства меняет", MainForm.EngineWrites(new EngineRequest("GdidRestore")));
+            Check("чтение номера устройства не меняет", !MainForm.EngineWrites(new EngineRequest("GdidStatus")));
+            Check("досье не меняет", !MainForm.EngineWrites(new EngineRequest("Spy")));
+            Check("список настроек не меняет", !MainForm.EngineWrites(new EngineRequest("ListDefs")));
+            Check("хронология не меняет", !MainForm.EngineWrites(new EngineRequest("Timeline").Int("TimelineDays", 30)));
+            Check("сканирование рентгена не меняет", !MainForm.EngineWrites(new EngineRequest("XrayScan").Int("XrayHours", 24)));
+            Check("замер «до» меняет", MainForm.EngineWrites(new EngineRequest("XrayScan").Switch("XrayBaseline")));
+            Check("включение записи рентгена меняет", MainForm.EngineWrites(new EngineRequest("XrayEnable")));
+            Check("доступ к датчику меняет", MainForm.EngineWrites(new EngineRequest("SensorSet").Str("SensorKey", "webcam").Str("SensorValue", "Deny")));
+            Check("без запроса ничего не меняет", !MainForm.EngineWrites(null));
+
+            // W11P-003: успех — только «ok» в ответе И код выхода 0
+            Console.WriteLine();
+            Console.WriteLine("Ответ движка: «ok» и код выхода");
+            Check("ok и код 0 — успех", MainForm.EngineSucceeded(Answer("{\"ok\":true}", 0)));
+            Check("ok:false и код 2 — неудача", !MainForm.EngineSucceeded(Answer("{\"ok\":false,\"error\":\"x\"}", 2)));
+            Check("ok:true, но код 2 — неудача (расхождение)", !MainForm.EngineSucceeded(Answer("{\"ok\":true}", 2)));
+            Check("ok:false и код 0 — неудача (прежнее поведение SensorSet)", !MainForm.EngineSucceeded(Answer("{\"ok\":false}", 0)));
+            Check("нет поля ok — неудача", !MainForm.EngineSucceeded(Answer("{\"error\":\"request rejected\"}", 64)));
+            Check("нет ответа — неудача", !MainForm.EngineSucceeded(null));
+            Check("ответ без кода выхода (как раньше) — по полю ok", MainForm.EngineSucceeded(Json.ParseObject("{\"ok\":true}")));
+        }
+
+        private static Dictionary<string, object> Answer(string json, int code)
+        {
+            Dictionary<string, object> d = Json.ParseObject(json);
+            d["_exitCode"] = code;
+            return d;
+        }
+
+        // --- граница окно → движок по-настоящему (F-08) ------------------------ //
+        //  Запускается настоящий powershell.exe с движком (путь — в
+        //  WIN11_TEST_ENGINE) теми же функциями, что у окна и тихого режима:
+        //  EngineProcess (постоянная командная строка), SendRequest (запись
+        //  запроса в фоне, как у окна) и StartWithRequest (тихий режим).
+        //  Проверяется, какую операцию движок на самом деле выбрал: с
+        //  WIN11_ENGINE_TRACE=1 он печатает «###OP### <операция>». Только
+        //  чтение: в положительных случаях — DataInfo, разрушительное не зовётся.
+        private sealed class EngineResult
+        {
+            public int Code;
+            public string Out = "";
+            public List<string> Ops = new List<string>();
+            public string Describe() { return "код " + Code + ", операции: [" + string.Join(",", Ops.ToArray()) + "]"; }
+        }
+
+        private static EngineResult RunReal(string engine, EngineRequest req, bool asWindow) { return RunReal(engine, req, asWindow, "1"); }
+
+        private static EngineResult RunReal(string engine, EngineRequest req, bool asWindow, string trace)
+        {
+            System.Diagnostics.ProcessStartInfo psi = MainForm.EngineProcess(engine);
+            psi.EnvironmentVariables["WIN11_ENGINE_TRACE"] = trace;
+            System.Diagnostics.Process p;
+            System.Text.StringBuilder err = new System.Text.StringBuilder();
+            if (asWindow)
+            {
+                p = System.Diagnostics.Process.Start(psi);
+                p.ErrorDataReceived += delegate(object s, System.Diagnostics.DataReceivedEventArgs e) { if (e.Data != null) lock (err) err.AppendLine(e.Data); };
+                p.BeginErrorReadLine();
+                MainForm.SendRequest(p, req.ToJson());
+            }
+            else p = MainForm.StartWithRequest(psi, req);
+            EngineResult r = new EngineResult();
+            r.Out = p.StandardOutput.ReadToEnd();
+            p.WaitForExit();
+            r.Code = p.ExitCode;
+            foreach (string line in r.Out.Split('\n'))
+            {
+                string t = line.Trim();
+                if (t.StartsWith("###OP###")) r.Ops.Add(t.Substring(8).Trim());
+            }
+            return r;
+        }
+
+        private static void Boundary()
+        {
+            Console.WriteLine();
+            Console.WriteLine("Граница окно → движок (F-08)");
+            string engine = Environment.GetEnvironmentVariable("WIN11_TEST_ENGINE");
+            if (string.IsNullOrEmpty(engine) || !System.IO.File.Exists(engine))
+            {
+                Console.WriteLine("  [пропуск] WIN11_TEST_ENGINE не задан — движок не запускался");
+                return;
+            }
+            EngineRequest attack = new EngineRequest("SensorSet")
+                .Str("SensorKey", "webcam\\NonPackaged\\evil\" -XrayStatus \"").Str("SensorValue", "Deny");
+            EngineResult r = RunReal(engine, attack, true);
+            Check("A (как окно): кавычка и -XrayStatus в ключе — отказ до выбора операции", r.Code == 64 && r.Ops.Count == 0, r.Describe());
+            Check("A (как окно): -XrayStatus не выполнялся", r.Out.IndexOf("###OP### XrayStatus", StringComparison.Ordinal) < 0);
+            r = RunReal(engine, attack, false);
+            Check("A (тихий режим): тот же отказ", r.Code == 64 && r.Ops.Count == 0, r.Describe());
+            r = RunReal(engine, new EngineRequest("SensorSet").Str("SensorKey", "webcam\\NonPackaged\\x -XrayStatus -XrayWipe").Str("SensorValue", "Deny"), true);
+            Check("A: «-XrayStatus» без кавычки — данные: выбрана только SensorSet", r.Ops.Count == 1 && r.Ops[0] == "SensorSet", r.Describe());
+
+            r = RunReal(engine, new EngineRequest("DataInfo").WithCommon("C:\\Temp\\x -PurgeData -XrayWipe -Revert", null), true);
+            Check("B: «-PurgeData -XrayWipe -Revert» в пути рабочего стола — выбрана только DataInfo", r.Ops.Count == 1 && r.Ops[0] == "DataInfo", r.Describe());
+            Check("B: данные программы не удалялись", r.Out.IndexOf("Удаление данных программы", StringComparison.Ordinal) < 0);
+            r = RunReal(engine, new EngineRequest("RestoreBackup").Str("BackupPath", "C:\\x\" -PurgeData -RestoreAll \""), true);
+            Check("B: путь копии с кавычкой и -PurgeData — отказ, операции нет", r.Code == 64 && r.Ops.Count == 0, r.Describe());
+
+            string[] corpus = {
+                "C:\\a b", "C:\\a\"b", "C:\\a\"\"b", "C:\\a\\", "C:\\a\\\\", "C:\\Путь\\Кириллица", "", " ", "C:\\a\nb", "C:\\a\rb",
+                "C:\\a\tb", "C:\\a & b | c ^ d", "C:\\a -PurgeData", "-PurgeData", "--% -Revert", "C:\\$(Remove-Item C:\\x)",
+                "C:\\a' -XrayWipe '", "C:\\a;b", "C:\\a`b", "C:\\a\u0000b", "\\\\server\\share", "\"-XrayStatus\"", "C:\\\ud83d\ude00" };
+            List<string> bad = new List<string>();
+            foreach (string v in corpus)
+            {
+                r = RunReal(engine, new EngineRequest("DataInfo").Str("BackupRoot", v), true);
+                bool fine = (r.Code == 64 && r.Ops.Count == 0) || (r.Ops.Count == 1 && r.Ops[0] == "DataInfo");
+                if (!fine) bad.Add("[" + v + "] " + r.Describe());
+            }
+            Check("E: ни одно из " + corpus.Length + " враждебных значений не сменило операцию", bad.Count == 0, string.Join(" | ", bad.ToArray()));
+            r = RunReal(engine, new EngineRequest("DataInfo").Str("BackupRoot", "C:\\Путь\\Кириллица"), true);
+            Check("E: кириллица в пути доходит до движка (\\u-последовательности)", r.Ops.Count == 1 && r.Ops[0] == "DataInfo", r.Describe());
+
+            // F: каждая форма запроса, которую строит окно, проходит схему движка
+            // (режим «только принять запрос»: движок называет операцию и выходит,
+            // ничего не делая — разрушительные операции так проверить безопасно)
+            string desk = "C:\\Users\\Тест\\Desktop";
+            string[] mods = { "telemetry", "ads", "app_vscode" };
+            string[] skip = { "telemetry#3", "ads#12" };
+            List<EngineRequest> shapes = new List<EngineRequest>();
+            shapes.Add(new EngineRequest("Apply").List("Modules", mods).Switch("EmptyRecycleBin").List("SkipItems", skip)
+                .Switch("DryRun").Switch("NoBackup").Switch("NoRestorePoint").Switch("AllProfiles"));
+            shapes.Add(new EngineRequest("Apply").List("Modules", new[] { "gdid", "gdidlock" }).List("SkipItems", skip));
+            shapes.Add(new EngineRequest("Audit").List("Modules", mods).List("SkipItems", skip));
+            shapes.Add(new EngineRequest("Audit").Switch("WithProof").List("SkipItems", skip));
+            shapes.Add(new EngineRequest("InstallGuard").List("Modules", mods).List("SkipItems", skip).Switch("GuardDaily"));
+            shapes.Add(new EngineRequest("Monitor").Int("MonitorHours", 24));
+            shapes.Add(new EngineRequest("SnapshotDiff").Str("SnapshotDiff", "snap-20261101-120000.json|snap-20261114-090000.json"));
+            shapes.Add(new EngineRequest("Spy").Switch("SpyAll"));
+            shapes.Add(new EngineRequest("RemoveApps").List("AppItems", new[] { "Microsoft.BingNews", "Clipchamp.Clipchamp" }).Switch("AllUsers"));
+            shapes.Add(new EngineRequest("StartupSet").Str("StartupValue", "Off").List("StartupItems", new[] { "cnVufEhLQ1V8U3RlYW0", "cnVufEhLTE18U2VjdXJpdHlIZWFsdGg" }));
+            shapes.Add(new EngineRequest("StartupSet").Str("StartupValue", "On").List("StartupItems", new[] { "cnVufEhLQ1V8U3RlYW0" }));
+            shapes.Add(new EngineRequest("RestoreItems").List("ChangeItems", new[] { "cmVnfEhLQ1V8eA", "c3RhcnR1cHx4" }));
+            shapes.Add(new EngineRequest("RestoreBackup").Str("BackupPath", desk + "\\Win11Privacy-Backup-20261114-120000"));
+            shapes.Add(new EngineRequest("SensorSet").Str("SensorKey", "webcam\\Microsoft.WindowsCamera_8wekyb3d8bbwe").Str("SensorValue", "Deny"));
+            shapes.Add(new EngineRequest("SensorSet").Str("SensorKey", "microphone\\NonPackaged\\C:#Program Files#App#app.exe").Str("SensorValue", "Allow"));
+            shapes.Add(new EngineRequest("BlockApp").Str("AppPath", "C:\\Program Files\\App (x86)\\app.exe"));
+            shapes.Add(new EngineRequest("UnblockApp").Str("AppPath", "C:\\Program Files\\App (x86)\\app.exe"));
+            shapes.Add(new EngineRequest("FootprintWipe").List("WipeItems", new[] { "adid", "recent", "dnscache" }));
+            shapes.Add(new EngineRequest("Timeline").Int("TimelineDays", 30));
+            shapes.Add(new EngineRequest("XrayScan").Int("XrayHours", 24));
+            shapes.Add(new EngineRequest("XrayScan").Int("XrayHours", 24).Switch("XrayBaseline"));
+            foreach (string op in new[] { "Revert", "LeakTest", "CleanJunk", "EnableMonitor", "DisableMonitor", "InstallNetGuard",
+                                          "RemoveNetGuard", "RemoveGuard", "GuardNow", "InstallSensorGuard", "RemoveSensorGuard",
+                                          "InstallWatcher", "RemoveWatcher", "Snapshot", "SnapshotList", "ListDefs", "Detect", "Spy",
+                                          "Footprint", "DataInfo", "PurgeData", "ListApps", "ListStartup", "ChangeLog", "RestoreAll",
+                                          "ListBackups", "GdidStatus", "GdidReissue", "GdidRestore", "XrayStatus", "XrayEnable",
+                                          "XrayDisable", "XrayWipe", "SelfTest" })
+                shapes.Add(new EngineRequest(op));
+            List<string> refused = new List<string>();
+            foreach (EngineRequest q in shapes)
+            {
+                r = RunReal(engine, q.WithCommon(desk, null), true, "2");
+                if (!(r.Code == 0 && r.Ops.Count == 1 && r.Ops[0] == q.Op)) refused.Add(q.Describe() + " -> " + r.Describe());
+            }
+            Check("F: все " + shapes.Count + " форм запросов окна проходят схему движка (без выполнения)", refused.Count == 0,
+                  string.Join(" | ", refused.ToArray()));
+            r = RunReal(engine, new EngineRequest("DataInfo").WithCommon(desk, "D:\\Портативная\\Win11Privacy-Data"), true, "2");
+            Check("F: переносимый режим (DataRoot) проходит схему", r.Code == 0 && r.Ops.Count == 1, r.Describe());
+        }
+
+        // --- запрос к движку: данные не превращаются в команды (F-08) -------- //
+        //  Командная строка движка постоянная; операция и данные — в JSON на
+        //  стандартном вводе. Здесь — что JSON из любых строк остаётся ASCII,
+        //  читается обратно в ту же строку и что имя операции из данных не
+        //  берётся. Сам движок (разбор, белый список, отказ) проверяют
+        //  tests/engine-tests.ps1 и tests/request-boundary.ps1.
+        private static void Requests()
+        {
+            Console.WriteLine();
+            Console.WriteLine("Запрос к движку (F-08)");
+            string[] nasty = {
+                "x\" -XrayStatus \"", "webcam\\NonPackaged\\evil\" -XrayStatus \"", "\"\"\"", "a\\", "a\\\\", "\\\"",
+                "C:\\Program Files\\", "", " ", "a b\tc", "line1\nline2\r", "-PurgeData", "-Revert -RestoreAll",
+                "$(Remove-Item C:\\)", "`; & | < > ^ % !", "Путь\\Кириллица\\файл.exe", "\u0000\u0001\u001f\u007f",
+                "\ud83d\ude00", "\u2028\u2029", "x' -XrayWipe '" };
+            bool allAscii = true, allBack = true;
+            foreach (string v in nasty)
+            {
+                string json = new EngineRequest("SensorSet").Str("SensorKey", v).Str("SensorValue", "Deny").ToJson();
+                foreach (char c in json) if (c < 0x20 || c > 0x7E) allAscii = false;
+                Dictionary<string, object> d = Json.ParseObject(json);
+                Dictionary<string, object> a = d == null ? null : Json.GetObj(d, "args");
+                if (d == null || Json.GetStr(d, "op") != "SensorSet" || a == null || Json.GetStr(a, "SensorKey") != v ||
+                    Json.GetStr(a, "SensorValue") != "Deny" || a.Count != 2) allBack = false;
+            }
+            Check("JSON запроса — только печатный ASCII", allAscii);
+            Check("враждебные строки читаются обратно без изменений, операция та же", allBack);
+            List<string> list = new List<string>(nasty);
+            string lj = new EngineRequest("FootprintWipe").List("WipeItems", list).ToJson();
+            List<object> back = Json.GetArr(Json.GetObj(Json.ParseObject(lj), "args"), "WipeItems");
+            bool listOk = back.Count == list.Count;
+            for (int i = 0; listOk && i < list.Count; i++) listOk = Json.Str(back[i]) == list[i];
+            Check("список с враждебными строками — те же элементы", listOk);
+            bool threw = false;
+            try { new EngineRequest("SensorSet -XrayStatus"); } catch (ArgumentException) { threw = true; }
+            Check("имя операции с пробелом и ключом — отказ", threw);
+            threw = false;
+            try { new EngineRequest("Detect").Str("Sensor Key", "x"); } catch (ArgumentException) { threw = true; }
+            Check("имя аргумента не из букв — отказ", threw);
+            threw = false;
+            try { new EngineRequest("Detect").Str("BackupRoot", "a").Str("BackupRoot", "b"); } catch (ArgumentException) { threw = true; }
+            Check("повтор аргумента — отказ", threw);
+            System.Diagnostics.ProcessStartInfo p1 = MainForm.EngineProcess(@"C:\ProgramData\Win11Privacy\bin\engine.ps1");
+            Check("командная строка движка постоянная", p1.Arguments ==
+                  "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\ProgramData\\Win11Privacy\\bin\\engine.ps1\" -Request",
+                  p1.Arguments);
+            Check("запрос идёт через стандартный ввод", p1.RedirectStandardInput);
+            threw = false;
+            try { MainForm.EngineProcess("C:\\x\" -XrayStatus \"\\engine.ps1"); } catch (InvalidOperationException) { threw = true; }
+            Check("кавычка в пути к движку — отказ", threw);
+            EngineRequest common = new EngineRequest("Detect").WithCommon("C:\\Users\\u\\Desktop\" -PurgeData \"", null);
+            Dictionary<string, object> ca = Json.GetObj(Json.ParseObject(common.ToJson()), "args");
+            Check("путь рабочего стола — данные запроса, а не ключи", ca != null && ca.Count == 1 &&
+                  Json.GetStr(ca, "BackupRoot") == "C:\\Users\\u\\Desktop\" -PurgeData \"");
         }
 
         // --- аргументы при перезапуске с правами администратора -------------- //
@@ -121,13 +347,73 @@ namespace Win11Privacy
             Check("без аргументов — пустая строка", MainForm.QuoteArgs(new string[0]) == "");
         }
 
+        // --- ключ датчика не должен уметь подставить ключ движка ------------- //
+        //  Имя подраздела ConsentStore идёт в командную строку движка. Кавычка в
+        //  нём закрыла бы -SensorKey, и остаток строки движок разобрал бы как свои
+        //  ключи (с правами администратора). Такой ключ окно к запуску не пускает.
+        private static void SensorKeys()
+        {
+            Console.WriteLine();
+            Console.WriteLine("Ключ датчика: защита от подстановки ключей движка");
+            Check("обычный пакет проходит", MainForm.IsSafeConsentKey(@"webcam\Microsoft.WindowsCamera_8wekyb3d8bbwe"));
+            Check("путь NonPackaged проходит", MainForm.IsSafeConsentKey(@"microphone\NonPackaged\C:#Windows#System32#notepad.exe"));
+            Check("разрешение без приложения проходит", MainForm.IsSafeConsentKey("location"));
+            Check("кавычка с ключом движка — отказ", !MainForm.IsSafeConsentKey("webcam\\NonPackaged\\x\" -XrayWipe \""));
+            Check("просто кавычка — отказ", !MainForm.IsSafeConsentKey("webcam\\x\"y"));
+            Check("переход вверх (..) — отказ", !MainForm.IsSafeConsentKey(@"webcam\..\..\evil"));
+            Check("разрешение не из букв — отказ", !MainForm.IsSafeConsentKey(@"web cam\app"));
+            Check("пустой сегмент — отказ", !MainForm.IsSafeConsentKey(@"webcam\\app"));
+            Check("пусто — отказ", !MainForm.IsSafeConsentKey(""));
+            Check("разрешение с точкой (sensors.custom) проходит", MainForm.IsSafeConsentKey(@"sensors.custom\Microsoft.WindowsMaps_8wekyb3d8bbwe"));
+            Check("кириллица в пути программы проходит", MainForm.IsSafeConsentKey("webcam\\NonPackaged\\C:#Программы#Камера#cam.exe"));
+            Check("NonPackaged без программы — отказ", !MainForm.IsSafeConsentKey(@"webcam\NonPackaged"));
+            Check("путь с диском вместо ключа — отказ", !MainForm.IsSafeConsentKey(@"C:\Windows\x"));
+            Check("корень реестра — отказ", !MainForm.IsSafeConsentKey(@"HKLM:\SOFTWARE\x"));
+            Check("сетевой путь программы — отказ", !MainForm.IsSafeConsentKey(@"webcam\NonPackaged\##server#share#x.exe"));
+            Check("пакет без издателя — отказ", !MainForm.IsSafeConsentKey(@"webcam\JustAName"));
+            Check("ведущая обратная косая — отказ", !MainForm.IsSafeConsentKey(@"\webcam\x_8wekyb3d8bbwe"));
+            Check("замыкающая обратная косая — отказ", !MainForm.IsSafeConsentKey(@"webcam\"));
+            Check("управляющий символ — отказ", !MainForm.IsSafeConsentKey("webcam\\x\n_8wekyb3d8bbwe"));
+            Check("слишком длинный ключ — отказ", !MainForm.IsSafeConsentKey("webcam\\NonPackaged\\C:#" + new string('a', 320)));
+        }
+
+        // --- размер окна при открытии на разных экранах ----------------------- //
+        //  Окно открывается обычного размера (как «Безопасность Windows»), а не
+        //  запомненного в пикселях: тот после смены масштаба Windows давал окно
+        //  то слишком маленькое, то огромное. u — высота шрифта: 17 при 100 %,
+        //  21 при 125 %, 26 при 150 %, 34 при 200 %.
+        private static System.Drawing.Size Sz(int w, int h) { return new System.Drawing.Size(w, h); }
+        private static System.Drawing.Rectangle Wa(int w, int h) { return new System.Drawing.Rectangle(0, 0, w, h); }
+
+        private static void WindowSize()
+        {
+            Console.WriteLine();
+            Console.WriteLine("Размер окна при открытии на разных экранах");
+            System.Drawing.Size s;
+            s = MainForm.DefaultClientSize(26, Wa(3072, 1848));
+            Check("3072 × 1920, 150 % — полный размер", s == Sz(1716, 1092), s.ToString());
+            s = MainForm.DefaultClientSize(26, Wa(2560, 1368));
+            Check("2560 × 1440, 150 % — полный размер", s == Sz(1716, 1092), s.ToString());
+            s = MainForm.DefaultClientSize(34, Wa(3840, 2064));
+            Check("3840 × 2160, 200 % — полный размер", s == Sz(2244, 1428), s.ToString());
+            s = MainForm.DefaultClientSize(26, Wa(1920, 1008));
+            Check("1920 × 1080, 150 % — ниже, по экрану", s == Sz(1716, 947), s.ToString());
+            s = MainForm.DefaultClientSize(17, Wa(1920, 1032));
+            Check("1920 × 1080, 100 % — полный размер", s == Sz(1122, 714), s.ToString());
+            s = MainForm.DefaultClientSize(17, Wa(1366, 720));
+            Check("1366 × 768, 100 % — ниже, по экрану", s == Sz(1122, 676), s.ToString());
+            s = MainForm.DefaultClientSize(21, Wa(1366, 708));
+            Check("1366 × 768, 125 % — по экрану с обеих сторон", s == Sz(1284, 665), s.ToString());
+        }
+
         // --- тихий режим: что из файла профиля попадёт в командную строку ---- //
         //  Имена модулей и пунктов шли в неё как есть: «telemetry -Revert» в
         //  подложенном файле добавил бы к запуску другой ключ движка.
         private static string SilentArgs(string json)
         {
             string why;
-            return MainForm.SilentProfileArgs(Json.ParseObject(json), out why);
+            EngineRequest r = MainForm.SilentProfileArgs(Json.ParseObject(json), out why);
+            return r == null ? null : r.ToJson();
         }
 
         private static void Profiles()
@@ -136,16 +422,17 @@ namespace Win11Privacy
             Console.WriteLine("Профиль тихого режима");
             Check("обычный профиль собирается",
                   SilentArgs("{\"modules\":[\"telemetry\",\"app_vscode\"],\"skip\":[\"telemetry#3\"]}") ==
-                  "-Modules telemetry,app_vscode -SkipItems telemetry#3");
+                  "{\"v\":1,\"op\":\"Apply\",\"args\":{\"Modules\":[\"telemetry\",\"app_vscode\"],\"SkipItems\":[\"telemetry#3\"]}}");
             Check("ключ движка в имени модуля — отказ", SilentArgs("{\"modules\":[\"telemetry -Revert\"]}") == null);
             Check("ключ движка в номере пункта — отказ",
                   SilentArgs("{\"modules\":[\"telemetry\"],\"skip\":[\"a#1 -PurgeData\"]}") == null);
             Check("кавычка в имени модуля — отказ", SilentArgs("{\"modules\":[\"tele\\\"metry\"]}") == null);
             Check("пустой список модулей — отказ", SilentArgs("{\"modules\":[]}") == null);
             Check("повтор модуля не удваивается",
-                  SilentArgs("{\"modules\":[\"ads\",\"ads\"]}") == "-Modules ads");
-            Check("выключенная копия даёт -NoBackup",
-                  SilentArgs("{\"modules\":[\"ads\"],\"backup\":false}") == "-Modules ads -NoBackup");
+                  SilentArgs("{\"modules\":[\"ads\",\"ads\"]}") == "{\"v\":1,\"op\":\"Apply\",\"args\":{\"Modules\":[\"ads\"]}}");
+            Check("выключенная копия даёт NoBackup",
+                  SilentArgs("{\"modules\":[\"ads\"],\"backup\":false}") ==
+                  "{\"v\":1,\"op\":\"Apply\",\"args\":{\"Modules\":[\"ads\"],\"NoBackup\":true}}");
         }
 
         // --- вердикт о версии на GitHub -------------------------------------- //

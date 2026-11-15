@@ -32,8 +32,11 @@ namespace Win11Privacy
             page.BackColor = Theme.WindowBg;
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             page.RowStyles.Add(new RowStyle(SizeType.Absolute, (int)(u * 7.6F)));
-            page.RowStyles.Add(new RowStyle(SizeType.Absolute, (int)(u * 14F)));
-            page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            // График и список делят остаток высоты в долях, а не график — ровно
+            // 14 высот шрифта: в невысоком окне (1366 × 768 при 125 %) график
+            // забирал всё, и список «Что случилось» сжимался в ноль.
+            page.RowStyles.Add(new RowStyle(SizeType.Percent, 62F));
+            page.RowStyles.Add(new RowStyle(SizeType.Percent, 38F));
             page.Controls.Add(PageTitle(L.T("Хронология")), 0, 0);
 
             Card ctl = new Card();
@@ -88,7 +91,7 @@ namespace Win11Privacy
 
         private void RefreshTimeline()
         {
-            RunJson("-Timeline -TimelineDays 30", L.T("Сбор хронологии…"), RenderTimeline);
+            RunJson(new EngineRequest("Timeline").Int("TimelineDays", 30), L.T("Сбор хронологии…"), RenderTimeline);
         }
 
         private Dictionary<string, object> _lastTimeline;

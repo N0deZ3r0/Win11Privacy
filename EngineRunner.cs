@@ -46,7 +46,7 @@ namespace Win11Privacy
 
         // Запускает движок и ставит запуск на учёт. Строки вывода приходят из
         // чужого потока, конец работы — уже в потоке окна.
-        private void Launch(ProcessStartInfo psi, EngineRun run, Action<string> onLine, Action<int> onExit)
+        private void Launch(ProcessStartInfo psi, string request, EngineRun run, Action<string> onLine, Action<int> onExit)
         {
             Process p = new Process();
             p.StartInfo = psi;
@@ -71,6 +71,7 @@ namespace Win11Privacy
             run.Proc = p;
             p.Start(); p.BeginOutputReadLine(); p.BeginErrorReadLine();
             _runs.Add(run);
+            SendRequest(p, request);
         }
 
         // Занятость снимается с последним запуском; пока работает другой, в
@@ -83,28 +84,18 @@ namespace Win11Privacy
 
         private string ExtractEngine() { return EngineFile.Ensure(); }
 
-        // Команды, которые меняют систему. Всё остальное движок только читает,
-        // и обрывать его можно без последствий.
-        private static readonly string[] WriteFlags = {
-            "-Revert", "-RestoreAll", "-RestoreItems", "-RestoreBackup", "-RemoveApps",
-            "-StartupSet", "-SensorSet", "-FootprintWipe", "-XrayWipe", "-PurgeBuffer",
-            "-PurgeData", "-CleanJunk", "-BlockApp", "-UnblockApp", "-InstallGuard", "-GdidReissue", "-GdidRestore",
-            "-InstallNetGuard", "-RemoveNetGuard",
-            "-RemoveGuard", "-GuardNow", "-InstallWatcher", "-RemoveWatcher",
-            "-InstallSensorGuard", "-RemoveSensorGuard", "-EnableMonitor",
-            "-DisableMonitor", "-XrayEnable", "-XrayDisable", "-XrayBaseline"
-        };
+        // Меняет ли запрос систему — решает сам запрос (EngineRequest.Writes)
+        internal static bool EngineWrites(EngineRequest req) { return req != null && req.Writes; }
 
-        internal static bool EngineWrites(string extra)
+        // Действие удалось, только если движок сказал «ok» И завершился с
+        // кодом 0 (W11P-003). Расхождение — неудача: раньше «ok:false» с
+        // кодом 0 и наоборот могли выглядеть по-разному в разных местах.
+        internal static bool EngineSucceeded(Dictionary<string, object> d)
         {
-            if (extra == null) return false;
-            // тестовый прогон и проверка только читают, хотя список модулей у них тот же
-            if (extra.IndexOf("-DryRun", StringComparison.OrdinalIgnoreCase) >= 0) return false;
-            if (extra.IndexOf("-Audit", StringComparison.OrdinalIgnoreCase) >= 0) return false;
-            if (extra.IndexOf("-Modules", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            foreach (string f in WriteFlags)
-                if (extra.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            return false;
+            if (d == null || !Json.GetBool(d, "ok")) return false;
+            object code;
+            if (d.TryGetValue("_exitCode", out code) && !(code is int && (int)code == 0)) return false;
+            return true;
         }
 
         // «###PROGRESS### 15/34 Телеметрия» — движок говорит, сколько проверок
@@ -178,27 +169,53 @@ namespace Win11Privacy
         // Только системный PowerShell по полному пути (см. EngineFile.PowerShellPath)
         private static string PowerShellExe() { return EngineFile.PowerShellPath(); }
 
-        private ProcessStartInfo EnginePsi(string extra)
+        // Командная строка движка постоянная (F-08): путь к движку в защищённой
+        // папке и ключ -Request. Ни одного значения из данных в ней нет —
+        // операция и её данные идут на стандартный ввод (SendRequest).
+        internal static ProcessStartInfo EngineProcess(string script)
+        {
+            // путь собран из ProgramData по HKLM; кавычка в нём означала бы подмену
+            if (string.IsNullOrEmpty(script) || script.IndexOf('"') >= 0)
+                throw new InvalidOperationException("engine path");
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = PowerShellExe();
+            psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" -Request";
+            psi.UseShellExecute = false; psi.CreateNoWindow = true;
+            EngineFile.Harden(psi);             // модули, ProgramData, PATH — из системы
+            psi.RedirectStandardInput = true;
+            psi.RedirectStandardOutput = true; psi.RedirectStandardError = true;
+            psi.StandardOutputEncoding = Encoding.UTF8; psi.StandardErrorEncoding = Encoding.UTF8;
+            return psi;
+        }
+
+        // Запрос — на стандартный ввод, и сразу закрыть: движок читает его один
+        // раз и до конца. Пишем в фоне: запрос больше буфера канала ждал бы,
+        // пока PowerShell запустится, и окно бы стояло. Не дошёл (процесс уже
+        // закрылся) — движок без полного запроса ничего не делает.
+        internal static void SendRequest(Process p, string request)
+        {
+            System.IO.StreamWriter w = p.StandardInput;
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                try { w.Write(request); w.Flush(); }
+                catch { }
+                finally { try { w.Close(); } catch { } }
+            });
+        }
+
+        private ProcessStartInfo EnginePsi(EngineRequest req, out string json)
         {
             string script = ExtractEngine();
             string portable = PortableRoot();
             string backupRoot = (portable.Length > 0)
                 ? portable
                 : Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-            string args = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" " + extra +
-                          " -BackupRoot \"" + backupRoot + "\"";
-            if (portable.Length > 0) args += " -DataRoot \"" + portable + "\"";
-            ProcessStartInfo psi = new ProcessStartInfo();
-            psi.FileName = PowerShellExe(); psi.Arguments = args;
-            psi.UseShellExecute = false; psi.CreateNoWindow = true;
-            EngineFile.Harden(psi);             // модули, ProgramData, PATH — из системы
-            psi.RedirectStandardOutput = true; psi.RedirectStandardError = true;
-            psi.StandardOutputEncoding = Encoding.UTF8; psi.StandardErrorEncoding = Encoding.UTF8;
-            return psi;
+            json = req.WithCommon(backupRoot, portable).ToJson();
+            return EngineProcess(script);
         }
 
         // потоковый запуск (для действий) — вывод в журнал
-        private void RunStreaming(string extra, string statusText, Action onDone)
+        private void RunStreaming(EngineRequest req, string statusText, Action onDone)
         {
             if (EngineStreaming())
             {
@@ -210,11 +227,13 @@ namespace Win11Privacy
             SetBusy(true, statusText);
             Navigate("log");
             _log.Clear();
-            LogLine(statusText, Theme.Text);
-            LogLine(new string('─', 58), Theme.TextFaint);
+            // Заголовок — название действия; полоса из «─» в полширины окна
+            // выглядела обрывком, вместо неё — шрифт и пустые строки.
+            LogLine(statusText.TrimEnd('…', '.', ' '), Theme.Text, LogTitleFont);
 
             ProcessStartInfo psi;
-            try { psi = EnginePsi(extra); }
+            string request;
+            try { psi = EnginePsi(req, out request); }
             catch (Exception ex)
             {
                 SettleBusy(L.T("Ошибка."));
@@ -223,12 +242,12 @@ namespace Win11Privacy
                 return;
             }
 
-            LogLine(L.T("Запуск: powershell ") + extra, Theme.TextFaint);
+            LogLine(L.T("Команда движка: ") + req.Describe(), Theme.TextFaint);
             if (_detect != null && !Json.GetBool(_detect, "admin"))
                 LogLine(L.T("ВНИМАНИЕ: программа запущена без прав администратора — изменения применить нельзя."), Theme.Err);
 
             EngineRun run = new EngineRun();
-            run.Status = statusText; run.Streams = true; run.Writes = EngineWrites(extra);
+            run.Status = statusText; run.Streams = true; run.Writes = EngineWrites(req);
             Action<string> onLine = delegate(string line)
             {
                 if (line.Trim() == "###DONE###") return;
@@ -240,31 +259,31 @@ namespace Win11Privacy
                 bool stopped = run.Cancelled;
                 SettleBusy(stopped ? L.T("Прервано.") : (code == 0 ? L.T("Готово.") :
                            code == 2 ? L.T("Готово, с ошибками.") : L.T("Завершено с ошибкой.")));
-                LogLine(new string('─', 58), Theme.TextFaint);
+                LogGap();
                 if (stopped)
                 {
-                    LogLine(L.T("Прервано по вашей команде."), Theme.Err);
+                    LogLine(L.T("Прервано по вашей команде."), Theme.Err, LogSectionFont);
                     if (run.Writes) LogLine(L.T("Что движок успел изменить — записано на странице «Изменения»."), Theme.TextDim);
                 }
-                else if (code == 0) LogLine(L.T("Готово."), Theme.Text);
+                else if (code == 0) LogLine(L.T("Готово."), Theme.Ok, LogSectionFont);
                 else if (code == 2)
                 {
                     // движок дошёл до конца, но что-то не удалось — сказано выше
-                    LogLine(L.T("Готово, но не всё прошло: что именно — в строках [!] выше."), Theme.Err);
+                    LogLine(L.T("Готово, но не всё прошло: что именно — в строках [!] выше."), Theme.Err, LogSectionFont);
                 }
                 else if (code == 3)
                 {
                     // движок сам объяснил причину строкой выше
-                    LogLine(L.T("Программа не может работать на этом компьютере из-за политики устройства."), Theme.Err);
+                    LogLine(L.T("Программа не может работать на этом компьютере из-за политики устройства."), Theme.Err, LogSectionFont);
                 }
                 else
                 {
-                    LogLine(L.T("PowerShell завершился с кодом ") + code + ".", Theme.Err);
+                    LogLine(L.T("PowerShell завершился с кодом ") + code + ".", Theme.Err, LogSectionFont);
                     LogLine(L.T("Если выше нет строк движка — его блокирует антивирус или не хватает прав."), Theme.TextDim);
                 }
                 if (onDone != null) onDone();
             };
-            try { Launch(psi, run, onLine, onExit); }
+            try { Launch(psi, request, run, onLine, onExit); }
             catch (Exception ex)
             {
                 SettleBusy(L.T("Не удалось запустить PowerShell."));
@@ -276,20 +295,33 @@ namespace Win11Privacy
         }
 
         // запуск с разбором JSON (для данных) — без переключения на журнал
-        private void RunJson(string extra, string statusText, Action<Dictionary<string, object>> onResult)
+        private void RunJson(EngineRequest req, string statusText, Action<Dictionary<string, object>> onResult)
         {
             SetBusy(true, statusText);
             ProcessStartInfo psi;
-            try { psi = EnginePsi(extra); }
+            string request;
+            try { psi = EnginePsi(req, out request); }
             catch (Exception ex)
             {
+#if UITEST
+                // Тестовая сборка, запущенная без прав администратора (снимки
+                // страниц на своём компьютере): движок здесь и не должен
+                // запускаться — данные тестовые. Красная «ошибка» в журнале и
+                // в строке состояния только сбивала с толку.
+                if (!IsAdmin())
+                {
+                    SettleBusy(L.T("Готово."));
+                    if (onResult != null) onResult(null);
+                    return;
+                }
+#endif
                 SettleBusy(L.T("Ошибка."));
                 LogLine(L.T("Не удалось подготовить движок: ") + ex.Message, Theme.Err);
                 if (onResult != null) onResult(null);
                 return;
             }
             EngineRun run = new EngineRun();
-            run.Status = statusText; run.Writes = EngineWrites(extra);
+            run.Status = statusText; run.Writes = EngineWrites(req);
             string jsonLine = null;
             StringBuilder errBuf = new StringBuilder();
             object gate = new object();         // вывод и ошибки приходят из разных потоков
@@ -308,11 +340,15 @@ namespace Win11Privacy
                 SettleBusy(run.Cancelled ? L.T("Прервано.") : L.T("Готово."));
                 Dictionary<string, object> d = null;
                 if (jsonLine != null) { try { d = Json.ParseObject(jsonLine); } catch { } }
+                // Код выхода — рядом с ответом: «ok» в JSON и код процесса
+                // обязаны сходиться, и тот, кому важен успех, проверяет оба
+                // (EngineSucceeded). Ключ с подчёркиванием движок не пишет.
+                if (d != null) d["_exitCode"] = code;
                 if (d == null && errBuf.Length > 0 && !run.Cancelled)
-                    LogLine(L.T("Движок (") + extra + L.T(") не вернул данные, код ") + code + ":\n" + errBuf, Theme.Err);
+                    LogLine(L.T("Движок (") + req.Describe() + L.T(") не вернул данные, код ") + code + ":\n" + errBuf, Theme.Err);
                 if (onResult != null) onResult(d);
             };
-            try { Launch(psi, run, onLine, onExit); }
+            try { Launch(psi, request, run, onLine, onExit); }
             catch (Exception ex)
             {
                 SettleBusy(L.T("PowerShell недоступен."));

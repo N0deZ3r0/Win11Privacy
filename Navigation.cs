@@ -122,7 +122,19 @@ namespace Win11Privacy
         {
             foreach (Control c in root.Controls)
             {
-                if (c is Label && "pagetitle".Equals(c.Tag)) { c.Visible = false; return; }
+                // Метка «спрятан» — для раскладки: Visible у метки на скрытой
+                // странице всегда false, по нему не понять, спрятан ли сам заголовок
+                if (c is Label && "pagetitle".Equals(c.Tag))
+                {
+                    c.Visible = false; c.Tag = "pagetitle-hidden";
+                    // Поиск, стоявший справа от заголовка, встаёт к левому краю —
+                    // вровень с карточками, как на «Настройках». Раньше у него
+                    // оставался отступ от спрятанного заголовка.
+                    if (c.Parent != null)
+                        foreach (Control s in c.Parent.Controls)
+                            if (s is SearchBox) s.Margin = new Padding(0, s.Margin.Top, s.Margin.Right, s.Margin.Bottom);
+                    return;
+                }
                 HidePageTitle(c);
             }
         }
@@ -247,7 +259,10 @@ namespace Win11Privacy
             // считалось «узким окном», панель разделов сворачивалась, а при
             // возврате окна разворачивалась обратно — с перекладкой всех страниц.
             if (WindowState == FormWindowState.Minimized) return;
-            bool auto = ClientSize.Width < Font.Height * 58;
+            // Панель сворачивается, когда окно уже обычного (66 высот шрифта):
+            // на небольшом экране (1366 × 768 при 125 %) иначе плитки вставали
+            // в два ряда и сжимали список под ними до нуля.
+            bool auto = ClientSize.Width < Font.Height * 64;
             if (auto != _autoCollapsed) { _autoCollapsed = auto; AnimateSidebar(); }
             LayoutNav();
         }

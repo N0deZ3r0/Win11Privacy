@@ -142,6 +142,9 @@ jobs:
               /resource:app.ico,app.ico /resource:app.png,app.png `
               *.cs
           if ($LASTEXITCODE -ne 0) { throw "сборка проверок интерфейса не удалась" }
+          # граница окно → движок (F-08): SelfTest запускает настоящий движок
+          # теми же функциями, что и окно, и проверяет, какую операцию он выбрал
+          $env:WIN11_TEST_ENGINE = (Resolve-Path .\Win11-Privacy-Engine.ps1).Path
           .\selftest.exe
           $code = $LASTEXITCODE
           Remove-Item selftest.exe -Force -ErrorAction SilentlyContinue
@@ -159,6 +162,17 @@ jobs:
               /resource:app.ico,app.ico /resource:app.png,app.png `
               *.cs
           if ($LASTEXITCODE -ne 0) { throw "тестовая сборка интерфейса не удалась" }
+          # Та же сборка с крупным шрифтом — как при масштабе Windows 150 %. На
+          # агенте масштаб 100 %, и раскладка, которая ломается только на
+          # крупном масштабе (обрезанный текст в карточке, плитки 3 + 1), иначе
+          # проходила проверку, а у людей с 150 % окно «сбивалось в кучу».
+          & $csc /nologo /target:winexe "/define:UITEST;BIGFONT" /out:uitest-big.exe `
+              /reference:System.dll /reference:System.Core.dll `
+              /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
+              /resource:Win11-Privacy-Engine.ps1,engine.ps1 `
+              /resource:app.ico,app.ico /resource:app.png,app.png `
+              *.cs
+          if ($LASTEXITCODE -ne 0) { throw "тестовая сборка интерфейса с крупным шрифтом не удалась" }
           # Тестовая сборка печатает в UTF-8, и читать её надо так же. Иначе
           # «ОБРЕЗАНО» и «ВЫЛЕЗ» приходят вопросительными знаками, и проверки
           # ниже не срабатывают — так и было, пока кодировку не задали явно.
@@ -168,17 +182,19 @@ jobs:
           $env:WIN11_TEST_DUMP = '1'      # вместе со снимком печатается геометрия страницы
           $pages = @('home','settings','xray','dossier','gdid','audit','monitor','apps','startup','guard','changes','timeline','log','about')
           $bad = 0
-          # два размера окна: обычный и самый маленький — там текст обрезается первым
+          # две сборки (обычный шрифт и как при 150 %) и два размера окна:
+          # обычный и самый маленький — там текст обрезается первым
+          foreach ($build in @('uitest', 'uitest-big')) {
           foreach ($size in @('normal', 'min')) {
               if ($size -eq 'min') { $env:WIN11_TEST_SIZE = 'min' } else { Remove-Item Env:WIN11_TEST_SIZE -ErrorAction SilentlyContinue }
               foreach ($lang in @('ru','en')) {
                   if ($lang -eq 'en') { $env:WIN11_TEST_EN = '1' } else { Remove-Item Env:WIN11_TEST_EN -ErrorAction SilentlyContinue }
                   foreach ($page in $pages) {
-                      $what = "$page ($lang, $size)"
+                      $what = "$page ($lang, $size, $build)"
                       $env:WIN11_TEST_PAGE = $page
-                      $shot = "shot-$size-$lang-$page.png"
+                      $shot = "shot-$build-$size-$lang-$page.png"
                       $env:WIN11_TEST_SHOT = $shot
-                      $out = (& .\uitest.exe 2>&1 | Out-String)
+                      $out = (& ".\$build.exe" 2>&1 | Out-String)
                       $count = 0
                       if ($out -match 'controls=(\d+)') { $count = [int]$Matches[1] }
                       if ($out -notmatch 'UITEST ok') {
@@ -205,6 +221,7 @@ jobs:
                   }
               }
           }
+          }
           Remove-Item Env:WIN11_TEST_SIZE -ErrorAction SilentlyContinue
           # окно первого запуска: его видят раньше всего остального
           $env:WIN11_TEST_WELCOME = '1'
@@ -226,9 +243,9 @@ jobs:
           } else {
               Write-Host ("  ok: окно первого запуска, контролов: {0}" -f $wm.Groups[1].Value)
           }
-          Remove-Item uitest.exe, shot-*.png -Force -ErrorAction SilentlyContinue
+          Remove-Item uitest.exe, uitest-big.exe, shot-*.png -Force -ErrorAction SilentlyContinue
           if ($bad -gt 0) { throw "страниц с ошибками: $bad" }
-          Write-Host "Интерфейс: все страницы открылись на двух языках и в двух размерах окна"
+          Write-Host "Интерфейс: все страницы открылись на двух языках, в двух размерах окна и на крупном шрифте (как при 150 %)"
 
       - name: Собрать Win11Privacy.exe
         shell: pwsh
@@ -268,11 +285,42 @@ jobs:
           if (-not $manifest) { throw "в манифесте нет requireAdministrator" }
           Write-Host "Манифест: права администратора запрашиваются"
 
+      # Установщик (Inno Setup): обычная установка в Program Files или
+      # переносимая версия в папку — на выбор в самом мастере, на русском и
+      # английском. Компилятор ставится закреплённой версией с проверкой
+      # SHA-256 — как и сторонние действия выше закреплены хешем коммита.
+      - name: Собрать установщик
+        timeout-minutes: 10
+        shell: powershell
+        run: |
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe'
+          $want = 'a549929319f9120716677c685535ca4671e4b937b5fdc87e2585f32d8eb30e8c'
+          $dl = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.4.exe'
+          Invoke-WebRequest -Uri $url -OutFile $dl -UseBasicParsing
+          $got = (Get-FileHash -LiteralPath $dl -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "Inno Setup download does not match the pinned SHA-256: $got" }
+          $dir = Join-Path $env:RUNNER_TEMP 'InnoSetup'
+          $p = Start-Process -FilePath $dl -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER', ('/DIR="' + $dir + '"')) -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Inno Setup did not install (exit code $($p.ExitCode))" }
+          .\installer\build.ps1 -Iscc (Join-Path $dir 'ISCC.exe') -OutDir .
+          if ($LASTEXITCODE -ne 0) { throw 'installer build failed' }
+
+      # Установщик проверяется по-настоящему: ставит, ставит поверх, удаляет
+      # (с данными и без), распаковывает переносимую версию. Машина одноразовая.
+      - name: Проверить установщик на живой системе
+        timeout-minutes: 10
+        shell: powershell
+        env:
+          WIN11_INSTALLER_TEST: '1'
+        run: |
+          .\tests\installer-tests.ps1 -Setup .\Win11Privacy-Setup.exe -Exe .\Win11Privacy.exe
+          if ($LASTEXITCODE -ne 0) { throw 'installer checks failed (see [FAIL] lines above)' }
+
       - name: Посчитать контрольные суммы
         shell: pwsh
         run: |
           $lines = @()
-          foreach ($f in @('Win11Privacy.exe','Win11-Privacy-Engine.ps1')) {
+          foreach ($f in @('Win11Privacy-Setup.exe','Win11Privacy.exe','Win11-Privacy-Engine.ps1')) {
               $h = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
               $lines += "$h  $f"
               Write-Host "$h  $f"
@@ -298,6 +346,7 @@ jobs:
         with:
           name: Win11Privacy
           path: |
+            Win11Privacy-Setup.exe
             Win11Privacy.exe
             Win11-Privacy-Engine.ps1
             check-engine.cmd
@@ -313,6 +362,7 @@ jobs:
         with:
           name: release-files
           path: |
+            Win11Privacy-Setup.exe
             Win11Privacy.exe
             Win11-Privacy-Engine.ps1
             SHA256SUMS.txt
@@ -371,6 +421,7 @@ jobs:
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: |
+            Win11Privacy-Setup.exe
             Win11Privacy.exe
             Win11-Privacy-Engine.ps1
 
@@ -378,6 +429,7 @@ jobs:
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           files: |
+            Win11Privacy-Setup.exe
             Win11Privacy.exe
             Win11-Privacy-Engine.ps1
             SHA256SUMS.txt

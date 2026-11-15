@@ -1,0 +1,11 @@
+﻿Этот файл включает переносимый режим «Приватности Windows 11».
+Пока он лежит рядом с Win11Privacy.exe, программа хранит свои данные
+(журнал изменений, историю датчиков, снимки, резервные копии, настройки окна)
+в папке Win11Privacy-Data здесь же, а не в системе. Удалите файл — и программа
+снова будет хранить данные в C:\ProgramData\Win11Privacy.
+
+This file turns on the portable mode of Windows 11 Privacy.
+While it sits next to Win11Privacy.exe, the program keeps its data
+(change journal, sensor history, snapshots, backups, window settings)
+in the Win11Privacy-Data folder right here instead of in the system. Delete the
+file and the program goes back to keeping its data in C:\ProgramData\Win11Privacy.

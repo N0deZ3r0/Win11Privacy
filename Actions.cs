@@ -22,7 +22,7 @@ namespace Win11Privacy
             if (!dry)
             {
                 string warn = L.T("Будут изменены настройки системы (разделов: ") + mods.Count + ").";
-                if (_optBackup.Checked) warn += L.T("\n\nПеред изменениями на рабочий стол будет сохранена резервная копия реестра.");
+                if (_optBackup.Checked) warn += L.T("\n\nПеред изменениями программа сохранит у себя резервную копию реестра.");
                 if (_optRestore.Checked) warn += L.T("\nТакже будет создана точка восстановления (может занять минуту).");
                 bool hard = false; foreach (ModuleDef m in _mods) if (m.Row.Checked && m.Hard) hard = true;
                 if (hard) warn += L.T("\n\nВыбраны жёсткие меры (службы / hosts / брандмауэр / буфер).");
@@ -40,15 +40,15 @@ namespace Win11Privacy
                     L.T("Чистка: корзина"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
                     MessageBoxDefaultButton.Button2) == DialogResult.Yes;
             }
-            string extra = "-Modules " + string.Join(",", mods.ToArray());
-            if (bin) extra += " -EmptyRecycleBin";
+            EngineRequest req = new EngineRequest("Apply").List("Modules", mods);
+            req.Switch("EmptyRecycleBin", bin);
             List<string> skip = SkippedItems();
-            if (skip.Count > 0) extra += " -SkipItems " + string.Join(",", skip.ToArray());
-            if (dry) extra += " -DryRun";
-            if (!_optBackup.Checked) extra += " -NoBackup";
-            if (!_optRestore.Checked) extra += " -NoRestorePoint";
-            if (_optProfiles != null && _optProfiles.Checked) extra += " -AllProfiles";
-            RunStreaming(extra, dry ? L.T("Тестовый прогон…") : L.T("Применение настроек…"), delegate { });
+            if (skip.Count > 0) req.List("SkipItems", skip);
+            req.Switch("DryRun", dry);
+            req.Switch("NoBackup", !_optBackup.Checked);
+            req.Switch("NoRestorePoint", !_optRestore.Checked);
+            req.Switch("AllProfiles", _optProfiles != null && _optProfiles.Checked);
+            RunStreaming(req, dry ? L.T("Тестовый прогон…") : L.T("Применение настроек…"), delegate { });
         }
 
         // Набор для других компьютеров: тот же движок, что внутри программы, и
@@ -76,7 +76,7 @@ namespace Win11Privacy
                 List<string> skip = SkippedItems();
                 if (skip.Count > 0) args += " -SkipItems " + string.Join(",", skip.ToArray());
                 if (_optProfiles != null && _optProfiles.Checked) args += " -AllProfiles";
-                // без копии на рабочий стол и точки восстановления: на чужом компьютере
+                // без резервной копии и точки восстановления: на чужом компьютере
                 // их некому смотреть, а журнал для отката движок ведёт всегда
                 args += " -NoBackup -NoRestorePoint";
                 File.WriteAllText(Path.Combine(dir, "apply.cmd"), DeployCmd("apply the saved privacy settings", args), new UTF8Encoding(false));
@@ -119,10 +119,10 @@ namespace Win11Privacy
             List<string> mods = SelectedModules();
             if (mods.Count == 0)
             { MessageBox.Show(this, L.T("Не выбран ни один пункт."), L.T("Нечего применять"), MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-            string args = "-Audit -Modules " + string.Join(",", mods.ToArray());
+            EngineRequest req = new EngineRequest("Audit").List("Modules", mods);
             List<string> skip = SkippedItems();
-            if (skip.Count > 0) args += " -SkipItems " + string.Join(",", skip.ToArray());
-            RunJson(args, L.T("Сверка с текущим состоянием…"), delegate(Dictionary<string, object> d)
+            if (skip.Count > 0) req.List("SkipItems", skip);
+            RunJson(req, L.T("Сверка с текущим состоянием…"), delegate(Dictionary<string, object> d)
             {
                 if (d == null) { MessageBox.Show(this, L.T("Не удалось прочитать состояние системы."), L.T("Что изменится"), MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
                 List<string> lines = new List<string>();
@@ -169,7 +169,7 @@ namespace Win11Privacy
                 L.T("• автозащиту, слежение за датчиками и живые уведомления.\n\n") +
                 L.T("Удалённые приложения не возвращаются — их можно поставить из Microsoft Store.\n\nПродолжить?"),
                 L.T("Откат изменений"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            RunStreaming("-Revert", L.T("Откат изменений…"), delegate { RunDetect(); });
+            RunStreaming(new EngineRequest("Revert"), L.T("Откат изменений…"), delegate { RunDetect(); });
         }
 
         private void OnSaveProfile(object sender, EventArgs e)
@@ -252,20 +252,20 @@ namespace Win11Privacy
             // один прогон вместо двух: -Audit сам отдаёт блок «до и после»,
             // иначе все 191 проверка выполнялись дважды (около 30 секунд)
             List<string> skipAudit = SkippedItems();
-            string auditArgs = "-Audit -WithProof";
-            if (skipAudit.Count > 0) auditArgs += " -SkipItems " + string.Join(",", skipAudit.ToArray());
-            RunAuditInner(auditArgs);
+            EngineRequest auditReq = new EngineRequest("Audit").Switch("WithProof");
+            if (skipAudit.Count > 0) auditReq.List("SkipItems", skipAudit);
+            RunAuditInner(auditReq);
         }
 
         // Проверка идёт ~30 секунд: второй запуск поверх первого (заход на
         // «Проверку», пока идёт стартовая) только удвоил бы ожидание.
         private bool _auditBusy;
 
-        private void RunAuditInner(string auditArgs)
+        private void RunAuditInner(EngineRequest auditReq)
         {
             if (_auditBusy) return;
             _auditBusy = true;
-            RunJson(auditArgs, L.T("Проверка состояния системы…"), delegate(Dictionary<string, object> d)
+            RunJson(auditReq, L.T("Проверка состояния системы…"), delegate(Dictionary<string, object> d)
             {
                 _auditBusy = false;      // ответ приходит всегда, и при «Прервать» тоже
                 if (d == null) { _auditWhen.Text = L.T("Не удалось получить данные."); return; }
@@ -291,7 +291,7 @@ namespace Win11Privacy
                 L.T("Это проверка доступности известных адресов, а не наблюдение за трафиком.\n\n") +
                 L.T("Займёт до 15 секунд. Продолжить?"),
                 L.T("Проверить утечки"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            RunJson("-LeakTest", L.T("Проверка утечек…"), delegate(Dictionary<string, object> d)
+            RunJson(new EngineRequest("LeakTest"), L.T("Проверка утечек…"), delegate(Dictionary<string, object> d)
             {
                 Dictionary<string, object> reach = d == null ? null : Json.GetObj(d, "endpointReachability");
                 if (reach == null) { MessageBox.Show(this, L.T("Не удалось провести проверку."), L.T("Проверить утечки"), MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
@@ -335,7 +335,7 @@ namespace Win11Privacy
                 L.T("ничего не настраивают. Программа уберёт только их — те, что совпадают\n") +
                 L.T("и по номеру, и по значению.\n\nПродолжить?"),
                 L.T("Уборка за старыми версиями"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            RunStreaming("-CleanJunk", L.T("Уборка мусорных параметров…"), delegate { Navigate("audit"); RunAudit(); });
+            RunStreaming(new EngineRequest("CleanJunk"), L.T("Уборка мусорных параметров…"), delegate { Navigate("audit"); RunAudit(); });
         }
 
         // Что важно сказать на «Обзоре» прямо сейчас. Порядок не случайный:
@@ -492,13 +492,13 @@ namespace Win11Privacy
         private void OnMonitorToggle(object sender, EventArgs e)
         {
             if (_monitorEnabled)
-                RunStreaming("-DisableMonitor", L.T("Выключение наблюдения за сетью…"), delegate { _monitorEnabled = false; UpdateMonitorButton(); });
+                RunStreaming(new EngineRequest("DisableMonitor"), L.T("Выключение наблюдения за сетью…"), delegate { _monitorEnabled = false; UpdateMonitorButton(); });
             else
             {
                 if (MessageBox.Show(this, L.T("Наблюдение включит правила брандмауэра для служб телеметрии и начнёт\nвести журнал исходящих соединений — разрешённых и заблокированных.\n") +
                     L.T("Журнал безопасности при этом вырастет до 128 МБ, чтобы не вытеснять другие записи.\n\nПродолжить?"),
                     L.T("Включить наблюдение"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-                RunStreaming("-EnableMonitor", L.T("Включение наблюдения за сетью…"), delegate { _monitorEnabled = true; UpdateMonitorButton(); RefreshMonitor(); });
+                RunStreaming(new EngineRequest("EnableMonitor"), L.T("Включение наблюдения за сетью…"), delegate { _monitorEnabled = true; UpdateMonitorButton(); RefreshMonitor(); });
             }
         }
         private void UpdateMonitorButton()
@@ -513,18 +513,18 @@ namespace Win11Privacy
         private void OnNetGuardToggle(object sender, EventArgs e)
         {
             if (_netGuardOn)
-            { RunStreaming("-RemoveNetGuard", L.T("Отключение слежения за сетью…"), delegate { _netGuardOn = false; UpdateMonitorButton(); }); return; }
+            { RunStreaming(new EngineRequest("RemoveNetGuard"), L.T("Отключение слежения за сетью…"), delegate { _netGuardOn = false; UpdateMonitorButton(); }); return; }
             if (MessageBox.Show(this,
                 L.T("Каждые 15 минут программа будет сверять журнал брандмауэра. Если в сеть впервые выйдет\n") +
                 L.T("НОВАЯ программа — придёт уведомление, а здесь, на вкладке «Сеть», её можно будет отрезать.\n\n") +
                 L.T("Первый час слежение учится: всё, что выходит в сеть, считается своим.\n\nПродолжить?"),
                 L.T("Следить за новыми программами"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            RunStreaming("-InstallNetGuard", L.T("Включение слежения за сетью…"), delegate { _netGuardOn = true; RefreshMonitor(); });
+            RunStreaming(new EngineRequest("InstallNetGuard"), L.T("Включение слежения за сетью…"), delegate { _netGuardOn = true; RefreshMonitor(); });
         }
 
         private void RefreshMonitor()
         {
-            RunJson("-Monitor -MonitorHours 24", L.T("Сбор статистики соединений…"), RenderMonitor);
+            RunJson(new EngineRequest("Monitor").Int("MonitorHours", 24), L.T("Сбор статистики соединений…"), RenderMonitor);
         }
 
         private void RenderMonitor(Dictionary<string, object> d)
@@ -608,46 +608,48 @@ namespace Win11Privacy
             if (mods.Count == 0) { MessageBox.Show(this, L.T("Сначала выберите на странице «Настройки», что отслеживать."), L.T("Автозащита"), MessageBoxButtons.OK, MessageBoxIcon.Information); Navigate("settings"); return; }
             // снятые пункты страж не трогает: иначе вернул бы то, что оставлено нарочно
             List<string> skip = SkippedItems();
-            RunStreaming("-InstallGuard -Modules " + string.Join(",", mods.ToArray()) +
-                (skip.Count > 0 ? " -SkipItems " + string.Join(",", skip.ToArray()) : "") + (_guardDaily ? " -GuardDaily" : ""),
+            EngineRequest req = new EngineRequest("InstallGuard").List("Modules", mods);
+            if (skip.Count > 0) req.List("SkipItems", skip);
+            req.Switch("GuardDaily", _guardDaily);
+            RunStreaming(req,
                 L.T("Включение автозащиты…"), delegate { RunDetect(); });
         }
         private void OnGuardRemove(object sender, EventArgs e)
-        { RunStreaming("-RemoveGuard", L.T("Отключение автозащиты…"), delegate { RunDetect(); }); }
+        { RunStreaming(new EngineRequest("RemoveGuard"), L.T("Отключение автозащиты…"), delegate { RunDetect(); }); }
         private void OnGuardNow(object sender, EventArgs e)
-        { RunStreaming("-GuardNow", L.T("Проверка автозащитой…"), delegate { RunDetect(); }); }
+        { RunStreaming(new EngineRequest("GuardNow"), L.T("Проверка автозащитой…"), delegate { RunDetect(); }); }
 
         private void OnSensorToggle(object sender, EventArgs e)
         {
             if (_sensorOn)
-            { RunStreaming("-RemoveSensorGuard", L.T("Отключение слежения за датчиками…"), delegate { RunDetect(); }); return; }
+            { RunStreaming(new EngineRequest("RemoveSensorGuard"), L.T("Отключение слежения за датчиками…"), delegate { RunDetect(); }); return; }
             if (MessageBox.Show(this,
                 L.T("Каждые 30 минут программа будет тихо сверять журнал доступа к камере,\n") +
                 L.T("микрофону и геолокации. Если доступ впервые получит НОВАЯ программа —\n") +
                 L.T("вы сразу увидите уведомление.\n\n") +
                 L.T("Заодно накапливается история для графика «Кто подглядывал» на «Обзоре».\n\nПродолжить?"),
                 L.T("Слежение за датчиками"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            RunStreaming("-InstallSensorGuard", L.T("Включение слежения за датчиками…"), delegate { RunDetect(); });
+            RunStreaming(new EngineRequest("InstallSensorGuard"), L.T("Включение слежения за датчиками…"), delegate { RunDetect(); });
         }
 
         private void OnWatcherToggle(object sender, EventArgs e)
         {
-            if (_watcherOn) { RunStreaming("-RemoveWatcher", L.T("Выключение уведомлений…"), delegate { RunDetect(); }); return; }
+            if (_watcherOn) { RunStreaming(new EngineRequest("RemoveWatcher"), L.T("Выключение уведомлений…"), delegate { RunDetect(); }); return; }
             if (MessageBox.Show(this,
                 L.T("Программа будет показывать всплывающее уведомление в момент, когда\n") +
                 L.T("перехвачена попытка отправить телеметрию наружу.\n\n") +
                 L.T("Включатся правила брандмауэра и журнал безопасности. Уведомления\n") +
                 L.T("приходят не чаще одного раза в 10 минут, чтобы не мешать.\n\nПродолжить?"),
                 L.T("Живые уведомления"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            RunStreaming("-InstallWatcher", L.T("Включение уведомлений…"), delegate { RunDetect(); });
+            RunStreaming(new EngineRequest("InstallWatcher"), L.T("Включение уведомлений…"), delegate { RunDetect(); });
         }
 
         private void OnSnapshot(object sender, EventArgs e)
-        { RunStreaming("-Snapshot", L.T("Снимок состояния…"), delegate { RefreshSnapshots(); }); }
+        { RunStreaming(new EngineRequest("Snapshot"), L.T("Снимок состояния…"), delegate { RefreshSnapshots(); }); }
 
         private void RefreshSnapshots()
         {
-            RunJson("-SnapshotList", L.T("Чтение снимков…"), delegate(Dictionary<string, object> d)
+            RunJson(new EngineRequest("SnapshotList"), L.T("Чтение снимков…"), delegate(Dictionary<string, object> d)
             {
                 _snapshots = d != null ? Json.GetArr(d, "snapshots") : new List<object>();
                 RenderGuard();
@@ -655,7 +657,7 @@ namespace Win11Privacy
                 {
                     string a = Json.GetStr(Json.Obj(_snapshots[1]), "file");
                     string b = Json.GetStr(Json.Obj(_snapshots[0]), "file");
-                    RunJson("-SnapshotDiff \"" + a + "|" + b + "\"", L.T("Сравнение снимков…"), delegate(Dictionary<string, object> df)
+                    RunJson(new EngineRequest("SnapshotDiff").Str("SnapshotDiff", a + "|" + b), L.T("Сравнение снимков…"), delegate(Dictionary<string, object> df)
                     { _lastDiff = df; RenderGuard(); });
                 }
             });

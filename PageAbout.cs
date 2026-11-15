@@ -24,6 +24,8 @@ namespace Win11Privacy
         {
             int u = Font.Height;
             Panel page = new Panel(); page.BackColor = Theme.WindowBg; page.AutoScroll = true;
+            // полоса прокрутки — тёмная, как у остальных страниц (была светлой системной)
+            Dwm.DarkScrollbars(page);
             FlowLayoutPanel f = new FlowLayoutPanel();
             f.FlowDirection = FlowDirection.TopDown; f.WrapContents = false; f.AutoSize = true;
             f.Dock = DockStyle.Top; f.Padding = new Padding(0);
@@ -174,7 +176,7 @@ namespace Win11Privacy
         // Что программа накопила у себя — и кнопка это стереть
         private void RefreshDataInfo()
         {
-            RunJson("-DataInfo", L.T("Чтение данных программы…"), delegate(Dictionary<string, object> d)
+            RunJson(new EngineRequest("DataInfo"), L.T("Чтение данных программы…"), delegate(Dictionary<string, object> d)
             {
                 if (d == null) { SetAboutBody(_aboutData, L.T("Не удалось прочитать папку с данными.")); return; }
                 List<object> items = Json.GetArr(d, "items");
@@ -204,7 +206,7 @@ namespace Win11Privacy
                 L.T("Вернуть настройки «как было» после этого будет нечем — журнал отката\n") +
                 L.T("пропадёт вместе с остальным.\n\nПродолжить?"),
                 L.T("Удаление данных программы"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            RunStreaming("-PurgeData", L.T("Удаление данных программы…"), delegate { Navigate("about"); RefreshDataInfo(); });
+            RunStreaming(new EngineRequest("PurgeData"), L.T("Удаление данных программы…"), delegate { Navigate("about"); RefreshDataInfo(); });
         }
 
         // Карточки «О программе» тянутся по ширине окна, но не шире 54 строчных высот
@@ -213,9 +215,15 @@ namespace Win11Privacy
             if (_aboutFlow == null) return;
             int u = Font.Height;
             int w = Math.Max((int)(u * 24F), Math.Min((int)(u * 54F), page.ClientSize.Width - (int)(u * 1.2F)));
-            // кнопки шапки переносятся, а не уезжают за край узкого окна
+            // кнопки шапки переносятся, а не уезжают за край узкого окна.
+            // Заголовок страницы в разделе с вкладками спрятан — тогда его
+            // ширина не в счёт и отступ слева не нужен: раньше кнопки
+            // переносились на вторую строку, хотя места хватало.
             Control title = _aboutBtns.Parent.Controls[0];
-            int room = page.ClientSize.Width - title.PreferredSize.Width - title.Margin.Horizontal - _aboutBtns.Margin.Horizontal;
+            bool titleShown = !"pagetitle-hidden".Equals(title.Tag);
+            int left = titleShown ? (int)(u * 1.2F) : 0;
+            if (_aboutBtns.Margin.Left != left) _aboutBtns.Margin = new Padding(left, 0, 0, (int)(u * 0.15F));
+            int room = page.ClientSize.Width - (titleShown ? title.PreferredSize.Width + title.Margin.Horizontal : 0) - _aboutBtns.Margin.Horizontal;
             _aboutBtns.MaximumSize = new Size(Math.Max((int)(u * 12F), room), 0);
             foreach (Control c in _aboutFlow.Controls)
             {

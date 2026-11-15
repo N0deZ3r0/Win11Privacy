@@ -206,7 +206,7 @@ Copilot и Recall	Copilot and Recall
 Чтение разрешений…	Reading permissions…
 Что о вас собирают	What they collect
 Включение монитора…	Turning monitor on…
-Запуск: powershell 	Running: powershell 
+Команда движка: 	Engine command: 
 Обращений за 7 дней	Accesses in 7 days
 Реклама и подсказки	Ads and suggestions
 Сбор данных Windows	Windows data collection

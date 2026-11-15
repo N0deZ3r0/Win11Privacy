@@ -40,7 +40,7 @@ namespace Win11Privacy
 
         private void RefreshApps()
         {
-            RunJson("-ListApps", L.T("Чтение списка приложений…"), RenderApps);
+            RunJson(new EngineRequest("ListApps"), L.T("Чтение списка приложений…"), RenderApps);
         }
 
         private void RenderApps(Dictionary<string, object> d)
@@ -92,7 +92,7 @@ namespace Win11Privacy
                 L.T("Любое из них можно вернуть из Microsoft Store. Системные компоненты\n") +
                 L.T("программа не трогает.\n\nПродолжить?"),
                 L.T("Удаление приложений"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            RunStreaming("-RemoveApps -AppItems " + string.Join(",", ids.ToArray()) + " -AllUsers",
+            RunStreaming(new EngineRequest("RemoveApps").List("AppItems", ids).Switch("AllUsers"),
                 L.T("Удаление приложений…"), delegate { Navigate("apps"); RefreshApps(); });
         }
 
@@ -124,7 +124,7 @@ namespace Win11Privacy
 
         private void RefreshStartup()
         {
-            RunJson("-ListStartup", L.T("Чтение автозагрузки…"), RenderStartup);
+            RunJson(new EngineRequest("ListStartup"), L.T("Чтение автозагрузки…"), RenderStartup);
         }
 
         private void RenderStartup(Dictionary<string, object> d)
@@ -196,7 +196,7 @@ namespace Win11Privacy
                 L.T("Сами программы остаются на месте — они просто перестанут\n") +
                 L.T("запускаться при входе. Вернуть можно этой же страницей.\n\nПродолжить?"),
                 L.T("Отключение автозапуска"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            RunStreaming("-StartupSet -StartupValue " + (on ? "On" : "Off") + " -StartupItems \"" + string.Join(",", ids.ToArray()) + "\"",
+            RunStreaming(new EngineRequest("StartupSet").Str("StartupValue", on ? "On" : "Off").List("StartupItems", ids),
                 on ? L.T("Возврат автозапуска…") : L.T("Отключение автозапуска…"),
                 delegate { Navigate("startup"); RefreshStartup(); });
         }

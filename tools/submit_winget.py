@@ -182,9 +182,11 @@ def main():
         'for the same manifest update/change?\n'
         '%s'
         '- [x] Does your manifest conform to the [1.28 schema](https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest/schema/1.28.0)?\n\n'
-        'A single portable executable published in the project\'s GitHub release; the SHA256 above\n'
-        'matches `SHA256SUMS.txt` of that release. The program changes system settings and asks for\n'
-        'administrator rights itself, hence `ElevationRequirement: elevatesSelf`.\n'
+        'An Inno Setup installer published in the project\'s GitHub release; the SHA256 above\n'
+        'matches `SHA256SUMS.txt` of that release. It installs machine-wide into Program Files and\n'
+        'asks for administrator rights itself (the program changes system settings), hence\n'
+        '`Scope: machine` and `ElevationRequirement: elevatesSelf`. `ProductCode` is the installer\'s\n'
+        'AppId (`{...}_is1`), the same in every version.\n'
     ) % (PKG, validate_line)
 
     code, out, err = gh(['pr', 'create', '--repo', UPSTREAM, '--base', 'master',

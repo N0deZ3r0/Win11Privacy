@@ -33,9 +33,9 @@ UNRELEASED = ('не выпущено', 'unreleased')
 FOOTER = u"""
 ---
 
-**Как запустить:** скачайте `Win11Privacy.exe`, правый клик → Свойства → галочка «Разблокировать» → ОК, затем запустите. Программа запросит права администратора — они нужны, потому что она меняет системные настройки. Ничего устанавливать не требуется: приложение работает на встроенном в Windows .NET Framework 4.8, движок вшит внутрь exe.
+**Как установить:** скачайте `Win11Privacy-Setup.exe` и запустите. Мастер (на русском или английском — по языку Windows) предложит на выбор обычную установку — в Program Files, с ярлыком в «Пуске» и удалением через «Параметры → Приложения» — или портативную версию: просто папку, например на флешке, где программа хранит и свои данные. Через winget — одной командой: `winget install N0deZ3r0.Win11Privacy`. Можно и без установки: скачайте `Win11Privacy.exe`, правый клик → Свойства → галочка «Разблокировать» → ОК, затем запустите. Программа запросит права администратора — они нужны, потому что она меняет системные настройки. Работает на встроенном в Windows .NET Framework 4.8, движок вшит внутрь exe.
 
-**How to run:** download `Win11Privacy.exe`, right-click → Properties → tick "Unblock" → OK, then run it. It asks for administrator rights because it changes system settings. Nothing to install: it runs on the .NET Framework 4.8 built into Windows, and the engine is embedded in the exe.
+**How to install:** download `Win11Privacy-Setup.exe` and run it. The wizard (in English or Russian, following the Windows language) offers a regular installation — into Program Files, with a Start menu shortcut and removal in Settings → Apps — or a portable copy: just a folder, on a USB stick for example, where the program keeps its data too. With winget it is one command: `winget install N0deZ3r0.Win11Privacy`. It also runs without installing: download `Win11Privacy.exe`, right-click → Properties → tick "Unblock" → OK, then run it. It asks for administrator rights because it changes system settings. It runs on the .NET Framework 4.8 built into Windows, and the engine is embedded in the exe.
 
 | Файл / File | Зачем / What for |
 |---|---|
@@ -43,7 +43,7 @@ FOOTER = u"""
 
 Проверить скачанный файл / Verify the download:
 ```
-Get-FileHash Win11Privacy.exe -Algorithm SHA256
+Get-FileHash Win11Privacy-Setup.exe -Algorithm SHA256
 ```
 
 Проверить, что файл собран этим репозиторием из помеченного коммита (аттестация сборки GitHub, нужен GitHub CLI) / Check that the file was built by this repository from the tagged commit (GitHub build attestation, needs the GitHub CLI):
@@ -56,7 +56,8 @@ gh attestation verify Win11Privacy.exe --repo N0deZ3r0/Win11Privacy
 
 
 FILES = [
-    ('Win11Privacy.exe', u'Само приложение / The application'),
+    ('Win11Privacy-Setup.exe', u'Установщик: обычная установка или портативная версия — на выбор / The installer: a regular installation or a portable copy, your choice'),
+    ('Win11Privacy.exe', u'Само приложение, без установки / The application itself, no installation'),
     ('Win11-Privacy-Engine.ps1', u'Движок отдельно — можно изучить и запустить без интерфейса / The engine on its own, to read or run without the window'),
     ('SHA256SUMS.txt', u'Контрольные суммы / Checksums'),
     ('winget-manifest.zip', u'Манифест winget этой версии / The winget manifest for this version'),

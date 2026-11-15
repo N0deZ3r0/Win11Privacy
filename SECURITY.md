@@ -44,7 +44,11 @@ disable, and vulnerabilities in Windows itself.
 
 How the tool protects its data, journal and rollback — trust boundaries,
 write-ahead logging, what survives a crash, known limits — is described in
-[docs/security-model.md](docs/security-model.md).
+[docs/security-model.md](docs/security-model.md). In short: the program's data,
+undo journal, signing key and registry backups live in `C:\ProgramData\Win11Privacy`
+(registry backups in its `backups` folder), which only SYSTEM and administrators can
+change; nothing is written to the desktop. The results of the latest security review
+are in [docs/security/FINAL_SECURITY_AUDIT.md](docs/security/FINAL_SECURITY_AUDIT.md).
 
 ---
 
@@ -78,6 +82,13 @@ write-ahead logging, what survives a crash, known limits — is described in
 
 Вне области: телеметрия Windows, которую программа не заявляет отключаемой, и
 уязвимости самой Windows.
+
+Как программа защищает свои данные, журнал и откат, описано в
+[docs/security-model.md](docs/security-model.md). Коротко: данные программы, журнал
+отката, ключ подписи и резервные копии реестра лежат в `C:\ProgramData\Win11Privacy`
+(копии реестра — в её папке `backups`), менять их могут только система и
+администраторы; на рабочий стол ничего не пишется. Итоги последней проверки
+безопасности — в [docs/security/FINAL_SECURITY_AUDIT.md](docs/security/FINAL_SECURITY_AUDIT.md).
 
 Как программа защищает свои данные, журнал и откат — границы доверия, журнал
 раньше изменения, что переживает обрыв, известные пределы, — описано в

@@ -22,7 +22,7 @@ namespace Win11Privacy
         // Самопроверка: показывает, может ли программа реально менять настройки
         private void OnSelfTest(object sender, EventArgs e)
         {
-            RunStreaming("-SelfTest", L.T("Самопроверка…"), delegate { });
+            RunStreaming(new EngineRequest("SelfTest"), L.T("Самопроверка…"), delegate { });
         }
 
         private void OnSaveReport(object sender, EventArgs e)

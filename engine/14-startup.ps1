@@ -394,9 +394,12 @@ if ($InstallGuard) {
         else { Write-Log '   [-] пробуждение после обновлений недоступно на этой системе' }
         Write-Log ("   [+] отслеживается модулей: {0}" -f $mods.Count)
         Write-Log ("   [+] журнал: {0}" -f (Join-Path $script:DataDir 'guard.log'))
-    } catch { Write-Log "   [!] не удалось установить стража: $($_.Exception.Message)" }
+    } catch { Write-Log "   [!] не удалось установить стража: $($_.Exception.Message)"; $failed = $true }
     Write-Log '###DONE###'
-    exit 0
+    # Код честный: регистрация задачи могла не пройти (например, повышение под
+    # другой учётной записью не даёт поставить задачу с наивысшими правами).
+    # Раньше здесь всегда был 0, и окно показывало «Готово» при неудаче.
+    exit $(if ($failed) { 1 } else { 0 })
 }
 
 if ($RemoveGuard) {

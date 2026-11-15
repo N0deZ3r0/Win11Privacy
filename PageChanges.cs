@@ -42,7 +42,7 @@ namespace Win11Privacy
 
         private void RefreshChanges()
         {
-            RunJson("-ChangeLog", L.T("Чтение журнала изменений…"), RenderChanges);
+            RunJson(new EngineRequest("ChangeLog"), L.T("Чтение журнала изменений…"), RenderChanges);
         }
 
         private void RenderChanges(Dictionary<string, object> d)
@@ -106,7 +106,7 @@ namespace Win11Privacy
                 L.T("Каждый параметр вернётся в то значение, которое было до программы,\n") +
                 L.T("и пропадёт из журнала.\n\nПродолжить?"),
                 L.T("Возврат изменений"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            RunStreaming("-RestoreItems -ChangeItems \"" + string.Join(",", ids.ToArray()) + "\"",
+            RunStreaming(new EngineRequest("RestoreItems").List("ChangeItems", ids),
                 L.T("Возврат выбранных изменений…"), delegate { Navigate("changes"); RefreshChanges(); });
         }
 
@@ -114,14 +114,14 @@ namespace Win11Privacy
         // руками. Теперь круг замкнут прямо из окна.
         private void OnRestoreFromBackup(object sender, EventArgs e)
         {
-            RunJson("-ListBackups", L.T("Поиск резервных копий…"), delegate(Dictionary<string, object> d)
+            RunJson(new EngineRequest("ListBackups"), L.T("Поиск резервных копий…"), delegate(Dictionary<string, object> d)
             {
                 List<object> items = (d != null) ? Json.GetArr(d, "items") : new List<object>();
                 if (items.Count == 0)
                 {
                     MessageBox.Show(this, L.T("Резервных копий не найдено.\n\n") +
-                        L.T("Программа создаёт их на рабочем столе перед первым изменением\n") +
-                        L.T("в каждом запуске. Если папку перенесли — верните её на место."),
+                        L.T("Программа создаёт их перед первым изменением в каждом запуске\n") +
+                        L.T("и хранит у себя, в папке данных программы."),
                         L.T("Восстановление из копии"), MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
@@ -144,7 +144,7 @@ namespace Win11Privacy
                     if (MessageBox.Show(this, L.T("Из копии будут возвращены все сохранённые ветки реестра:\n\n") +
                         paths[idx] + L.T("\n\nТекущие значения этих параметров будут заменены.\n\nПродолжить?"),
                         L.T("Восстановление из копии"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-                    RunStreaming("-RestoreBackup -BackupPath \"" + paths[idx] + "\"",
+                    RunStreaming(new EngineRequest("RestoreBackup").Str("BackupPath", paths[idx]),
                         L.T("Восстановление из копии…"), delegate { Navigate("changes"); RefreshChanges(); });
                 }
             });
@@ -155,7 +155,7 @@ namespace Win11Privacy
             if (MessageBox.Show(this, L.T("Программа вернёт все параметры реестра и записи автозапуска\n") +
                 L.T("в то состояние, в котором они были до неё, и очистит журнал.\n\nПродолжить?"),
                 L.T("Возврат изменений"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            RunStreaming("-RestoreAll", L.T("Возврат всех изменений…"), delegate { Navigate("changes"); RefreshChanges(); });
+            RunStreaming(new EngineRequest("RestoreAll"), L.T("Возврат всех изменений…"), delegate { Navigate("changes"); RefreshChanges(); });
         }
     }
 }

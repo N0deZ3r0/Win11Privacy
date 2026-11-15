@@ -126,7 +126,7 @@ namespace Win11Privacy
                 _settingsList.Controls.Add(r);
             }
             SectionHeader safe = new SectionHeader(L.T("Безопасность")); safe.Font = Font; _settingsList.Controls.Add(safe);
-            _optBackup  = MakeSafeRow(L.T("Резервная копия реестра"), L.T("На рабочий стол сохраняются .reg-файлы затрагиваемых веток."), GSave, true);
+            _optBackup  = MakeSafeRow(L.T("Резервная копия реестра"), L.T("Программа сохраняет у себя .reg-файлы затрагиваемых веток."), GSave, true);
             _optRestore = MakeSafeRow(L.T("Точка восстановления"), L.T("Позволяет откатить всё через «Восстановление системы»."), GUndo, true);
             _optDry     = MakeSafeRow(L.T("Тестовый прогон"), L.T("Показать список действий в журнале, ничего не меняя."), GEye, false);
             _optDry.Toggle.CheckedChanged += delegate { UpdateApplyText(); };
@@ -152,8 +152,19 @@ namespace Win11Privacy
             m.Items.Add(L.T("Сохранить профиль…"), null, OnSaveProfile);
             m.Items.Add(L.T("Файл для других ПК…"), null, OnExportDeploy);
             m.Items.Add(new ToolStripSeparator());
-            m.Items.Add(L.T("Открыть папку резервных копий"), null,
-                delegate { try { Process.Start("explorer.exe", Environment.GetFolderPath(Environment.SpecialFolder.Desktop)); } catch { } });
+            // Копии лежат в хранилище программы (ProgramData\Win11Privacy\backups):
+            // менять их могут только администраторы, смотреть — все.
+            m.Items.Add(L.T("Открыть папку резервных копий"), null, delegate
+            {
+                string store = Path.Combine(Path.Combine(EngineFile.ProgramDataDir(), "Win11Privacy"), "backups");
+                if (!Directory.Exists(store))
+                {
+                    MessageBox.Show(this, L.T("Резервных копий не найдено.\n\n").Trim(), L.T("Открыть папку резервных копий"),
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                try { Process.Start("explorer.exe", "\"" + store + "\""); } catch { }
+            });
             _miRevert = (ToolStripMenuItem)m.Items.Add(L.T("Откатить изменения…"), null, OnRevert);
             foreach (ToolStripItem it in m.Items) { it.ForeColor = Theme.Text; it.Padding = new Padding(4, 3, 4, 3); }
             return m;

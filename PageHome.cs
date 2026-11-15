@@ -97,14 +97,16 @@ namespace Win11Privacy
         }
 
         // Карточка управления: описание сверху, ряд кнопок снизу. Ряд выровнен
-        // вправо и переносится, когда не хватает ширины, а карточка подрастает:
-        // на узком окне кнопки наезжали на описание.
+        // вправо и всегда в одну строку: кнопки, которые не поместились по
+        // ширине, уходят в меню «Ещё ▾» в конце ряда. Раньше ряд переносился
+        // на вторую строку — кнопки «съезжали» и выглядели разваленными.
         private void AttachButtonRow(FlowLayoutPanel row, Control card)
         {
             row.FlowDirection = FlowDirection.LeftToRight;
             row.AutoSize = true;
             row.Anchor = AnchorStyles.Right;
-            WrapToWidth(row, card);
+            row.WrapContents = false;
+            OverflowToMenu(row, card);
             Label hint = null;
             EventHandler grow = delegate
             {
@@ -170,7 +172,7 @@ namespace Win11Privacy
 #pragma warning disable 0162
 #endif
             _homeExtraAsked = true;
-            RunJson("-ListStartup", L.T("Чтение автозагрузки…"), delegate(Dictionary<string, object> d)
+            RunJson(new EngineRequest("ListStartup"), L.T("Чтение автозагрузки…"), delegate(Dictionary<string, object> d)
             {
                 if (d != null)
                 {

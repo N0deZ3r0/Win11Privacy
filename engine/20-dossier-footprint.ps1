@@ -210,24 +210,80 @@ function Invoke-FootprintWipe {
 }
 
 # --- отозвать или вернуть доступ программы к датчику ---
-if ($SensorSet) {
-    # Раньше разрешение датчика писалось в реестр напрямую: мимо журнала
-    # отката (полный откат его не возвращал) и без проверки имени — «..\» в
-    # имени датчика увёл бы запись в другую ветку. Теперь — только имя датчика
-    # из букв и цифр, только Allow/Deny, и через Set-Reg: журнал заранее,
-    # сверка записанного.
-    $r = @{ key = $SensorKey; value = $SensorValue; ok = $false }
-    if ($SensorKey -notmatch '^[A-Za-z0-9_]{1,64}$' -or $SensorValue -notin @('Allow', 'Deny')) {
-        $r.error = 'недопустимое имя датчика или значение'; Emit-Json $r; exit 1
+# --------------------------------------------------------------------------- #
+#  Ключ ConsentStore -> путь в реестре (F-02). Окно присылает ключ таким, каким
+#  его отдал -Spy (относительный путь под ConsentStore). Годятся три вида:
+#      <разрешение>                              разрешение целиком
+#      <разрешение>\<Пакет>_<ИздательId>          приложение из Store
+#      <разрешение>\NonPackaged\<C:#путь#app.exe> обычная программа: путь к exe,
+#                                                  где «\» заменены на «#»
+#  Разрешение — только из списка, который движок сам показывает ($SpyCaps);
+#  пакет — семейство пакета; программа — путь с буквой диска. Не годятся:
+#  пустые сегменты, «.» и «..», кавычки, управляющие знаки, «/», корни
+#  реестра, пути вместо ключей, сетевые пути программ. Путь в реестре
+#  собирается из постоянного корня и проверенных сегментов, а не дописыванием
+#  присланной строки. Плохой ключ — $null, и ничего не пишется.
+# --------------------------------------------------------------------------- #
+$script:ConsentRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore'
+function Get-ConsentKeyPath {
+    param([string]$Key)
+    if (-not $Key -or $Key.Length -gt 320) { return $null }
+    if ($Key -match '[\x00-\x1f\x7f"/]' -or $Key.Contains('..')) { return $null }
+    $seg = $Key.Split([char]'\')
+    if ($seg.Count -lt 1 -or $seg.Count -gt 3) { return $null }
+    foreach ($s in $seg) { if ($s.Length -eq 0 -or $s -eq '.') { return $null } }
+    $cap = $null
+    foreach ($c in $script:SpyCaps) { if ($c.id -ieq $seg[0]) { $cap = [string]$c.id } }
+    if (-not $cap) { return $null }
+    $path = $script:ConsentRoot + '\' + $cap
+    if ($seg.Count -eq 2) {
+        if ($seg[1] -ieq 'NonPackaged') { return $null }
+        if ($seg[1] -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]{1,99}_[A-Za-z0-9]{13}$') { return $null }
+        $path += '\' + $seg[1]
+    } elseif ($seg.Count -eq 3) {
+        if ($seg[1] -ine 'NonPackaged') { return $null }
+        if ($seg[2] -notmatch '^[A-Za-z]:(#[^#<>:"|?*\\/]+)+$') { return $null }
+        foreach ($p in $seg[2].Substring(2).Split([char]'#')) { if ($p -eq '.') { return $null } }
+        $path += '\NonPackaged\' + $seg[2]
     }
-    $root = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\' + $SensorKey
+    return $path
+}
+
+# Разрешение датчика пишется через Set-Reg: журнал заранее, сверка
+# записанного (прямая запись шла бы мимо отката). Ключ проверяет
+# Get-ConsentKeyPath (выше) — независимо от проверок окна. Успех — только
+# если и запись, и журнал отката прошли (счётчик ошибок не вырос), и в
+# реестре читается ровно записанное значение. Ответ: @{ key; value; ok;
+# error } — как и раньше; invalid — признак негодного запроса (для кода выхода).
+function Invoke-SensorSet {
+    param([string]$Key, [string]$Value)
+    $r = @{ key = $Key; value = $Value; ok = $false }
+    $root = Get-ConsentKeyPath $Key
+    if (-not $root -or $Value -notin @('Allow', 'Deny')) {
+        $r.error = 'недопустимое имя датчика или значение'; $r.invalid = $true; return $r
+    }
     $failBefore = $script:Failures
-    Set-Reg -Path $root -Name 'Value' -Value $SensorValue -Type 'String' -Comment ("датчик {0}: {1}" -f $SensorKey, $SensorValue)
+    Set-Reg -Path $root -Name 'Value' -Value $Value -Type 'String' -Comment ("датчик {0}: {1}" -f $Key, $Value)
     Save-JournalEntries -Quiet
-    $r.ok = ($script:Failures -eq $failBefore) -and ("$(Get-RegValue $root 'Value')" -eq $SensorValue)
-    if (-not $r.ok) { $r.error = 'Windows не дала изменить разрешение или журнал отката не пишется' }
+    $wrote = ($script:Failures -eq $failBefore)
+    $now = "$(Get-RegValue $root 'Value')"
+    $r.ok = $wrote -and ($now -eq $Value)
+    if (-not $r.ok) {
+        $r.error = $(if (-not $wrote) { 'Windows не дала изменить разрешение или журнал отката не пишется' }
+                     else { 'записано, но в реестре читается другое: ' + $(if ($now) { $now } else { 'пусто' }) })
+    }
+    return $r
+}
+
+if ($SensorSet) {
+    $r = Invoke-SensorSet $SensorKey $SensorValue
+    $invalid = [bool]$r.invalid
+    $r.Remove('invalid')
     Emit-Json $r
-    exit 0
+    # Код выхода согласован с ответом (W11P-003): 0 — только при ok; 1 —
+    # негодный ключ или значение (ничего не делалось); 2 — запись, журнал
+    # или сверка не прошли. Раньше здесь всегда был 0.
+    exit $(if ($r.ok) { 0 } elseif ($invalid) { 1 } else { 2 })
 }
 
 # --- список отдельных настроек внутри модулей ---

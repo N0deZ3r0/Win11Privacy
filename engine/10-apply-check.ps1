@@ -603,7 +603,26 @@ function Write-HostsFile {
 }
 
 # --- брандмауэр ------------------------------------------------------------- #
-function Get-FwRuleName { param([string]$Kind, [string]$Target) if ($Kind -eq 'svc') { return "Win11Privacy: служба $Target" } return ("Win11Privacy: " + (Split-Path $Target -Leaf)) }
+function Get-FwRuleName {
+    param([string]$Kind, [string]$Target)
+    if ($Kind -eq 'svc') { return "Win11Privacy: служба $Target" }
+    # Имя правила для программы включает короткий хеш её полного пути. Раньше в
+    # имени было только имя файла: у двух программ с одинаковым именем в разных
+    # папках правило было одно. Блокировка второй не создавала правила («имя уже
+    # есть»), но отвечала «заблокировано», а возврат одной снимал правило другой.
+    $full = $Target
+    try { $full = [IO.Path]::GetFullPath($Target) } catch { }
+    $h = ''
+    try {
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $h = (($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($full.ToLowerInvariant()))[0..3] | ForEach-Object { $_.ToString('x2') }) -join '') } finally { $sha.Dispose() }
+    } catch { }
+    # Хвост «#хеш», а не «[хеш]»: Get-NetFirewallRule -DisplayName понимает имя
+    # как шаблон, и квадратные скобки стали бы в нём классом символов — правило
+    # потом не нашлось бы ни для проверки, ни для снятия. В «#» и шестнадцатеричных
+    # цифрах знаков шаблона нет.
+    return ("Win11Privacy: " + (Split-Path $Target -Leaf) + $(if ($h) { " #$h" } else { '' }))
+}
 
 function Test-FwRule {
     param([string]$Kind, [string]$Target)

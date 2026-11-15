@@ -394,3 +394,4 @@ Temp, кэш обновлений, эскизы, дампы. Удалённое 
 Остальная чистка (кэши, временные файлы, дампы) идёт в любом случае; во временной папке файлы моложе суток не трогаются.	The rest of the cleanup (caches, temporary files, dumps) runs either way; in the temp folder, files younger than a day are left alone.
 Чистка: корзина	Cleanup: recycle bin
 Выключает облачную защиту (MAPS) и отправку образцов. Защита от новых, ещё неизвестных угроз заметно слабеет. На домашних ПК «Защита от подделки» может не дать это применить.	Turns off cloud protection (MAPS) and sample submission. Protection against new, not yet known threats gets noticeably weaker. On home PCs, Tamper Protection may refuse to apply this.
+папку выше папки данных может переименовать не администратор: 	the folder above the data folder can be renamed by a non-administrator: 

@@ -125,7 +125,7 @@ Temp, кэш обновлений, эскизы, дампы, корзина.	Tem
 Сначала выберите на странице «Настройки», что отслеживать.	First choose on the Settings page what to watch.
 и флешки видел компьютер, что вы открывали и копировали.\n	and drives the computer saw, what you opened and copied.\n
 Pro — уровень телеметрии ограничен «Обязательными данными».	Pro — telemetry level is capped at Required data.
-На рабочий стол сохраняются .reg-файлы затрагиваемых веток.	.reg files of the affected keys are saved to the desktop.
+Программа сохраняет у себя .reg-файлы затрагиваемых веток.	.reg files of the affected keys are kept by the program.
 Home — уровень телеметрии ограничен «Обязательными данными».	Home — telemetry level is capped at Required data.
 • компоненты производителя и настройки сторонних программ;\n	• vendor components and third-party program settings;\n
 Enterprise/Education — доступно полное отключение телеметрии.	Enterprise/Education — telemetry can be turned off completely.
@@ -175,7 +175,7 @@ Windows сама ведёт журналы: кто включал камеру �
 Приложения, которые Windows ставит без спроса. Отмеченные «можно убрать» —\n	Apps Windows installs unasked. The ones marked "can be removed" are\n
 Отправка подозрительных файлов и облачная проверка MAPS. Чуть снижает защиту.	Sending suspicious files and MAPS cloud checks. Slightly lowers protection.
 • настройки реестра — по журналу изменений, в те значения, что были до неё;\n	• registry settings — from the change journal, back to their previous values;\n
-\n\nПеред изменениями на рабочий стол будет сохранена резервная копия реестра.	\n\nA registry backup will be saved to the desktop before any changes.
+\n\nПеред изменениями программа сохранит у себя резервную копию реестра.	\n\nA registry backup will be kept by the program before any changes.
 с расшифровкой и сырым содержимым. Включите запись, дайте системе поработать\n	with plain-language decoding and raw content. Turn recording on, let it run\n
 Данные получены из реестра, служб, планировщика, кэша DNS, журнала брандмауэра 	Data taken from the registry, services, scheduler, DNS cache, firewall log 
 На этой системе нет модуля Microsoft.DiagnosticDataViewer — рентген недоступен.	This system has no Microsoft.DiagnosticDataViewer module — X-ray unavailable.

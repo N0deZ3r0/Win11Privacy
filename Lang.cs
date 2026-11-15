@@ -59,7 +59,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(1547, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1548, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -266,7 +266,7 @@ namespace Win11Privacy
             _map["Чтение разрешений…"] = "Reading permissions…";
             _map["Что о вас собирают"] = "What they collect";
             _map["Включение монитора…"] = "Turning monitor on…";
-            _map["Запуск: powershell "] = "Running: powershell ";
+            _map["Команда движка: "] = "Engine command: ";
             _map["Обращений за 7 дней"] = "Accesses in 7 days";
             _map["Реклама и подсказки"] = "Ads and suggestions";
             _map["Сбор данных Windows"] = "Windows data collection";
@@ -440,7 +440,7 @@ namespace Win11Privacy
             _map["Сначала выберите на странице «Настройки», что отслеживать."] = "First choose on the Settings page what to watch.";
             _map["и флешки видел компьютер, что вы открывали и копировали.\n"] = "and drives the computer saw, what you opened and copied.\n";
             _map["Pro — уровень телеметрии ограничен «Обязательными данными»."] = "Pro — telemetry level is capped at Required data.";
-            _map["На рабочий стол сохраняются .reg-файлы затрагиваемых веток."] = ".reg files of the affected keys are saved to the desktop.";
+            _map["Программа сохраняет у себя .reg-файлы затрагиваемых веток."] = ".reg files of the affected keys are kept by the program.";
             _map["Home — уровень телеметрии ограничен «Обязательными данными»."] = "Home — telemetry level is capped at Required data.";
             _map["• компоненты производителя и настройки сторонних программ;\n"] = "• vendor components and third-party program settings;\n";
             _map["Enterprise/Education — доступно полное отключение телеметрии."] = "Enterprise/Education — telemetry can be turned off completely.";
@@ -490,7 +490,7 @@ namespace Win11Privacy
             _map["Приложения, которые Windows ставит без спроса. Отмеченные «можно убрать» —\n"] = "Apps Windows installs unasked. The ones marked \"can be removed\" are\n";
             _map["Отправка подозрительных файлов и облачная проверка MAPS. Чуть снижает защиту."] = "Sending suspicious files and MAPS cloud checks. Slightly lowers protection.";
             _map["• настройки реестра — по журналу изменений, в те значения, что были до неё;\n"] = "• registry settings — from the change journal, back to their previous values;\n";
-            _map["\n\nПеред изменениями на рабочий стол будет сохранена резервная копия реестра."] = "\n\nA registry backup will be saved to the desktop before any changes.";
+            _map["\n\nПеред изменениями программа сохранит у себя резервную копию реестра."] = "\n\nA registry backup will be kept by the program before any changes.";
             _map["с расшифровкой и сырым содержимым. Включите запись, дайте системе поработать\n"] = "with plain-language decoding and raw content. Turn recording on, let it run\n";
             _map["Данные получены из реестра, служб, планировщика, кэша DNS, журнала брандмауэра "] = "Data taken from the registry, services, scheduler, DNS cache, firewall log ";
             _map["На этой системе нет модуля Microsoft.DiagnosticDataViewer — рентген недоступен."] = "This system has no Microsoft.DiagnosticDataViewer module — X-ray unavailable.";
@@ -963,8 +963,8 @@ namespace Win11Privacy
             _map["Из резервной копии"] = "From a backup";
             _map["Поиск резервных копий…"] = "Looking for backups…";
             _map["Резервных копий не найдено.\n\n"] = "No backups found.\n\n";
-            _map["Программа создаёт их на рабочем столе перед первым изменением\n"] = "They are created on the desktop before the first change of\n";
-            _map["в каждом запуске. Если папку перенесли — верните её на место."] = "each run. If the folder was moved, put it back.";
+            _map["Программа создаёт их перед первым изменением в каждом запуске\n"] = "They are created before the first change of each run\n";
+            _map["и хранит у себя, в папке данных программы."] = "and kept in the program's data folder.";
             _map["Восстановление из копии"] = "Restoring from a backup";
             _map["Восстановление из копии…"] = "Restoring from the backup…";
             _map[" веток"] = " branches";
@@ -1607,6 +1607,7 @@ namespace Win11Privacy
             _map["Остальная чистка (кэши, временные файлы, дампы) идёт в любом случае; во временной папке файлы моложе суток не трогаются."] = "The rest of the cleanup (caches, temporary files, dumps) runs either way; in the temp folder, files younger than a day are left alone.";
             _map["Чистка: корзина"] = "Cleanup: recycle bin";
             _map["Выключает облачную защиту (MAPS) и отправку образцов. Защита от новых, ещё неизвестных угроз заметно слабеет. На домашних ПК «Защита от подделки» может не дать это применить."] = "Turns off cloud protection (MAPS) and sample submission. Protection against new, not yet known threats gets noticeably weaker. On home PCs, Tamper Protection may refuse to apply this.";
+            _map["папку выше папки данных может переименовать не администратор: "] = "the folder above the data folder can be renamed by a non-administrator: ";
         }
     }
 }

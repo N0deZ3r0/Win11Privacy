@@ -160,7 +160,10 @@ namespace Win11Privacy
             {
                 string cand = root + ".untrusted-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8);
                 if (Directory.Exists(cand) || File.Exists(cand)) continue;
-                try { Directory.CreateDirectory(cand); } catch { continue; }
+                // Сразу с правами (система и администраторы пишут, остальные
+                // читают): раньше папка наследовала права ProgramData, где
+                // обычный пользователь может заводить свои файлы и папки.
+                try { Directory.CreateDirectory(cand, Rules()); } catch { continue; }
                 if ((File.GetAttributes(cand) & FileAttributes.ReparsePoint) != 0)
                 {
                     try { Directory.Delete(cand, true); } catch { }
@@ -171,8 +174,47 @@ namespace Win11Privacy
             throw new IOException("не удалось завести папку карантина рядом с " + root);
         }
 
+        // Ни одну папку выше корня (ProgramData, корень диска) никто, кроме
+        // системы и администраторов, не может удалить, переименовать, сменить
+        // ей права или владельца, а у родителя — удалить вложенное. Иначе
+        // закрытый корень можно отодвинуть целиком и положить на его место свой
+        // (W11P-006). То же проверяет движок (Test-DirChainSecure, Assert-SafeRoot).
+        internal static bool ChainSecure(string dir)
+        {
+            try
+            {
+                const long self = 0x10000 | 0x40000 | 0x80000 | 0x10000000 | 0x40000000;   // удаление, права, владелец, общие
+                const long child = 0x40 | 0x10000000 | 0x40000000;                          // удаление вложенного
+                string cur = Path.GetFullPath(dir).TrimEnd('\\');
+                while (!string.IsNullOrEmpty(cur))
+                {
+                    string parent = Path.GetDirectoryName(cur);
+                    bool isRoot = string.IsNullOrEmpty(parent);
+                    string node = isRoot ? cur.TrimEnd('\\') + "\\" : cur;
+                    if (!isRoot && (File.GetAttributes(node) & FileAttributes.ReparsePoint) != 0) return false;
+                    DirectorySecurity sec = Directory.GetAccessControl(node, AccessControlSections.Owner | AccessControlSections.Access);
+                    if (!Trusted(sec)) return false;
+                    long mask = isRoot ? child : (self | child);
+                    foreach (FileSystemAccessRule r in sec.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+                    {
+                        if (r.AccessControlType != AccessControlType.Allow) continue;
+                        // «создатель-владелец» и прочие шаблоны для вложенного к самой папке не относятся
+                        if ((r.PropagationFlags & PropagationFlags.InheritOnly) != 0) continue;
+                        if (Array.IndexOf(TrustedOwners, r.IdentityReference.Value) >= 0) continue;
+                        if (((long)r.FileSystemRights & mask) != 0) return false;
+                    }
+                    if (isRoot) break;
+                    cur = parent;
+                }
+                return true;
+            }
+            catch { return false; }
+        }
+
         internal static void SecureRoot(string root)
         {
+            if (!ChainSecure(Path.GetDirectoryName(root)))
+                throw new UnauthorizedAccessException(L.T("папку выше папки данных может переименовать не администратор: ") + Path.GetDirectoryName(root));
             if (Directory.Exists(root) && !TrustedItem(root, true))
             {
                 string aside = FreshQuarantine(root);
@@ -185,51 +227,91 @@ namespace Win11Privacy
             // пользователь мог завести файлы и папки на любой глубине, а не
             // только прямо в корне. Раньше проверялся только корень — и после
             // того как окно закрывало его, движок считал папку чистой.
-            Quarantine(root, "", FreshQuarantine(root));
+            // Унаследованные от ProgramData права тут не в счёт: их сейчас же
+            // заменят права нового корня.
+            Quarantine(root, "", FreshQuarantine(root), false);
             Directory.SetAccessControl(root, Rules());
             if (!IsSecure(root)) throw new UnauthorizedAccessException(root);
+            // Права корня разошлись по вложенному — теперь проверяется всё,
+            // с унаследованным (W11P-006, так же делает движок). Обычно пусто.
+            if (HasUntrusted(root)) Quarantine(root, "", FreshQuarantine(root), true);
         }
 
-        // Явное право на запись для чужого (унаследованные заменит новый корень)
-        private static bool OpenToOthers(FileSystemSecurity sec)
+        // Может ли кто-то, кроме системы и администраторов, менять объект
+        // (запись, удаление своё и вложенного, права, владелец, атрибуты) —
+        // как Get-UntrustedRights в движке (W11P-006):
+        //  * к самому объекту — всё, кроме «только для вложенного»; у папки ещё
+        //    и то, что она передаст вложенному (кроме создателя-владельца и
+        //    создателя-группы — ими станет тот, кто создаст вложенное);
+        //  * запрет вычитается, только если он явный, для «Все», в обычном
+        //    порядке и относится к самому объекту — он идёт раньше любых
+        //    разрешений; для вложенного запреты не вычитаются;
+        //  * withInherited = false — только явные записи: так при переносе
+        //    старой папки данных, где унаследованное тут же заменит новый корень.
+        private static bool OpenToOthers(FileSystemSecurity sec, bool dir, bool withInherited)
         {
             const long write = 0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000;
-            foreach (FileSystemAccessRule r in sec.GetAccessRules(true, false, typeof(SecurityIdentifier)))
+            long self = 0, child = 0, deny = 0;
+            bool canonical = sec.AreAccessRulesCanonical;
+            foreach (FileSystemAccessRule r in sec.GetAccessRules(true, withInherited, typeof(SecurityIdentifier)))
             {
-                if (r.AccessControlType != AccessControlType.Allow) continue;
-                if (Array.IndexOf(TrustedOwners, r.IdentityReference.Value) >= 0) continue;
-                if (((long)r.FileSystemRights & write) != 0) return true;
+                string sid = r.IdentityReference.Value;
+                long rights = (long)r.FileSystemRights;
+                bool inheritOnly = (r.PropagationFlags & PropagationFlags.InheritOnly) != 0;
+                bool toChildren = dir && (r.InheritanceFlags & (InheritanceFlags.ObjectInherit | InheritanceFlags.ContainerInherit)) != 0;
+                if (r.AccessControlType == AccessControlType.Deny)
+                {
+                    if (canonical && !r.IsInherited && !inheritOnly && sid == "S-1-1-0") deny |= rights;
+                    continue;
+                }
+                if (Array.IndexOf(TrustedOwners, sid) >= 0) continue;
+                if (sid == "S-1-3-4") continue;                      // права владельца — владелец проверен
+                if (!inheritOnly) self |= rights;
+                if (toChildren && sid != "S-1-3-0" && sid != "S-1-3-1") child |= rights;
             }
-            return false;
+            return (((self & ~deny) | child) & write) != 0;
         }
 
-        private static bool TrustedDeep(string path, bool dir)
+        private static bool TrustedDeep(string path, bool dir, bool withInherited)
         {
             if (!TrustedItem(path, dir)) return false;
             try
             {
                 FileSystemSecurity sec = dir ? (FileSystemSecurity)Directory.GetAccessControl(path, AccessControlSections.Access)
                                              : File.GetAccessControl(path, AccessControlSections.Access);
-                return !OpenToOthers(sec);
+                return !OpenToOthers(sec, dir, withInherited);
             }
             catch { return false; }
+        }
+
+        // Есть ли внутри хоть что-то недоверенное (полная проверка)
+        private static bool HasUntrusted(string dir)
+        {
+            foreach (string d in Directory.GetDirectories(dir))
+            {
+                if (!TrustedDeep(d, true, true)) return true;
+                if (HasUntrusted(d)) return true;
+            }
+            foreach (string f in Directory.GetFiles(dir))
+                if (!TrustedDeep(f, false, true)) return true;
+            return false;
         }
 
         // Путь внутри собирается из имён: у временной папки бывает короткое
         // имя 8.3, и отрезать начало полного пути нельзя. Внутрь ссылок и
         // чужих папок не заходим — они уходят в карантин целиком.
-        private static void Quarantine(string dir, string rel, string aside)
+        private static void Quarantine(string dir, string rel, string aside, bool withInherited)
         {
             foreach (string d in Directory.GetDirectories(dir))
             {
                 string r = rel.Length > 0 ? Path.Combine(rel, Path.GetFileName(d)) : Path.GetFileName(d);
-                if (!TrustedDeep(d, true)) { MoveAside(d, Path.Combine(aside, r), true); continue; }
-                Quarantine(d, r, aside);
+                if (!TrustedDeep(d, true, withInherited)) { MoveAside(d, Path.Combine(aside, r), true); continue; }
+                Quarantine(d, r, aside, withInherited);
             }
             foreach (string f in Directory.GetFiles(dir))
             {
                 string r = rel.Length > 0 ? Path.Combine(rel, Path.GetFileName(f)) : Path.GetFileName(f);
-                if (!TrustedDeep(f, false)) MoveAside(f, Path.Combine(aside, r), false);
+                if (!TrustedDeep(f, false, withInherited)) MoveAside(f, Path.Combine(aside, r), false);
             }
         }
 
@@ -336,7 +418,10 @@ namespace Win11Privacy
             foreach (string bad in new[] {
                 "COR_ENABLE_PROFILING", "COR_PROFILER", "COR_PROFILER_PATH", "COR_PROFILER_PATH_32", "COR_PROFILER_PATH_64",
                 "CORECLR_ENABLE_PROFILING", "CORECLR_PROFILER", "CORECLR_PROFILER_PATH", "CORECLR_PROFILER_PATH_32", "CORECLR_PROFILER_PATH_64",
-                "DOTNET_STARTUP_HOOKS", "DOTNET_ADDITIONAL_DEPS", "DOTNET_EnableDiagnostics", "__COMPAT_LAYER" })
+                "DOTNET_STARTUP_HOOKS", "DOTNET_ADDITIONAL_DEPS", "DOTNET_EnableDiagnostics", "__COMPAT_LAYER",
+                // тестовый режим движка (только принять запрос и выйти): из
+                // HKCU\Environment его не должна включать посторонняя программа
+                "WIN11_ENGINE_TRACE" })
                 psi.EnvironmentVariables.Remove(bad);
             psi.WorkingDirectory = sys;
         }

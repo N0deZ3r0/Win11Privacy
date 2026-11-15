@@ -93,7 +93,8 @@ if ($PurgeData) {
     Write-Log '   Журнал отката тоже стёрт — вернуть настройки «как было» программа больше не сможет.'
     Emit-Json @{ removed = $gone }
     Write-Log '###DONE###'
-    exit 0
+    # 2 — дошёл до конца, но не всё прошло (окно пишет «Готово, с ошибками»); раньше всегда 0
+    exit $(if ($script:Failures -gt 0) { 2 } else { 0 })
 }
 
 if ($RestoreAll) {
@@ -102,5 +103,9 @@ if ($RestoreAll) {
     $r = Restore-Journal
     Emit-Json $r
     Write-Log '###DONE###'
+    # Код выхода честный: 2 — журналу нельзя верить или вернулось не всё.
+    # Раньше здесь всегда был 0, и окно показывало «Готово», хотя по
+    # недоверенному журналу не возвращалось ничего (полный откат это различает).
+    if ("$($r.state)" -eq 'untrusted' -or [int]$r.failed -gt 0 -or $script:Failures -gt 0) { exit 2 }
     exit 0
 }

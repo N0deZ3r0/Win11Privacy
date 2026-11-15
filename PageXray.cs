@@ -37,10 +37,6 @@ namespace Win11Privacy
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             page.RowStyles[1] = new RowStyle(SizeType.Absolute, (int)(u * 7.6F));
             head.Controls.Add(PageTitle(L.T("Сбор данных")), 0, 0);
-            _btnReport = new ModernButton(L.T("Сохранить отчёт"), false);
-            _btnReport.Font = Font; _btnReport.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
-            _btnReport.Click += OnSaveReport;
-            head.Controls.Add(_btnReport, 1, 0);
             page.Controls.Add(head, 0, 0);
 
             // панель управления
@@ -68,7 +64,12 @@ namespace Win11Privacy
             _btnXrayScan = new ModernButton(L.T("Сканировать"), false); _btnXrayScan.Click += delegate { RunXrayScan(false); };
             _btnXrayBase = new ModernButton(L.T("Запомнить как «до»"), false); _btnXrayBase.Click += delegate { RunXrayScan(true); };
             _btnXrayWipe = new ModernButton(L.T("Стереть копию"), false); _btnXrayWipe.Click += OnXrayWipe;
-            foreach (ModernButton b in new[] { _btnXrayRec, _btnXrayScan, _btnXrayBase, _btnXrayWipe })
+            // «Сохранить отчёт» — в общем ряду, как на «Следах на компьютере»:
+            // отдельной строкой над карточкой она отнимала у списка 3 высоты
+            // шрифта, и в невысоком окне список сжимался в полоску.
+            _btnReport = new ModernButton(L.T("Сохранить отчёт"), false);
+            _btnReport.Click += OnSaveReport;
+            foreach (ModernButton b in new[] { _btnXrayRec, _btnXrayScan, _btnXrayBase, _btnXrayWipe, _btnReport })
             { b.Font = b.Primary ? Theme.Bold(Font) : Font; b.Margin = new Padding((int)(u * 0.4F), 0, 0, (int)(u * 0.3F)); xb.Controls.Add(b); }
             ci.Controls.Add(xb, 0, 1);
             ctl.Controls.Add(ci);
@@ -94,26 +95,26 @@ namespace Win11Privacy
         private void OnXrayToggleRecording(object sender, EventArgs e)
         {
             if (_xrayRecording)
-            { RunStreaming("-XrayDisable", L.T("Выключение записи…"), delegate { RunXrayStatus(); }); return; }
+            { RunStreaming(new EngineRequest("XrayDisable"), L.T("Выключение записи…"), delegate { RunXrayStatus(); }); return; }
             if (MessageBox.Show(this,
                 L.T("Windows начнёт вести ЛОКАЛЬНУЮ копию своих диагностических событий,\n") +
                 L.T("чтобы их можно было прочитать и показать вам.\n\n") +
                 L.T("Объём отправляемых данных при этом НЕ увеличивается — меняется только\n") +
                 L.T("то, что копия сохраняется на диске. Стереть её можно кнопкой «Стереть копию».\n\n") +
                 L.T("Продолжить?"), L.T("Включить запись"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            RunStreaming("-XrayEnable", L.T("Включение записи…"), delegate { RunXrayStatus(); });
+            RunStreaming(new EngineRequest("XrayEnable"), L.T("Включение записи…"), delegate { RunXrayStatus(); });
         }
 
         private void OnXrayWipe(object sender, EventArgs e)
         {
             if (MessageBox.Show(this, L.T("Локальная копия собранных событий будет удалена.\nПродолжить?"),
                 L.T("Стереть копию"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            RunStreaming("-XrayWipe", L.T("Стирание копии…"), delegate { RunXrayStatus(); });
+            RunStreaming(new EngineRequest("XrayWipe"), L.T("Стирание копии…"), delegate { RunXrayStatus(); });
         }
 
         private void RunXrayStatus()
         {
-            RunJson("-XrayStatus", L.T("Проверка сбора данных…"), delegate(Dictionary<string, object> d)
+            RunJson(new EngineRequest("XrayStatus"), L.T("Проверка сбора данных…"), delegate(Dictionary<string, object> d)
             {
                 if (d == null) return;
                 _xrayRecording = Json.GetBool(d, "recording");
@@ -135,8 +136,8 @@ namespace Win11Privacy
 
         private void RunXrayScan(bool asBaseline)
         {
-            string extra = "-XrayScan -XrayHours 24" + (asBaseline ? " -XrayBaseline" : "");
-            RunJson(extra, asBaseline ? L.T("Замер «до»…") : L.T("Чтение собранных данных…"), delegate(Dictionary<string, object> d)
+            EngineRequest req = new EngineRequest("XrayScan").Int("XrayHours", 24).Switch("XrayBaseline", asBaseline);
+            RunJson(req, asBaseline ? L.T("Замер «до»…") : L.T("Чтение собранных данных…"), delegate(Dictionary<string, object> d)
             {
                 if (d == null) { _xrayState.Text = L.T("Не удалось получить данные."); return; }
                 string err = Json.GetStr(d, "error");

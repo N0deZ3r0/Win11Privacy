@@ -149,7 +149,6 @@ function Remove-CreatedAppFile {
 
 function Set-VsCodeValue {
     param([string]$Key, $Value, [string]$Comment)
-    $p = Get-VsCodeSettingsPath
     if ($DryRun) { Write-Log "   [тест] $Comment"; return }
     # файл настроек не переписываем, если там уже стоит нужное
     $curVal = Get-VsCodeValue $Key
@@ -188,11 +187,56 @@ function Get-FirefoxPoliciesPath {
     return $null
 }
 
+# Текст файла в UTF-8 (с меткой или без) — строго: файл в другой кодировке
+# не «перекодируется» молча, а даёт ошибку. Раньше Get-Content без метки
+# читал policies.json в кодировке ANSI, и при записи обратно кириллица в
+# чужих политиках (адреса, названия закладок) превращалась в мусор.
+function Read-Utf8Strict {
+    param([string]$Path)
+    $b = [IO.File]::ReadAllBytes($Path)
+    $off = $(if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { 3 } else { 0 })
+    return (New-Object System.Text.UTF8Encoding($false, $true)).GetString($b, $off, $b.Length - $off)
+}
+
 function Get-FirefoxPolicy {
     param([string]$Key)
     $p = Get-FirefoxPoliciesPath
     if (-not $p -or -not (Test-Path -LiteralPath $p)) { return $null }
-    try { $j = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json; return $j.policies.$Key } catch { return $null }
+    try { $j = Read-Utf8Strict $p | ConvertFrom-Json; return $j.policies.$Key } catch { return $null }
+}
+
+# --------------------------------------------------------------------------- #
+#  Запись файла JSON одним действием (W11P-002). Раньше Set-Content писал
+#  policies.json прямо на месте: оборванная запись (сбой, нехватка места,
+#  выключение) оставляла файл пустым или недописанным — и с ним пропадали все
+#  политики Firefox, в том числе корпоративные. Теперь:
+#    1. текст проверяется разбором ещё в памяти;
+#    2. пишется во временный файл с уникальным именем в той же папке (только
+#       новым — CreateNew: на месте чужого файла или ссылки запись не идёт),
+#       UTF-8 без метки, со сбросом на диск;
+#    3. записанное читается обратно и разбирается ещё раз;
+#    4. встаёт на место одним действием системы (Replace-FileAtomic:
+#       ReplaceFile, если файл есть, — права и атрибуты прежнего сохраняются;
+#       иначе переименование);
+#    5. при любой ошибке прежний файл не тронут, временный удаляется.
+# --------------------------------------------------------------------------- #
+function Write-JsonFileAtomic {
+    param([string]$Path, [string]$Json)
+    $null = $Json | ConvertFrom-Json -ErrorAction Stop
+    $dir = Split-Path $Path -Parent
+    $tmp = Join-Path $dir ('.' + (Split-Path $Path -Leaf) + '.w11p-' + [guid]::NewGuid().ToString('N').Substring(0, 12) + '.tmp')
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Json)
+    try {
+        $fs = [IO.File]::Open($tmp, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try { $fs.Write($bytes, 0, $bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
+        $back = Read-Utf8Strict $tmp
+        if ($back -cne $Json) { throw 'записанный временный файл не совпадает с подготовленным' }
+        $null = $back | ConvertFrom-Json -ErrorAction Stop
+        Replace-FileAtomic $tmp $Path
+        $tmp = $null
+    } finally {
+        if ($tmp -and (Test-Path -LiteralPath $tmp)) { try { [IO.File]::Delete($tmp) } catch { } }
+    }
 }
 
 function Set-FirefoxPolicy {
@@ -237,23 +281,97 @@ function Write-FirefoxKey {
     param([string]$Key, $Value, [switch]$Remove)
     $p = Get-FirefoxPoliciesPath
     if (-not $p) { return @{ ok = $false; why = 'Firefox не найден' } }
+    # Папка Firefox должна быть закрыта на запись для всех, кроме системы и
+    # администраторов (так в Program Files по умолчанию): иначе между
+    # проверками и заменой файла в ней мог бы подложить ссылку кто угодно.
+    # W11P-006: проверяются и унаследованные права, и весь путь до папки —
+    # её родителя тоже нельзя давать переименовать чужому.
+    $ffPath = Split-Path (Split-Path $p -Parent) -Parent
+    if (-not (Test-Path -LiteralPath $ffPath -PathType Container)) { return @{ ok = $false; why = 'папка Firefox не читается' } }
+    if (-not (Test-PathTrusted $ffPath)) { return @{ ok = $false; why = 'папка Firefox (или папка выше) открыта на запись не только администраторам -- policies.json не трогаем' } }
+    # Уже существующие distribution и policies.json — тоже только «свои»:
+    # если их завела или может менять обычная программа, файл между чтением и
+    # заменой подменили бы, а замена шла бы с правами администратора.
+    foreach ($x in @((Split-Path $p -Parent), $p)) {
+        if (-not (Test-Path -LiteralPath $x)) { continue }
+        $xi = $null
+        try { $xi = Get-Item -LiteralPath $x -Force -ErrorAction Stop } catch { }
+        if (-not (Test-ItemTrusted $xi)) { return @{ ok = $false; why = ("{0} заведён не администратором или открыт на запись -- policies.json не трогаем" -f (Split-Path $x -Leaf)) } }
+    }
+    return (Update-FirefoxPoliciesFile $p $Key $Value -Remove:$Remove)
+}
+
+# Замок policies.json — общий для всех, кто его пишет: окно (движок с правами
+# администратора в сеансе пользователя), страж и откат (задачи от имени
+# системы в сеансе 0). Только Global\: раньше при ошибке открытия замок молча
+# брался в Local\ — у каждого сеанса свой, и окно с задачей стража могли
+# писать одновременно, теряя правки друг друга. Теперь не открылся — отказ.
+#  * Новый замок заводится с правами только для системы, администраторов и
+#    самого создателя — замок, заведённый задачей от имени системы, откроет и
+#    движок окна (с правами по умолчанию системный замок администраторам
+#    недоступен, и раньше это и уводило в Local\).
+#  * Уже существующий замок годится, только если его владелец — система,
+#    администраторы или мы сами. Замок, заранее заведённый обычной программой,
+#    не используется: она могла бы держать его или отпускать, когда ей нужно.
+function Test-MutexOwnerTrusted {
+    param([string]$Sid)
+    if (-not $Sid) { return $false }
+    if (@('S-1-5-18', 'S-1-5-32-544') -contains $Sid) { return $true }
+    try { return ($Sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) } catch { return $false }
+}
+
+function Open-FirefoxMutex {
+    $name = 'Global\Win11Privacy-FirefoxPolicies'
+    $sec = New-Object System.Security.AccessControl.MutexSecurity
+    $sec.SetAccessRuleProtection($true, $false)
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    foreach ($sid in @((New-Object Security.Principal.SecurityIdentifier('S-1-5-18')), (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')), $me)) {
+        $sec.AddAccessRule((New-Object System.Security.AccessControl.MutexAccessRule($sid, [System.Security.AccessControl.MutexRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)))
+    }
+    $created = $false
+    try { $m = [System.Threading.Mutex]::new($false, $name, [ref]$created, $sec) }
+    catch { throw ('замок policies.json не открылся ({0}) -- его мог заранее занять кто-то чужой' -f $_.Exception.Message) }
+    if (-not $created) {
+        $owner = ''
+        try { $owner = $m.GetAccessControl().GetOwner([Security.Principal.SecurityIdentifier]).Value } catch { }
+        if (-not (Test-MutexOwnerTrusted $owner)) { $m.Dispose(); throw 'замок policies.json заведён чужой программой -- не пишем' }
+    }
+    return $m
+}
+
+# Сам ключ в файле по явному пути (его же проверяют тесты на временной папке).
+# Чтение, правка и запись — под общим замком всех запусков программы
+# (окно, страж, откат): два писателя одновременно теряли бы правку друг друга.
+function Update-FirefoxPoliciesFile {
+    param([string]$Path, [string]$Key, $Value, [switch]$Remove)
+    $mtx = $null; $got = $false
     try {
-        $dir = Split-Path $p -Parent
-        foreach ($d in @($dir, $p)) {
+        $mtx = Open-FirefoxMutex
+        try { $got = $mtx.WaitOne(30000) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+        if (-not $got) { return @{ ok = $false; why = 'policies.json сейчас меняет другой запуск программы' } }
+        $dir = Split-Path $Path -Parent
+        foreach ($d in @($dir, $Path)) {
             if ((Test-Path -LiteralPath $d) -and ((Get-Item -LiteralPath $d -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
                 return @{ ok = $false; why = 'на пути к policies.json стоит ссылка' }
             }
         }
-        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+        if (-not (Test-Path -LiteralPath $dir)) {
+            $null = [IO.Directory]::CreateDirectory($dir)
+            if ((Get-Item -LiteralPath $dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { return @{ ok = $false; why = 'на пути к policies.json стоит ссылка' } }
+        }
+        # Свои временные файлы, оставшиеся от оборванной записи, — через час
+        foreach ($old in @(Get-ChildItem -LiteralPath $dir -File -Force -Filter ('.' + (Split-Path $Path -Leaf) + '.w11p-*.tmp') -ErrorAction SilentlyContinue)) {
+            if ($old.LastWriteTime -lt (Get-Date).AddHours(-1) -and -not ($old.Attributes -band [IO.FileAttributes]::ReparsePoint)) { try { [IO.File]::Delete($old.FullName) } catch { } }
+        }
         $obj = $null
-        if (Test-Path -LiteralPath $p -PathType Leaf) {
-            $ff = Get-Content -LiteralPath $p -Raw -ErrorAction Stop
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            $ff = $null
+            try { $ff = Read-Utf8Strict $Path } catch { return @{ ok = $false; why = 'policies.json не в кодировке UTF-8 -- не трогаем, чтобы не испортить чужие политики' } }
             if ("$ff".Trim()) {
                 try { $obj = $ff | ConvertFrom-Json -ErrorAction Stop } catch { $obj = $null }
-                # Файл есть, но не разобрался (комментарий, иная кодировка,
-                # политика, с которой не справился разбор PowerShell 5.1). Не
-                # перезаписываем: иначе пропали бы уже стоящие там политики, в
-                # том числе корпоративные, которые программа не ставила.
+                # Файл есть, но не разобрался (комментарий, политика, с которой
+                # не справился разбор PowerShell 5.1). Не перезаписываем: иначе
+                # пропали бы уже стоящие там политики, в том числе корпоративные.
                 if ($null -eq $obj) { return @{ ok = $false; why = 'policies.json есть, но не разбирается как JSON -- не трогаем, чтобы не стереть чужие политики' } }
             }
         }
@@ -262,12 +380,16 @@ function Write-FirefoxKey {
         if ($Remove) {
             if ($obj.policies.PSObject.Properties.Name -contains $Key) { $obj.policies.PSObject.Properties.Remove($Key) }
             if (@($obj.policies.PSObject.Properties).Count -eq 0 -and @($obj.PSObject.Properties).Count -eq 1) {
-                if (Test-Path -LiteralPath $p -PathType Leaf) { [IO.File]::Delete($p) }
+                if (Test-Path -LiteralPath $Path -PathType Leaf) { [IO.File]::Delete($Path) }
                 return @{ ok = $true; why = ''; removedFile = $true }
             }
         } elseif ($obj.policies.PSObject.Properties.Name -contains $Key) { $obj.policies.$Key = $Value }
         else { $obj.policies | Add-Member -NotePropertyName $Key -NotePropertyValue $Value }
-        ($obj | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $p -Encoding UTF8 -ErrorAction Stop
+        Write-JsonFileAtomic $Path ($obj | ConvertTo-Json -Depth 20)
         return @{ ok = $true; why = '' }
     } catch { return @{ ok = $false; why = $_.Exception.Message } }
+    finally {
+        if ($got) { try { $mtx.ReleaseMutex() } catch { } }
+        if ($null -ne $mtx) { $mtx.Dispose() }
+    }
 }

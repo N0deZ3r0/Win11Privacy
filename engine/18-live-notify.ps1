@@ -25,9 +25,10 @@ if ($InstallWatcher) {
         Register-ScheduledTask -TaskName $script:WatcherTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
         Write-Log '   [+] уведомления включены: всплывашка при перехвате отправки телеметрии'
         Write-Log '   [+] чтобы не мешать, одно уведомление не чаще чем раз в 10 минут'
-    } catch { Write-Log "   [!] не удалось: $($_.Exception.Message)" }
+    } catch { Write-Log "   [!] не удалось: $($_.Exception.Message)"; $failed = $true }
     Write-Log '###DONE###'
-    exit 0
+    # Код честный: регистрация задачи могла не пройти (раньше здесь всегда был 0).
+    exit $(if ($failed) { 1 } else { 0 })
 }
 
 if ($RemoveWatcher) {

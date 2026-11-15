@@ -123,7 +123,8 @@ if ($RemoveApps) {
     Write-Log ("   удалено приложений: {0}" -f $done)
     Emit-Json @{ removed = $done }
     Write-Log '###DONE###'
-    exit 0
+    # 2 — дошёл до конца, но не всё прошло (окно пишет «Готово, с ошибками»); раньше всегда 0
+    exit $(if ($script:Failures -gt 0) { 2 } else { 0 })
 }
 
 if ($CleanJunk) {

@@ -37,17 +37,174 @@ function Invoke-RegExe {
 # Подпись файла резервной копии — тем же ключом, что и журнал отката
 # (HMAC-SHA256), с отдельной приставкой: подпись журнала за подпись файла не
 # сойдёт. В подпись входят имя папки копии и имя файла: файл из другой копии
-# или под другим именем не подойдёт.
-function Get-BackupFileSig {
-    param([string]$File, [string]$Folder, [string]$Name, [switch]$Create)
+# или под другим именем не подойдёт. Подписываются ровно те байты, что будут
+# записаны или импортированы (W11P-001): не файл по имени, который можно
+# подменить между чтением и подписью, а уже прочитанное в память содержимое.
+function Get-BackupBytesSig {
+    param([byte[]]$Bytes, [string]$Folder, [string]$Name, [switch]$Create)
     $h = [System.Security.Cryptography.HMACSHA256]::new([byte[]](Get-SignKey -Create:$Create))
     try {
         $head = [Text.Encoding]::UTF8.GetBytes(('w11p-backup|{0}|{1}|' -f $Folder.ToLowerInvariant(), $Name.ToLowerInvariant()))
-        $data = [IO.File]::ReadAllBytes($File)
         $null = $h.TransformBlock($head, 0, $head.Length, $null, 0)
-        $null = $h.TransformFinalBlock($data, 0, $data.Length)
+        $null = $h.TransformFinalBlock($Bytes, 0, $Bytes.Length)
         return (($h.Hash | ForEach-Object { $_.ToString('x2') }) -join '')
     } finally { $h.Dispose() }
+}
+
+# --------------------------------------------------------------------------- #
+#  Подписанный список файлов копии (backup-sig.json, версия 2). В версии 1
+#  был только список «файл -> подпись»: удалив из него строку вместе с файлом,
+#  можно было незаметно сократить копию. Теперь у списка своя подпись (тем же
+#  ключом, с отдельной приставкой): в неё входят имя папки и все пары
+#  «файл:подпись». Поле files осталось тем же — прежние версии программы
+#  такую копию тоже читают.
+# --------------------------------------------------------------------------- #
+$script:BackupManifestName = 'backup-sig.json'
+# Имена файлов копии — путь ветки, где «:», «\» и пробелы заменены на «_»
+$script:BackupFileRx = '^[A-Za-z0-9_.(){}+-]{1,200}\.reg$'
+
+function Get-BackupManifestSig {
+    param([string]$Folder, [hashtable]$Files, [switch]$Create)
+    $lines = @($Files.Keys | ForEach-Object { ([string]$_).ToLowerInvariant() + ':' + ([string]$Files[$_]).ToLowerInvariant() } | Sort-Object)
+    $text = 'w11p-backup-manifest|' + $Folder.ToLowerInvariant() + '|' + ($lines -join "`n")
+    $h = [System.Security.Cryptography.HMACSHA256]::new([byte[]](Get-SignKey -Create:$Create))
+    try {
+        $b = [Text.Encoding]::UTF8.GetBytes($text)
+        return (($h.ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) -join '')
+    } finally { $h.Dispose() }
+}
+
+# Текст списка: только ASCII, ключи по порядку — его читает строгий разбор
+# (ConvertFrom-EngineRequest), который отвергает повторы полей
+function ConvertTo-BackupManifestText {
+    param([string]$Folder, [hashtable]$Files, [string]$Sig)
+    $parts = @($Files.Keys | Sort-Object | ForEach-Object { '"' + $_ + '":"' + $Files[$_] + '"' })
+    return ('{"version":2,"folder":"' + $Folder + '","files":{' + ($parts -join ',') + '},"sig":"' + $Sig + '"}')
+}
+
+# Рабочие папки внутри защищённого корня, оставшиеся от оборванных запусков
+# (backup-*, restore-*): удаляются через час, обходом без ссылок
+function Remove-StaleWorkDirs {
+    param([string]$Prefix)
+    if (-not $script:SafeRoot -or -not (Test-Path -LiteralPath $script:SafeRoot)) { return }
+    $cut = (Get-Date).AddHours(-1)
+    foreach ($d in @(Get-ChildItem -LiteralPath $script:SafeRoot -Directory -Force -Filter ($Prefix + '*') -ErrorAction SilentlyContinue)) {
+        if ($d.LastWriteTime -gt $cut) { continue }
+        $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+        Remove-TreeNoFollow $d.FullName $st
+    }
+}
+
+# Новая пустая рабочая папка внутри защищённого корня: имя со случайным
+# хвостом, не ссылка, владелец — система или администраторы, чужим не открыта
+# на запись. Не вышло — исключение: работать с копией негде.
+function New-SafeWorkDir {
+    param([string]$Prefix)
+    if (-not (Assert-SafeRoot)) { throw 'папка ProgramData\Win11Privacy не защищена' }
+    $dir = Join-Path $script:SafeRoot ($Prefix + [guid]::NewGuid().ToString('N').Substring(0, 12))
+    if (Test-Path -LiteralPath $dir) { throw 'рабочая папка уже есть' }
+    $null = [IO.Directory]::CreateDirectory($dir)
+    $item = Get-Item -LiteralPath $dir -Force
+    if (-not (Test-ItemTrusted $item)) {
+        $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+        Remove-TreeNoFollow $dir $st
+        throw 'рабочая папка не защищена (ссылка или чужие права)'
+    }
+    return $dir
+}
+
+# --------------------------------------------------------------------------- #
+#  Резервная копия веток реестра (W11P-001, W11P-005). Раньше reg.exe
+#  выгружал ветки прямо в папку на рабочем столе, куда пишет любая программа
+#  пользователя, а подпись снималась с файла уже там: между выгрузкой и
+#  подписью файл можно было подменить; к тому же движок с правами
+#  администратора писал по пути, где пользователь мог подложить ссылку.
+#  Теперь движок с этими правами не пишет в папки пользователя вовсе:
+#    1. ветки выгружаются в рабочую папку внутри защищённого корня
+#       ProgramData\Win11Privacy (пишут только система и администраторы,
+#       путь до корня проверен целиком — Assert-SafeRoot);
+#    2. каждый файл читается один раз в память, проверяется (Test-RegExportFile)
+#       и подписывается ровно этими байтами; рядом — подписанный список;
+#    3. готовая подписанная копия одним переименованием (тот же том, тот же
+#       корень) становится копией в хранилище ProgramData\Win11Privacy\backups —
+#       менять её могут только администраторы, обычные программы только читают.
+#  Копия на рабочий стол больше не кладётся: вернуть копию можно из окна
+#  («Изменения» -> «Из резервной копии»), а папку хранилища открывает пункт
+#  «Открыть папку резервных копий». Копии прежних версий на рабочем столе и
+#  в -BackupRoot по-прежнему видны в списке и возвращаются после проверки.
+#  Оборванный запуск оставляет рабочую папку только внутри защищённого корня
+#  (её уберёт следующий); в хранилище копия появляется только целиком.
+# --------------------------------------------------------------------------- #
+$script:BackupStoreKeep = 20
+
+function Get-BackupStoreDir { return (Join-Path $script:SafeRoot 'backups') }
+
+# Старые копии в хранилище: остаются самая первая (состояние до программы —
+# самое ценное) и $BackupStoreKeep последних. Имя папки начинается с даты —
+# порядок по имени и есть порядок по времени.
+function Limit-BackupStore {
+    $store = Get-BackupStoreDir
+    $all = @(Get-ChildItem -LiteralPath $store -Directory -Force -Filter 'Win11Privacy-Backup-*' -ErrorAction SilentlyContinue | Sort-Object Name)
+    if ($all.Count -le ($script:BackupStoreKeep + 1)) { return }
+    foreach ($old in @($all[1..($all.Count - $script:BackupStoreKeep - 1)])) {
+        $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+        Remove-TreeNoFollow $old.FullName $st
+    }
+}
+
+function New-RegBackup {
+    param([string[]]$Keys)
+    $res = @{ dir = ''; saved = 0; signed = 0; missed = @(); error = '' }
+    Remove-StaleWorkDirs 'backup-'
+    $leaf = 'Win11Privacy-Backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
+    $stage = $null
+    try {
+        $stage = New-SafeWorkDir 'backup-'
+        # хранилище — внутри того же защищённого корня: перенос в него — одно
+        # переименование на одном томе
+        $store = Get-BackupStoreDir
+        if (-not (Test-Path -LiteralPath $store)) { $null = [IO.Directory]::CreateDirectory($store) }
+        if (-not (Test-ItemTrusted (Get-Item -LiteralPath $store -Force))) { throw 'хранилище копий не защищено (ссылка или чужие права)' }
+        $final = Join-Path $store $leaf
+        if (Test-Path -LiteralPath $final) { throw 'копия с таким именем уже есть' }
+        $sigs = @{}
+        foreach ($k in $Keys) {
+            if (-not (Test-Path -LiteralPath $k)) { continue }
+            $native = $k -replace '^HKLM:\\','HKLM\' -replace '^HKCU:\\','HKCU\'
+            $name = (($k -replace '[:\\ ]','_')) + '.reg'
+            if ($name -cnotmatch $script:BackupFileRx -or $sigs.ContainsKey($name)) { $res.missed += ("{0} -- имя файла копии не годится или повторяется" -f $k); continue }
+            $file = Join-Path $stage $name
+            # Считаем только то, что выгрузилось целиком (см. Export-RegKey).
+            # Недописанный файл удаляется: восстановить из него нельзя.
+            $why = Export-RegKey $native $file
+            if ($why) {
+                Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+                $res.missed += ("{0} -- {1}" -f $k, $why)
+                continue
+            }
+            # Один раз в память: проверяются и подписываются одни и те же байты
+            # (рабочая папка закрыта для чужой записи — эти байты и остаются в файле)
+            $bytes = [IO.File]::ReadAllBytes($file)
+            $sigs[$name] = Get-BackupBytesSig $bytes $leaf $name -Create
+            $res.saved++
+        }
+        if ($res.saved -eq 0) { return $res }
+        $msig = Get-BackupManifestSig $leaf $sigs -Create
+        [IO.File]::WriteAllBytes((Join-Path $stage $script:BackupManifestName), [Text.Encoding]::ASCII.GetBytes((ConvertTo-BackupManifestText $leaf $sigs $msig)))
+        $res.signed = $sigs.Count
+        # Готовая копия — в хранилище одним действием
+        [IO.Directory]::Move($stage, $final)
+        $stage = $null
+        $res.dir = $final
+        Limit-BackupStore
+    } catch { $res.error = $_.Exception.Message }
+    finally {
+        if ($stage -and (Test-Path -LiteralPath $stage)) {
+            $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+            Remove-TreeNoFollow $stage $st
+        }
+    }
+    return $res
 }
 
 # Выгружает ветку реестра в .reg и проверяет, что выгрузилась: reg.exe
@@ -87,60 +244,23 @@ function Ensure-Backup {
 
     if (-not $NoBackup) {
         Write-Section 'Резервная копия реестра'
-        $root = if ($BackupRoot) { $BackupRoot } else { [Environment]::GetFolderPath('Desktop') }
-        # Папка лежит там, куда пишет любая программа пользователя, а reg.exe
-        # пишет в неё с правами администратора. Имя с случайным хвостом
-        # заранее не угадать — раньше по метке времени с точностью до секунды
-        # можно было подложить на её место ссылку на чужую папку.
-        $dir = Join-Path $root ('Win11Privacy-Backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
         $keys = @($script:Defs | Where-Object { $script:RegTypes -contains $_.T -and $Modules -contains $_.M } | ForEach-Object { $_.P } | Select-Object -Unique)
-        try {
-            if (Test-Path -LiteralPath $dir) { throw 'папка копии уже есть -- её завёл не этот запуск' }
-            $null = [IO.Directory]::CreateDirectory($dir)
-            if ((Get-Item -LiteralPath $dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'на месте папки копии оказалась ссылка' }
-            $saved = 0
-            $missed = @()
-            foreach ($k in $keys) {
-                if (-not (Test-Path -LiteralPath $k)) { continue }
-                $native = $k -replace '^HKLM:\\','HKLM\' -replace '^HKCU:\\','HKCU\'
-                $file = Join-Path $dir ((($k -replace '[:\\ ]','_')) + '.reg')
-                # Считаем только то, что выгрузилось целиком (см. Export-RegKey).
-                # Недописанный файл удаляется: восстановить из него нельзя, а
-                # лежащий рядом с целыми он выглядел бы такой же копией.
-                $why = Export-RegKey $native $file
-                if (-not $why) { $saved++ }
-                else {
-                    Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
-                    $missed += ("{0} -- {1}" -f $k, $why)
-                }
-            }
-            if ($saved -gt 0) {
-                $script:BackupDir = $dir
-                Write-Log ("   [+] сохранено веток: {0} -> {1}" -f $saved, $dir)
-                # Подписи файлов: копия лежит там, куда пишет любая программа
-                # пользователя, а возвращается с правами администратора
-                # (см. Restore-BackupFolder). Без подписи программа её не вернёт.
-                try {
-                    $sigs = @{}
-                    foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter '*.reg')) {
-                        $sigs[$f.Name] = Get-BackupFileSig $f.FullName (Split-Path $dir -Leaf) $f.Name -Create
-                    }
-                    (@{ version = 1; files = $sigs } | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath (Join-Path $dir 'backup-sig.json') -Encoding UTF8 -ErrorAction Stop
-                } catch {
-                    Write-Log ("   [-] копия не подписана ({0}) -- вернуть её кнопкой программы будет нельзя, только вручную" -f $_.Exception.Message)
-                }
-            } else {
-                # Remove-Item -Recurse в PowerShell 5.1 идёт по ссылкам: папку
-                # убираем тем же обходом без ссылок, что и при чистке
-                $rmStat = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
-                Remove-TreeNoFollow $dir $rmStat
-                Write-Log '   [-] сохранять нечего: ни одна ветка не выгрузилась'
-            }
-            if ($missed.Count -gt 0) {
-                Write-Log ("   [-] не выгрузились ветки: {0} (обычно Windows не отдаёт их даже на чтение; почему -- в каждой строке)" -f $missed.Count)
-                foreach ($k in $missed) { Write-Log ("       {0}" -f $k) }
-            }
-        } catch { Write-Log "   [!] не удалось создать резервную копию: $($_.Exception.Message)" }
+        # Выгрузка, проверка и подпись — в защищённой рабочей папке, затем
+        # готовая подписанная копия — в хранилище программы (New-RegBackup)
+        $bk = New-RegBackup $keys
+        if ($bk.dir) {
+            $script:BackupDir = $bk.dir
+            Write-Log ("   [+] сохранено веток: {0} -> {1}" -f $bk.saved, $bk.dir)
+            Write-Log '   [i] вернуть копию: «Изменения» -> «Из резервной копии»'
+        } elseif ($bk.error) {
+            Write-Log "   [!] не удалось создать резервную копию: $($bk.error)"
+        } else {
+            Write-Log '   [-] сохранять нечего: ни одна ветка не выгрузилась'
+        }
+        if ($bk.missed.Count -gt 0) {
+            Write-Log ("   [-] не выгрузились ветки: {0} (обычно Windows не отдаёт их даже на чтение; почему -- в каждой строке)" -f $bk.missed.Count)
+            foreach ($k in $bk.missed) { Write-Log ("       {0}" -f $k) }
+        }
     }
 
     if (-not $NoRestorePoint) {

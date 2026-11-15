@@ -55,7 +55,10 @@ namespace Win11Privacy
 
             // Фон карточки — как у самого журнала: раньше тёмное поле сидело
             // в более светлой рамке, и выходила двойная обводка.
-            Card card = new Card(); card.Dock = DockStyle.Fill; card.Padding = new Padding((int)(u*0.6F));
+            // Отступ текста от края — как у текста карточек на других страницах:
+            // раньше строки журнала почти касались левой кромки поля.
+            Card card = new Card(); card.Dock = DockStyle.Fill;
+            card.Padding = new Padding((int)(u * 1.1F), (int)(u * 0.8F), (int)(u * 0.4F), (int)(u * 0.6F));
             card.Margin = new Padding(0,(int)(u*0.5F),0,(int)(u*0.3F));
             card.BackColor = Theme.LogBg;
             _log = new RichTextBox();
@@ -88,8 +91,10 @@ namespace Win11Privacy
         private void UpdateLogEmpty()
         {
             if (_logEmpty == null || _log == null) return;
-            bool empty = _log.TextLength == 0;
-            if (_logEmpty.Visible != empty) _logEmpty.Visible = empty;
+            // Без сравнения с Visible: у скрытой страницы оно всегда false, и
+            // строки, пришедшие в журнал, пока открыта другая страница (ошибка
+            // фонового запроса), оставляли поверх них «Журнал пока пуст».
+            _logEmpty.Visible = _log.TextLength == 0;
         }
 
         // Журнал выгружается в файл целиком: именно по нему разбираются
@@ -128,21 +133,61 @@ namespace Win11Privacy
         // ================================================================== //
         //  Журнал
         // ================================================================== //
-        private void LogLine(string s, Color c)
+        // Шрифты журнала: заголовок действия и заголовки разделов — шрифтом
+        // окна, полужирным; строки движка — моноширинным, как раньше.
+        private Font _logTitleFont, _logSectionFont;
+        private Font LogTitleFont
+        {
+            get { if (_logTitleFont == null) _logTitleFont = new Font(Font.FontFamily, Font.Size * 1.08F, FontStyle.Bold); return _logTitleFont; }
+        }
+        private Font LogSectionFont
+        {
+            get { if (_logSectionFont == null) _logSectionFont = new Font(Font.FontFamily, Font.Size * 0.96F, FontStyle.Bold); return _logSectionFont; }
+        }
+
+        private void LogLine(string s, Color c) { LogLine(s, c, null); }
+        private void LogLine(string s, Color c, Font f)
         {
             if (_log == null) return;
-            _log.SelectionStart = _log.TextLength; _log.SelectionLength = 0; _log.SelectionColor = c;
-            _log.AppendText(s + Environment.NewLine); _log.SelectionColor = _log.ForeColor;
+            _log.SelectionStart = _log.TextLength; _log.SelectionLength = 0;
+            _log.SelectionColor = c; _log.SelectionFont = f ?? _log.Font;
+            _log.AppendText(s + Environment.NewLine);
+            _log.SelectionColor = _log.ForeColor; _log.SelectionFont = _log.Font;
         }
+
+        // Пустая строка между частями журнала — одна, без двойных.
+        private bool LogEndsWithGap()
+        {
+            int n = _log.TextLength;
+            if (n == 0) return true;
+            string tail = _log.Text.Substring(Math.Max(0, n - 4));
+            return tail.EndsWith("\n\n") || tail.EndsWith("\r\n\r\n") || tail.EndsWith("\r\r");
+        }
+        private void LogGap()
+        {
+            if (_log == null || LogEndsWithGap()) return;
+            LogLine("", Theme.TextDim);
+        }
+
         private void LogEngine(string s)
         {
             string t = s.TrimStart();
             if (t.StartsWith("###JSON###")) return;
+            if (t.Length == 0) { LogGap(); return; }
+            // «--- Раздел --------» движка — заголовок раздела: без чёрточек,
+            // полужирным и с пустой строкой перед ним
+            if (t.StartsWith("---"))
+            {
+                string title = t.Trim('-', ' ');
+                LogGap();
+                if (title.Length > 0) LogLine(title, Theme.Accent, LogSectionFont);
+                _log.SelectionStart = _log.TextLength; _log.ScrollToCaret();
+                return;
+            }
             Color c = Theme.TextDim;
             if (t.StartsWith("[+]")) c = Theme.Ok;
             else if (t.StartsWith("[!]")) c = Theme.Err;
             else if (t.StartsWith("[-]")) c = Theme.TextFaint;
-            else if (t.StartsWith("---")) c = Theme.Accent;
             else if (t.StartsWith(L.T("Система")) || t.StartsWith(L.T("ИТОГО")) || t.StartsWith(L.T("Изменений")) || t.StartsWith(L.T("Ошибок")) || t.StartsWith(L.T("Модули"))) c = Theme.Text;
             LogLine(s, c);
             _log.SelectionStart = _log.TextLength; _log.ScrollToCaret();

@@ -2,6 +2,11 @@
 Win11Privacy.exe
 *.pdb
 
+# Установщик и картинки мастера собирает installer/build.ps1
+Win11Privacy-Setup.exe
+dist/
+installer/obj/
+
 # Результаты самопроверки движка (могут содержать данные компьютера)
 result-*.json
 result-*.txt

@@ -83,6 +83,7 @@ namespace Win11Privacy
                     Console.WriteLine("CLIENT " + f.ClientSize.Width + "x" + f.ClientSize.Height);
                     DumpBounds(f.PageOf(page), 0);
                 }
+                ScanLabels(f.PageOf(page));
                 foreach (string clip in ClipWatch.Clipped) Console.WriteLine(clip);
                 Console.WriteLine("UITEST ok"); f.Close();
             };
@@ -224,27 +225,28 @@ namespace Win11Privacy
             {
                 string txt = File.ReadAllText(profilePath);
                 string why;
-                string extra = SilentProfileArgs(Json.ParseObject(txt), out why);
+                EngineRequest req = SilentProfileArgs(Json.ParseObject(txt), out why);
                 // 4 — профиль негодный и движок не запускался; 2 у движка значит
                 // «закончил, но с ошибками», путать их нельзя
-                if (extra == null) { Console.Error.WriteLine(why); return 4; }
-                return RunEngineConsole(extra);
+                if (req == null) { Console.Error.WriteLine(why); return 4; }
+                return RunEngineConsole(req);
             }
             catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 1; }
         }
 
-        // Имена модулей и пунктов из файла профиля идут в командную строку
-        // движка. Раньше они клеились как есть, и «telemetry -Revert» в файле
-        // добавил бы к запуску другой ключ движка. Теперь годится только вид,
-        // который бывает у модулей (telemetry, app_vscode) и пунктов
-        // (telemetry#3): без пробелов, кавычек и дефисов. Остальное — отказ
-        // целиком, а не запуск с тем, что осталось.
+        // Имена модулей и пунктов из файла профиля идут в запрос к движку.
+        // Раньше они клеились в командную строку как есть, и «telemetry -Revert»
+        // в файле добавил бы к запуску другой ключ движка. Теперь это данные
+        // запроса (EngineRequest), а не командная строка, и всё равно годится
+        // только вид, который бывает у модулей (telemetry, app_vscode) и
+        // пунктов (telemetry#3). Остальное — отказ целиком, а не запуск с тем,
+        // что осталось.
         private static readonly System.Text.RegularExpressions.Regex ModuleIdRx =
             new System.Text.RegularExpressions.Regex(@"^[a-z][a-z0-9_]{0,40}$");
         private static readonly System.Text.RegularExpressions.Regex ItemIdRx =
             new System.Text.RegularExpressions.Regex(@"^[a-z][a-z0-9_]{0,40}#[0-9]{1,4}$");
 
-        internal static string SilentProfileArgs(Dictionary<string, object> d, out string why)
+        internal static EngineRequest SilentProfileArgs(Dictionary<string, object> d, out string why)
         {
             why = "";
             if (d == null) { why = L.T("Файл профиля не читается как JSON."); return null; }
@@ -256,7 +258,7 @@ namespace Win11Privacy
                 if (!mods.Contains(m)) mods.Add(m);
             }
             if (mods.Count == 0) { why = L.T("В профиле нет ни одного модуля."); return null; }
-            string extra = "-Modules " + string.Join(",", mods.ToArray());
+            EngineRequest req = new EngineRequest("Apply").List("Modules", mods);
             List<string> skip = new List<string>();
             foreach (object o in Json.GetArr(d, "skip"))
             {
@@ -264,25 +266,21 @@ namespace Win11Privacy
                 if (s == null || !ItemIdRx.IsMatch(s)) { why = L.T("В профиле недопустимый номер пункта: ") + s; return null; }
                 if (!skip.Contains(s)) skip.Add(s);
             }
-            if (skip.Count > 0) extra += " -SkipItems " + string.Join(",", skip.ToArray());
-            if (d.ContainsKey("backup") && !Json.GetBool(d, "backup")) extra += " -NoBackup";
-            if (d.ContainsKey("restorePoint") && !Json.GetBool(d, "restorePoint")) extra += " -NoRestorePoint";
-            if (d.ContainsKey("allProfiles") && Json.GetBool(d, "allProfiles")) extra += " -AllProfiles";
-            return extra;
+            if (skip.Count > 0) req.List("SkipItems", skip);
+            req.Switch("NoBackup", d.ContainsKey("backup") && !Json.GetBool(d, "backup"));
+            req.Switch("NoRestorePoint", d.ContainsKey("restorePoint") && !Json.GetBool(d, "restorePoint"));
+            req.Switch("AllProfiles", d.ContainsKey("allProfiles") && Json.GetBool(d, "allProfiles"));
+            return req;
         }
 
         private static int RunCliAudit()
         {
             // возвращает число несоответствий как код выхода
-            string script, ps;
+            ProcessStartInfo psi;
             // защищённой папки или системного PowerShell нет — движок не запускаем
-            try { script = ExtractEngineStatic(); ps = EngineFile.PowerShellPath(); }
+            try { psi = EngineProcess(ExtractEngineStatic()); }
             catch (Exception ex) { Console.Error.WriteLine(ex.Message); return -1; }
-            ProcessStartInfo psi = new ProcessStartInfo(ps,
-                "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" -Audit");
-            psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = Encoding.UTF8; psi.CreateNoWindow = true;
-            EngineFile.Harden(psi);
-            Process p = Process.Start(psi);
+            Process p = StartWithRequest(psi, new EngineRequest("Audit"));
             string json = null;
             while (!p.StandardOutput.EndOfStream) { string l = p.StandardOutput.ReadLine(); if (l != null && l.TrimStart().StartsWith("###JSON###")) json = l.TrimStart().Substring(10).Trim(); }
             p.WaitForExit();
@@ -293,23 +291,35 @@ namespace Win11Privacy
             return total - ok;
         }
 
-        private static int RunEngineConsole(string extra)
+        private static int RunEngineConsole(EngineRequest req)
         {
-            string script, ps;
-            try { script = ExtractEngineStatic(); ps = EngineFile.PowerShellPath(); }
+            ProcessStartInfo psi;
+            try { psi = EngineProcess(ExtractEngineStatic()); }
             catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 1; }
             string desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-            ProcessStartInfo psi = new ProcessStartInfo(ps,
-                "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" " + extra + " -BackupRoot \"" + desktop + "\"");
-            psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = Encoding.UTF8; psi.CreateNoWindow = true;
-            EngineFile.Harden(psi);
-            Process p = Process.Start(psi);
+            Process p = StartWithRequest(psi, req.WithCommon(desktop, null));
             while (!p.StandardOutput.EndOfStream) { string l = p.StandardOutput.ReadLine(); if (l != null && !l.TrimStart().StartsWith("###JSON###") && l.Trim() != "###DONE###") Console.WriteLine(l); }
             p.WaitForExit();
             return p.ExitCode;
         }
 
         private static string ExtractEngineStatic() { return EngineFile.Ensure(); }
+
+        // Запуск движка с запросом на стандартный ввод (тихий режим и проверки):
+        // запрос пишется целиком и ввод закрывается до чтения вывода — движок
+        // сначала читает запрос до конца и только потом что-то печатает.
+        internal static Process StartWithRequest(ProcessStartInfo psi, EngineRequest req)
+        {
+            psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = Encoding.UTF8;
+            // ошибки — прямо в консоль, как раньше: непрочитанный канал ошибок
+            // при большом выводе остановил бы движок
+            psi.RedirectStandardError = false; psi.StandardErrorEncoding = null;
+            Process p = Process.Start(psi);
+            try { p.StandardInput.Write(req.ToJson()); p.StandardInput.Flush(); }
+            catch { }
+            finally { try { p.StandardInput.Close(); } catch { } }
+            return p;
+        }
 
 #if UITEST
         // Печатает дерево с координатами: сразу видно, кто вылез за родителя
@@ -323,6 +333,35 @@ namespace Win11Privacy
                 Console.WriteLine(new string(' ', depth * 2) + cc.GetType().Name +
                     " [" + cc.Left + "," + cc.Top + " " + cc.Width + "x" + cc.Height + "]" + over);
                 DumpBounds(cc, depth + 1);
+            }
+        }
+
+        // Обычные Label сами о себе не сообщают (ClipWatch.Note зовут только
+        // свои элементы). Текст, который при крупном шрифте переносится на
+        // лишнюю строку и не помещается по высоте, ищем обходом страницы:
+        // при 150 % у карточки «Сеть» так пропадала последняя строка.
+        private static void ScanLabels(Control c)
+        {
+            if (c == null) return;
+            foreach (Control cc in c.Controls)
+            {
+                if (!cc.Visible) continue;
+                Label l = cc as Label;
+                if (l != null && !l.AutoSize && !l.AutoEllipsis && l.Text.Length > 0 &&
+                    l.ClientSize.Width > 0 && l.ClientSize.Height > 0)
+                {
+                    int w = l.ClientSize.Width - l.Padding.Horizontal;
+                    int have = l.ClientSize.Height - l.Padding.Vertical;
+                    Size need = TextRenderer.MeasureText(l.Text, l.Font, new Size(Math.Max(1, w), 0),
+                                                         TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl);
+                    if (need.Height > have + 1) ClipWatch.Note("Label", l.Text, need.Height, have);
+                }
+                // Список страницы, сжатый почти в ноль: всё над ним (шапка,
+                // плитки в два ряда) заняло высоту, и главного не видно, хотя
+                // текст нигде не обрезан. Так было на экране 1366 × 768 при 125 %.
+                if (cc is StackPanel && cc.Height < cc.Font.Height * 2)
+                    ClipWatch.Note("List", cc.Name.Length > 0 ? cc.Name : cc.GetType().Name, cc.Font.Height * 2, cc.Height);
+                ScanLabels(cc);
             }
         }
 

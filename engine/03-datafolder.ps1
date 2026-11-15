@@ -31,21 +31,80 @@ function Test-DirSecure {
     } catch { return $false }
 }
 
-# Можно ли верить файлу или папке внутри папки данных: не ссылка, владелец —
-# система или администраторы, и никому чужому явным правом не открыт на запись
-# (унаследованные права заменит новый корень).
-function Test-ItemTrusted {
-    param($Item)
-    if ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
-    try { $acl = Get-Acl -LiteralPath $Item.FullName -ErrorAction Stop } catch { return $false }
-    if ($script:TrustedSids -notcontains $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value) { return $false }
-    $writeMask = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
-    foreach ($r in $acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier])) {
-        if ("$($r.AccessControlType)" -ne 'Allow') { continue }
-        if ($script:TrustedSids -contains $r.IdentityReference.Value) { continue }
-        if (([int64]$r.FileSystemRights -band $writeMask) -ne 0) { return $false }
+# Можно ли верить файлу или папке: не ссылка, владелец — система,
+# администраторы или TrustedInstaller, и никто другой не может его изменить,
+# удалить, переименовать, сменить права или владельца (W11P-006).
+#
+# Раньше смотрелись только явные права (GetAccessRules($true, $false)):
+# право на запись, доставшееся от родительской папки, проходило незамеченным.
+# Теперь — все права, явные и унаследованные:
+#   * к самому объекту относится всё, кроме «только для вложенного»;
+#   * у папки ещё и то, что она передаст вложенному (её файлы и папки получат
+#     эти права) — кроме «создатель-владелец» и «создатель-группа»: на месте
+#     этих записей у вложенного окажется тот, кто его создал (сам движок);
+#   * запрет вычитается, только если он явный, для «Все» (Everyone), список
+#     прав в обычном порядке и запрет относится к самому объекту: такой
+#     запрет проверяется раньше любого разрешения и касается любого. Запрет
+#     одной группы не закрывает того, у кого право пришло через другую
+#     (например, «Прошедшие проверку»), а унаследованный запрет стоит после
+#     явных разрешений и их не отменяет. Для вложенного запреты не вычитаются
+#     вовсе: у него могут быть свои явные разрешения, которые идут раньше.
+# Права не читаются — не верим (отказ, а не «доступа нет»).
+# -ExplicitOnly — только для переноса старой папки данных (Protect-DataRoot):
+# там унаследованные права тут же заменяет новый корень, а после замены
+# всё проверяется ещё раз полностью.
+function Get-UntrustedRights {
+    param($Acl, [bool]$Container, [switch]$ExplicitOnly)
+    $self = [int64]0; $child = [int64]0; $deny = [int64]0
+    $canonical = [bool]$Acl.AreAccessRulesCanonical
+    $inh = [Security.AccessControl.InheritanceFlags]::ObjectInherit -bor [Security.AccessControl.InheritanceFlags]::ContainerInherit
+    foreach ($r in $Acl.GetAccessRules($true, (-not $ExplicitOnly), [Security.Principal.SecurityIdentifier])) {
+        $sid = $r.IdentityReference.Value
+        $rights = [int64]$r.FileSystemRights
+        $inheritOnly = [bool]($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly)
+        # «не распространять дальше» всё равно достаётся прямым вложенным
+        $toChildren = $Container -and [bool]($r.InheritanceFlags -band $inh)
+        if ("$($r.AccessControlType)" -eq 'Deny') {
+            if ($canonical -and -not $r.IsInherited -and -not $inheritOnly -and $sid -eq 'S-1-1-0') { $deny = $deny -bor $rights }
+            continue
+        }
+        if ($script:TrustedSids -contains $sid) { continue }
+        # «Права владельца» (OWNER RIGHTS) достаются владельцу, а он проверен
+        if ($sid -eq 'S-1-3-4') { continue }
+        if (-not $inheritOnly) { $self = $self -bor $rights }
+        # «создатель-владелец» и «создатель-группа» у вложенного станут тем,
+        # кто его создаст; остальное вложенное получит как есть
+        if ($toChildren -and $sid -ne 'S-1-3-0' -and $sid -ne 'S-1-3-1') { $child = $child -bor $rights }
     }
-    return $true
+    return (($self -band (-bnot $deny)) -bor $child)
+}
+
+function Test-ItemTrusted {
+    param($Item, [switch]$ExplicitOnly)
+    if ($null -eq $Item -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+    try { $acl = Get-Acl -LiteralPath $Item.FullName -ErrorAction Stop } catch { return $false }
+    try {
+        $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+        if ($null -eq $owner -or $script:TrustedSids -notcontains $owner.Value) { return $false }
+        # запись, удаление (своё и вложенного), смена прав или владельца,
+        # атрибутов — в том числе общими правами
+        $writeMask = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
+        $open = Get-UntrustedRights $acl ([bool]$Item.PSIsContainer) -ExplicitOnly:$ExplicitOnly
+        return (($open -band $writeMask) -eq 0)
+    } catch { return $false }
+}
+
+# Объект и весь путь до него (W11P-006): сам он — Test-ItemTrusted, а ни одну
+# папку выше чужой не может переименовать, удалить, перенастроить или
+# вычистить вложенное (Test-DirChainSecure). Иначе папку с проверенными
+# правами можно было бы подменить целиком, переименовав её родителя.
+function Test-PathTrusted {
+    param([string]$Path)
+    try { $it = Get-Item -LiteralPath $Path -Force -ErrorAction Stop } catch { return $false }
+    if (-not (Test-ItemTrusted $it)) { return $false }
+    $parent = Split-Path -Path $it.FullName -Parent
+    if (-not $parent) { return $true }
+    return (Test-DirChainSecure $parent)
 }
 
 # Всё недоверенное на любой глубине. Внутрь ссылок и чужих папок не заходим:
@@ -53,14 +112,30 @@ function Test-ItemTrusted {
 # Путь внутри собирается из имён: отрезать начало полного пути нельзя — у
 # временной папки бывает короткое имя 8.3, а у найденного — длинное.
 function Get-UntrustedItems {
-    param([string]$Dir, [string]$Rel = '')
+    param([string]$Dir, [string]$Rel = '', [switch]$ExplicitOnly)
     $out = New-Object System.Collections.Generic.List[object]
     foreach ($c in @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue)) {
         $r = $(if ($Rel) { Join-Path $Rel $c.Name } else { $c.Name })
-        if (-not (Test-ItemTrusted $c)) { $out.Add([pscustomobject]@{ Item = $c; Rel = $r }); continue }
-        if ($c.PSIsContainer) { foreach ($x in @(Get-UntrustedItems $c.FullName $r)) { $out.Add($x) } }
+        if (-not (Test-ItemTrusted $c -ExplicitOnly:$ExplicitOnly)) { $out.Add([pscustomobject]@{ Item = $c; Rel = $r }); continue }
+        if ($c.PSIsContainer) { foreach ($x in @(Get-UntrustedItems $c.FullName $r -ExplicitOnly:$ExplicitOnly)) { $out.Add($x) } }
     }
     return $out.ToArray()
+}
+
+# Найденное недоверенное — в свежий карантин рядом, с тем же путём внутри.
+function Move-UntrustedAside {
+    param([string]$Dir, [object[]]$Untrusted)
+    if (@($Untrusted).Count -eq 0) { return $true }
+    $aside = New-QuarantineDir $Dir
+    if (-not $aside) { Write-Log '   [!] не удалось завести папку карантина -- чужое в папке данных не тронуто'; return $false }
+    foreach ($u in $Untrusted) {
+        $to = Join-Path $aside $u.Rel
+        $toDir = Split-Path $to -Parent
+        if (-not (Test-Path -LiteralPath $toDir)) { New-Item -ItemType Directory -Path $toDir -Force | Out-Null }
+        if ($u.Item.PSIsContainer) { [IO.Directory]::Move($u.Item.FullName, $to) } else { [IO.File]::Move($u.Item.FullName, $to) }
+        Write-Log ("   [!] в папке данных лежал чужой файл, он отложен: {0}" -f $u.Rel)
+    }
+    return $true
 }
 
 # Свежая пустая папка карантина рядом с корнем: имя со случайным хвостом,
@@ -71,10 +146,38 @@ function Get-UntrustedItems {
 # ссылка — пустая строка, карантин не делается.
 function New-QuarantineDir {
     param([string]$Dir)
+    # Права карантину задаём сразу при создании — только система и
+    # администраторы, наследование выключено. Раньше папка наследовала права
+    # ProgramData, где обычный пользователь вправе заводить свои файлы и папки;
+    # в карантин же «чужое» переносится с правами администратора. Права ставим
+    # лишь под администратором: обычному процессу сменить владельца на
+    # «Администраторы» система не даёт, а наяву карантин делает только
+    # повышенный движок (Protect-DataRoot).
+    $sec = $null
+    $isAdmin = $false
+    try { $isAdmin = (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) } catch { }
+    if ($isAdmin) {
+        try {
+            $sec = New-Object System.Security.AccessControl.DirectorySecurity
+            $sec.SetAccessRuleProtection($true, $false)
+            $inh = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+            foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+                $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', $inh, 'None', 'Allow')))
+            }
+            $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        } catch { $sec = $null }
+    }
     for ($i = 0; $i -lt 20; $i++) {
         $cand = "$Dir.untrusted-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
         if (Test-Path -LiteralPath $cand) { continue }
-        try { $null = [IO.Directory]::CreateDirectory($cand) } catch { continue }
+        try {
+            if ($sec) { $null = [IO.Directory]::CreateDirectory($cand, $sec) }
+            else { $null = [IO.Directory]::CreateDirectory($cand) }
+        } catch {
+            # не вышло задать права — создаём хотя бы саму папку: содержимому
+            # карантина всё равно не верят, а отказ хуже слабых прав
+            try { $null = [IO.Directory]::CreateDirectory($cand) } catch { continue }
+        }
         if ((Get-Item -LiteralPath $cand -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
             try { [IO.Directory]::Delete($cand, $true) } catch { }
             continue
@@ -119,19 +222,15 @@ function Protect-DataRoot {
         # проверялось только то, что лежит прямо в корне. Всё, что создал не
         # администратор, любые ссылки и всё, что чужим явным правом открыто
         # на запись, уносим в карантин рядом — с тем же путём внутри.
-        $untrusted = @(Get-UntrustedItems $Dir)
-        if ($untrusted.Count -gt 0) {
-            $aside = New-QuarantineDir $Dir
-            if (-not $aside) { Write-Log '   [!] не удалось завести папку карантина -- чужое в папке данных не тронуто'; return $false }
-            foreach ($u in $untrusted) {
-                $to = Join-Path $aside $u.Rel
-                $toDir = Split-Path $to -Parent
-                if (-not (Test-Path -LiteralPath $toDir)) { New-Item -ItemType Directory -Path $toDir -Force | Out-Null }
-                if ($u.Item.PSIsContainer) { [IO.Directory]::Move($u.Item.FullName, $to) } else { [IO.File]::Move($u.Item.FullName, $to) }
-                Write-Log ("   [!] в папке данных лежал чужой файл, он отложен: {0}" -f $u.Rel)
-            }
-        }
+        # Унаследованные от ProgramData права тут не в счёт: их сейчас же
+        # заменят права нового корня.
+        if (-not (Move-UntrustedAside $Dir @(Get-UntrustedItems $Dir -ExplicitOnly))) { return $false }
         [IO.Directory]::SetAccessControl($Dir, $sec)
+        if (-not (Test-DirSecure $Dir)) { return $false }
+        # Новые права корня разошлись по вложенному — теперь проверяем всё
+        # полностью, с унаследованным (W11P-006). Обычно здесь пусто; если
+        # нет — в карантин и это.
+        if (-not (Move-UntrustedAside $Dir @(Get-UntrustedItems $Dir))) { return $false }
         return (Test-DirSecure $Dir)
     } catch {
         Write-Log ("   [!] не удалось защитить папку данных {0}: {1}" -f $Dir, $_.Exception.Message)
@@ -139,8 +238,19 @@ function Protect-DataRoot {
     }
 }
 
+# Корень защищён, и путь до него (ProgramData, корень диска) не даёт чужому
+# переименовать или удалить его целиком (W11P-006): иначе закрытую папку
+# можно было бы отодвинуть и положить на её место свою.
+function Test-SafeRootChain {
+    return [bool](Test-DirChainSecure (Split-Path $script:SafeRoot -Parent))
+}
+
 function Assert-SafeRoot {
-    if ($null -eq $script:RootState) { $script:RootState = [bool](Protect-DataRoot $script:SafeRoot) }
+    if ($null -eq $script:RootState) {
+        $chain = [bool](Test-SafeRootChain)
+        if (-not $chain) { Write-Log ("   [!] папку {0} может переименовать или удалить не администратор -- защищённой папке данных там не место" -f (Split-Path $script:SafeRoot -Parent)) }
+        $script:RootState = $chain -and [bool](Protect-DataRoot $script:SafeRoot)
+    }
     return $script:RootState
 }
 

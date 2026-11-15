@@ -27,6 +27,57 @@ function Run-Engine {
     return $out
 }
 
+# Запрос к движку, как его шлёт окно (F-08): постоянная командная строка
+# «-Request» и байты запроса на стандартный ввод. WIN11_ENGINE_TRACE=1 —
+# движок печатает «###OP### <операция>», какую на самом деле выбрал.
+function Invoke-EngineRequest {
+    param([byte[]]$Bytes, [string]$ExtraArgs = '')
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = (Get-Command powershell.exe).Source
+    $psi.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $engine + '" -Request' + $ExtraArgs
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $psi.EnvironmentVariables['WIN11_ENGINE_TRACE'] = '1'
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $errTask = $p.StandardError.ReadToEndAsync()
+    try { $p.StandardInput.BaseStream.Write($Bytes, 0, $Bytes.Length) } catch { }
+    try { $p.StandardInput.Close() } catch { }
+    $out = $p.StandardOutput.ReadToEnd()
+    $p.WaitForExit()
+    $ops = @(($out -split "`n") | Where-Object { $_.TrimStart().StartsWith('###OP###') } | ForEach-Object { $_.Trim().Substring(8).Trim() })
+    $json = $null
+    foreach ($line in ($out -split "`n")) {
+        $t = $line.TrimStart()
+        if ($t.StartsWith('###JSON###')) { try { $json = ($t.Substring(10).Trim() | ConvertFrom-Json) } catch { } }
+    }
+    return @{ code = $p.ExitCode; out = $out; err = $errTask.Result; ops = $ops; json = $json }
+}
+function Invoke-EngineRequestText {
+    param([string]$Text, [string]$ExtraArgs = '')
+    return Invoke-EngineRequest ([Text.Encoding]::ASCII.GetBytes($Text)) $ExtraArgs
+}
+# Строка JSON из любой строки — так же, как пишет окно (EngineRequest.AppendString)
+function ConvertTo-RequestString {
+    param([string]$S)
+    $sb = New-Object System.Text.StringBuilder
+    $null = $sb.Append('"')
+    foreach ($c in $S.ToCharArray()) {
+        switch ([int]$c) {
+            34 { $null = $sb.Append('\"') }
+            92 { $null = $sb.Append('\\') }
+            default {
+                if ([int]$c -lt 0x20 -or [int]$c -gt 0x7E) { $null = $sb.Append(('\u{0:x4}' -f [int]$c)) }
+                else { $null = $sb.Append($c) }
+            }
+        }
+    }
+    $null = $sb.Append('"')
+    return $sb.ToString()
+}
+
 function Get-EngineJson {
     param([string[]]$EngineArgs)
     $out = Run-Engine $EngineArgs
@@ -211,7 +262,7 @@ Write-Host 'Карантин папки данных, отказ Firefox, Защ
 # Стабы (Get-RegValue, Get-FirefoxPoliciesPath, Write-Log) объявляются внутри
 # & { } — в области скрипта они затёрли бы настоящие и сломали бы следующие
 # тесты. Проверяемые функции движка грузятся в область скрипта и видны внутри.
-foreach ($fn in $envAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('New-QuarantineDir', 'Write-FirefoxKey', 'Test-TamperProtection') }, $true)) { Invoke-Expression $fn.Extent.Text }
+foreach ($fn in $envAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('New-QuarantineDir', 'Write-FirefoxKey', 'Test-TamperProtection', 'Update-FirefoxPoliciesFile', 'Read-Utf8Strict', 'Write-JsonFileAtomic', 'Replace-FileAtomic', 'Open-FirefoxMutex', 'Test-MutexOwnerTrusted') }, $true)) { Invoke-Expression $fn.Extent.Text }
 & {
     function Write-Log { param([string]$Message = '') }
     $qRoot = Join-Path $env:TEMP ('w11p-q-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -234,6 +285,8 @@ foreach ($fn in $envAst.FindAll({ param($n) $n -is [System.Management.Automation
     New-Item -ItemType Directory -Force (Join-Path $ffDir 'distribution') | Out-Null
     $ffFile = Join-Path $ffDir 'distribution\policies.json'
     function Get-FirefoxPoliciesPath { $ffFile }
+    function Test-ItemTrusted { param($Item) $true }
+    function Test-PathTrusted { param($Path) $true }
     $ffOrig = "{`r`n  // корпоративный комментарий, ломающий ConvertFrom-Json 5.1`r`n  `"policies`": { `"DisableTelemetry`": true }`r`n}"
     Set-Content -LiteralPath $ffFile -Value $ffOrig -Encoding UTF8
     # эталон — то, что реально легло на диск (у Set-Content свой перевод строки)
@@ -334,6 +387,162 @@ Write-Host ''
 Write-Host 'Запрет выхода в сеть'
 $noPath = Get-EngineJson @('-BlockApp')
 Check 'без пути к программе — понятная ошибка' ($null -ne $noPath -and "$($noPath.error)".Length -gt 0)
+
+# Ключ датчика с кавычкой закрыл бы -SensorKey в командной строке окна, и
+# остаток движок разобрал бы как свои ключи (с правами администратора). Движок
+# отвергает недопустимый ключ ДО любой записи (кавычку — по виду [\x00-\x1f"],
+# это проверяет статический тест ниже; окно само не пускает её — SelfTest).
+# Здесь — то, что переживает разбор argv: переход вверх, лишние сегменты, не из
+# букв разрешение, неверное значение. Все они отвергаются без записи в реестр.
+$sDots = Get-EngineJson @('-SensorSet', '-SensorKey', 'webcam\..\evil', '-SensorValue', 'Deny')
+Check 'датчик: переход вверх (..) отвергнут' ($null -ne $sDots -and -not $sDots.ok -and "$($sDots.error)" -match 'недопустим')
+$sDeep = Get-EngineJson @('-SensorSet', '-SensorKey', 'webcam\a\b\c', '-SensorValue', 'Deny')
+Check 'датчик: лишние сегменты пути отвергнуты' ($null -ne $sDeep -and -not $sDeep.ok -and "$($sDeep.error)" -match 'недопустим')
+$sCap = Get-EngineJson @('-SensorSet', '-SensorKey', 'web1cam\app', '-SensorValue', 'Deny')
+Check 'датчик: разрешение не из букв отвергнуто' ($null -ne $sCap -and -not $sCap.ok)
+$sBadVal = Get-EngineJson @('-SensorSet', '-SensorKey', 'webcam\Microsoft.Win_abc', '-SensorValue', 'Maybe')
+Check 'датчик: значение не Allow/Deny отвергнуто' ($null -ne $sBadVal -and -not $sBadVal.ok)
+
+# --------------------------------------------------------------------------- #
+#  F-08: запрос к движку через стандартный ввод. Проверяется, какая операция
+#  на самом деле выбрана (###OP###), а не только код выхода. Только чтение:
+#  в положительных случаях — DataInfo и ListDefs, разрушительное не вызывается.
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Запрос к движку (F-08): данные не становятся операциями'
+function Test-NoOp { param($R) return ($R.code -eq 64 -and $R.ops.Count -eq 0) }
+function Get-RqDesc { param($R) return ("код {0}, операции: [{1}]" -f $R.code, ($R.ops -join ',')) }
+
+# A. Исходная атака: кавычка и -XrayStatus в имени раздела ConsentStore
+$rA = Invoke-EngineRequestText ('{"v":1,"op":"SensorSet","args":{"SensorKey":' + (ConvertTo-RequestString 'webcam\NonPackaged\evil" -XrayStatus "') + ',"SensorValue":"Deny"}}')
+Check 'A: кавычка с -XrayStatus в ключе — запрос отклонён до выбора операции' (Test-NoOp $rA) (Get-RqDesc $rA)
+Check 'A: -XrayStatus не выполнялся' (($rA.out -notmatch '###OP### XrayStatus') -and ($null -eq $rA.json -or "$($rA.json.error)" -eq 'request rejected'))
+$rA2 = Invoke-EngineRequestText ('{"v":1,"op":"SensorSet","args":{"SensorKey":' + (ConvertTo-RequestString 'webcam\NonPackaged\x -XrayStatus -XrayWipe') + ',"SensorValue":"Deny"}}')
+Check 'A: «-XrayStatus» без кавычки остаётся данными: выбрана только SensorSet' ($rA2.ops.Count -eq 1 -and $rA2.ops[0] -ceq 'SensorSet') (Get-RqDesc $rA2)
+Check 'A: такой ключ отвергнут движком без записи' ($null -ne $rA2.json -and -not $rA2.json.ok -and "$($rA2.json.error)" -match 'недопустим')
+
+# B. Разрушительные ключи внутри данных — безвредные операции
+$rB1 = Invoke-EngineRequestText ('{"v":1,"op":"RestoreBackup","args":{"BackupPath":' + (ConvertTo-RequestString 'C:\x" -PurgeData -RestoreAll "') + '}}')
+Check 'B: путь копии с кавычкой и -PurgeData — отказ, операции нет' (Test-NoOp $rB1) (Get-RqDesc $rB1)
+$rB2 = Invoke-EngineRequestText ('{"v":1,"op":"DataInfo","args":{"BackupRoot":' + (ConvertTo-RequestString 'C:\Temp\x -PurgeData -XrayWipe -Revert') + '}}')
+Check 'B: «-PurgeData -XrayWipe -Revert» в пути — выбрана только DataInfo' ($rB2.ops.Count -eq 1 -and $rB2.ops[0] -ceq 'DataInfo') (Get-RqDesc $rB2)
+Check 'B: данные программы не удалялись' (($rB2.out -notmatch 'Удаление данных программы') -and ($null -ne $rB2.json) -and ($null -eq $rB2.json.removed))
+$rB3 = Invoke-EngineRequestText '{"v":1,"op":"Apply","args":{"Modules":["telemetry -Revert"]}}'
+Check 'B: ключ движка в имени модуля — отказ' (Test-NoOp $rB3) (Get-RqDesc $rB3)
+$rB4 = Invoke-EngineRequestText ('{"v":1,"op":"SnapshotDiff","args":{"SnapshotDiff":' + (ConvertTo-RequestString 'a.json|b.json" -RestoreAll "') + '}}')
+Check 'B: ключ движка в именах снимков — отказ' (Test-NoOp $rB4) (Get-RqDesc $rB4)
+
+# D. Негодные ключи ConsentStore: ни один не пишется
+$badKeys = @('..', 'webcam\..\evil', 'webcam\\Microsoft.X_8wekyb3d8bbwe', '\webcam\Microsoft.X_8wekyb3d8bbwe', 'webcam\',
+             'webcam\NonPackaged', 'C:\Windows\System32', '\\server\share\x', 'HKLM:\SOFTWARE\x', 'notacap\Microsoft.X_8wekyb3d8bbwe',
+             'webcam\NonPackaged\##server#share#x.exe', 'webcam\NonPackaged\C:#a#.#b.exe', 'webcam\NonPackaged\x.exe',
+             'webcam/Microsoft.X_8wekyb3d8bbwe', 'webcam\Microsoft.X_8wekyb3d8bbwe\extra\more', 'webcam\JustAName',
+             ('webcam\NonPackaged\C:#' + ('a' * 330)), "webcam\x`n_8wekyb3d8bbwe", 'webcam\x"y_8wekyb3d8bbwe', 'webcam\.')
+$badOk = 0; $badWhy = @()
+foreach ($k in $badKeys) {
+    $r = Invoke-EngineRequestText ('{"v":1,"op":"SensorSet","args":{"SensorKey":' + (ConvertTo-RequestString $k) + ',"SensorValue":"Deny"}}')
+    $rejected = (Test-NoOp $r) -or ($r.ops.Count -eq 1 -and $r.ops[0] -ceq 'SensorSet' -and $null -ne $r.json -and -not $r.json.ok -and "$($r.json.error)" -match 'недопустим')
+    if ($rejected) { $badOk++ } else { $badWhy += $k }
+}
+Check ("D: негодные ключи ConsentStore отвергнуты без записи ({0} из {1})" -f $badOk, $badKeys.Count) ($badOk -eq $badKeys.Count) ($badWhy -join ' | ')
+
+# C (грамматика). Годные ключи дают ровно ожидаемый путь в реестре
+$ckFn = $null
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($fn.Name -eq 'Get-ConsentKeyPath') { $ckFn = $fn }
+}
+$capsText = [regex]::Match((Get-Content -LiteralPath $engine -Raw -Encoding UTF8), '(?s)\$script:SpyCaps = @\(.*?\n\)').Value
+Check 'C: разбор ключа ConsentStore и список разрешений найдены в движке' ($null -ne $ckFn -and $capsText.Length -gt 0)
+if ($null -ne $ckFn -and $capsText.Length -gt 0) {
+    Invoke-Expression $capsText
+    $script:ConsentRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore'
+    Invoke-Expression $ckFn.Extent.Text
+    $cr = $script:ConsentRoot
+    $goodKeys = [ordered]@{
+        'webcam\Microsoft.WindowsCamera_8wekyb3d8bbwe'               = "$cr\webcam\Microsoft.WindowsCamera_8wekyb3d8bbwe"
+        'MICROPHONE\nonpackaged\C:#Program Files#App#app.exe'        = "$cr\microphone\NonPackaged\C:#Program Files#App#app.exe"
+        'location'                                                   = "$cr\location"
+        'sensors.custom\Microsoft.WindowsMaps_8wekyb3d8bbwe'         = "$cr\sensors.custom\Microsoft.WindowsMaps_8wekyb3d8bbwe"
+        'webcam\NonPackaged\C:#Программы#Камера (x86)#cam [1].exe'   = "$cr\webcam\NonPackaged\C:#Программы#Камера (x86)#cam [1].exe"
+    }
+    $goodOk = 0; $goodWhy = @()
+    foreach ($k in $goodKeys.Keys) {
+        $got = Get-ConsentKeyPath $k
+        if ($got -ceq $goodKeys[$k]) { $goodOk++ } else { $goodWhy += ("{0} -> {1}" -f $k, $got) }
+    }
+    Check ("C: годные ключи ConsentStore дают нужный путь ({0} из {1})" -f $goodOk, $goodKeys.Count) ($goodOk -eq $goodKeys.Count) ($goodWhy -join ' | ')
+    $badDirect = @($badKeys | Where-Object { $null -ne (Get-ConsentKeyPath $_) })
+    Check 'C: негодные ключи разбор не пропускает' ($badDirect.Count -eq 0) ($badDirect -join ' | ')
+}
+
+# E. Враждебные значения: операция остаётся той, что в запросе
+$corpus = @('C:\a b', 'C:\a"b', 'C:\a""b', 'C:\a\', 'C:\a\\', 'C:\Путь\Кириллица', '', ' ', "C:\a`nb", "C:\a`rb", "C:\a`tb",
+            'C:\a & b | c ^ d', 'C:\a -PurgeData', '-PurgeData', '--% -Revert', 'C:\$(Remove-Item C:\x)', "C:\a'b -XrayWipe '",
+            'C:\a;b', 'C:\a`b', "C:\a$([char]0)b", '\\server\share', 'C:\..\Windows', '"-XrayStatus"')
+$eBad = @()
+foreach ($v in $corpus) {
+    $r = Invoke-EngineRequestText ('{"v":1,"op":"DataInfo","args":{"BackupRoot":' + (ConvertTo-RequestString $v) + '}}')
+    $fine = (Test-NoOp $r) -or ($r.ops.Count -eq 1 -and $r.ops[0] -ceq 'DataInfo')
+    if (-not $fine) { $eBad += ("[{0}] {1}" -f $v, (Get-RqDesc $r)) }
+}
+Check ("E: ни одно из {0} враждебных значений не сменило операцию" -f $corpus.Count) ($eBad.Count -eq 0) ($eBad -join ' | ')
+
+# Порченые и чужие запросы — отказ до выбора операции
+$malformed = [ordered]@{
+    'пустой ввод'                    = ''
+    'не JSON'                        = 'not json'
+    'повтор поля op'                 = '{"v":1,"op":"DataInfo","op":"Revert"}'
+    'повтор поля с другим регистром' = '{"v":1,"op":"DataInfo","Op":"Revert"}'
+    'операция только для задач'      = '{"v":1,"op":"Guard"}'
+    'операция не из списка'          = '{"v":1,"op":"PurgeBuffer"}'
+    'сам Request как операция'       = '{"v":1,"op":"Request"}'
+    'регистр имени операции'         = '{"v":1,"op":"datainfo"}'
+    'неизвестная версия'             = '{"v":2,"op":"DataInfo"}'
+    'лишнее поле'                    = '{"v":1,"op":"DataInfo","extra":1}'
+    'args не объект'                 = '{"v":1,"op":"DataInfo","args":[]}'
+    'чужой аргумент'                 = '{"v":1,"op":"DataInfo","args":{"SensorKey":"webcam"}}'
+    'число строкой'                  = '{"v":1,"op":"Monitor","args":{"MonitorHours":"24"}}'
+    'число вне пределов'             = '{"v":1,"op":"Monitor","args":{"MonitorHours":99999}}'
+    'дробное число'                  = '{"v":1,"op":"Timeline","args":{"TimelineDays":3.5}}'
+    'выключатель false'              = '{"v":1,"op":"Spy","args":{"SpyAll":false}}'
+    'не строка в списке'             = '{"v":1,"op":"Apply","args":{"Modules":["ads",1]}}'
+    'нет обязательного'              = '{"v":1,"op":"Apply","args":{}}'
+    'пустой обязательный список'     = '{"v":1,"op":"Apply","args":{"Modules":[]}}'
+    'null'                           = '{"v":1,"op":"DataInfo","args":{"BackupRoot":null}}'
+    'лишнее после запроса'           = '{"v":1,"op":"DataInfo"} {"v":1,"op":"Revert"}'
+    'повтор args'                    = '{"v":1,"op":"DataInfo","args":{},"args":{"BackupRoot":"C:\\a"}}'
+    'глубокая вложенность'           = '{"v":1,"op":"DataInfo","args":{"BackupRoot":[[["x"]]]}}'
+    'не объект'                      = '["DataInfo"]'
+    'оборванный'                     = '{"v":1,"op":"DataInfo"'
+}
+$mBad = @()
+foreach ($name in $malformed.Keys) {
+    $r = Invoke-EngineRequestText $malformed[$name]
+    if (-not (Test-NoOp $r)) { $mBad += ("{0}: {1}" -f $name, (Get-RqDesc $r)) }
+}
+$r = Invoke-EngineRequest ([Text.Encoding]::UTF8.GetBytes('{"v":1,"op":"DataInfo","args":{"BackupRoot":"C:\\Путь"}}'))
+if (-not (Test-NoOp $r)) { $mBad += 'байты не ASCII: ' + (Get-RqDesc $r) }
+$r = Invoke-EngineRequestText ('{"v":1,"op":"DataInfo","args":{"BackupRoot":"C:\\' + ('a' * 300000) + '"}}')
+if (-not (Test-NoOp $r)) { $mBad += 'слишком большой: ' + (Get-RqDesc $r) }
+$r = Invoke-EngineRequestText '{"v":1,"op":"DataInfo"}' ' -XrayStatus'
+if (-not (Test-NoOp $r)) { $mBad += 'ключ командной строки вместе с -Request: ' + (Get-RqDesc $r) }
+Check ("порченые и чужие запросы отклонены до выбора операции ({0} видов)" -f ($malformed.Count + 3)) ($mBad.Count -eq 0) ($mBad -join ' | ')
+
+# Годные запросы проходят: метка BOM, пробелы и переводы строк, \u в пути, ListDefs.
+# Метку UTF-8 в канал стандартного ввода .NET дописывает сам, ещё при запуске
+# процесса, если кодировка ввода консоли — UTF-8 (так и бывает у окна). Здесь
+# движок должен получить ровно одну метку: дописываем её, только если среда
+# сама этого не сделает.
+$autoBom = $false
+try { $autoBom = ([Console]::InputEncoding.GetPreamble().Length -gt 0) } catch { }
+$bom = [Text.Encoding]::ASCII.GetBytes('{"v":1,"op":"DataInfo"}')
+if (-not $autoBom) { $bom = [byte[]](0xEF, 0xBB, 0xBF) + $bom }
+$r = Invoke-EngineRequest $bom
+Check 'годный запрос с меткой BOM — DataInfo' ($r.ops.Count -eq 1 -and $r.ops[0] -ceq 'DataInfo') (Get-RqDesc $r)
+$r = Invoke-EngineRequestText ("{ `"v`" : 1 ,`r`n `"op`" : `"DataInfo`" , `"args`" : { `"BackupRoot`" : `"C:\\\u041f\u0443\u0442\u044c`" } }`r`n")
+Check 'годный запрос с пробелами и \u в пути — DataInfo' ($r.ops.Count -eq 1 -and $r.ops[0] -ceq 'DataInfo') (Get-RqDesc $r)
+$r = Invoke-EngineRequestText '{"v":1,"op":"ListDefs"}'
+Check 'ListDefs через запрос отдаёт список настроек' ($r.ops.Count -eq 1 -and $r.ops[0] -ceq 'ListDefs' -and $null -ne $r.json) (Get-RqDesc $r)
 
 $devFns = @('ConvertFrom-DevicePath')
 $devFound = @()
@@ -812,7 +1021,9 @@ if (Get-Command Apply-Def -ErrorAction SilentlyContinue) {
 Write-Host ''
 Write-Host 'Резервная копия: только при ручном применении и только по факту'
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-    if ($fn.Name -in @('Ensure-Backup', 'Write-Section', 'Export-RegKey', 'Invoke-RegExe', 'Get-BackupFileSig', 'Test-RegExportFile')) { Invoke-Expression $fn.Extent.Text }
+    if ($fn.Name -in @('Ensure-Backup', 'Write-Section', 'Export-RegKey', 'Invoke-RegExe', 'Test-RegExportFile',
+                       'New-RegBackup', 'New-SafeWorkDir', 'Remove-StaleWorkDirs', 'Get-BackupBytesSig', 'Get-BackupManifestSig',
+                       'ConvertTo-BackupManifestText', 'Remove-TreeNoFollow', 'Get-BackupStoreDir', 'Limit-BackupStore')) { Invoke-Expression $fn.Extent.Text }
     if ($fn.Name -in @('Compress-Journal', 'ConvertTo-Fields', 'Get-JournalKey')) { Invoke-Expression $fn.Extent.Text }
 }
 # заглушка: проверяем резервную копию, а не запись журнала
@@ -820,6 +1031,19 @@ function Save-JournalEntries { param([switch]$Quiet) }
 # ключ подписи — пробный: настоящий лежит в ProgramData
 $bkTestKey = New-Object byte[] 32; (New-Object Random 5).NextBytes($bkTestKey)
 function Get-SignKey { param([switch]$Create) $bkTestKey }
+# Защищённый корень — временная папка; права здесь не проверяются (это делают
+# тесты W11P-001 и проверки в виртуальной машине)
+function Assert-SafeRoot { $true }
+function Test-ItemTrusted { param($Item) -not ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) }
+$bkSavedSafe = $script:SafeRoot
+$script:SafeRoot = Join-Path $env:TEMP ('w11p-tests-safe-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+New-Item -ItemType Directory -Force $script:SafeRoot | Out-Null
+$script:BackupManifestName = 'backup-sig.json'
+$script:BackupFileRx = [regex]::Match((Get-Content -LiteralPath $engine -Raw -Encoding UTF8), "\`$script:BackupFileRx = '([^']+)'").Groups[1].Value
+$script:BackupStoreKeep = 20
+# Копия — только в хранилище программы (W11P-005); -BackupRoot (рабочий стол)
+# движок с правами администратора больше не трогает
+$bkStore = Join-Path $script:SafeRoot 'backups'
 
 if (Get-Command Ensure-Backup -ErrorAction SilentlyContinue) {
     $script:Defs = @(
@@ -842,19 +1066,20 @@ if (Get-Command Ensure-Backup -ErrorAction SilentlyContinue) {
     function Write-Log { param([string]$Message = '') $bkLines.Add($Message) }
 
     Ensure-Backup
-    Check 'без ручного применения копия не создаётся' (@(Get-ChildItem $BackupRoot -Directory).Count -eq 0)
+    Check 'без ручного применения копия не создаётся' (@(Get-ChildItem $BackupRoot -Directory).Count -eq 0 -and -not (Test-Path -LiteralPath $bkStore))
 
     $script:BackupEnabled = $true
     Ensure-Backup
-    $made = @(Get-ChildItem $BackupRoot -Directory)
-    Check 'при применении копия создаётся' ($made.Count -eq 1) ("папок: " + $made.Count)
+    $made = @(Get-ChildItem $bkStore -Directory -ErrorAction SilentlyContinue)
+    Check 'при применении копия создаётся — в хранилище программы' ($made.Count -eq 1) ("папок: " + $made.Count + ' | ' + ($bkLines -join ' | '))
+    Check 'на рабочий стол (-BackupRoot) копия не кладётся' (@(Get-ChildItem $BackupRoot -Force).Count -eq 0)
     if ($made.Count -eq 1) {
         $files = @(Get-ChildItem $made[0].FullName -File -Filter '*.reg')
         Check 'в копии лежит выгруженная ветка' ($files.Count -eq 1) ("файлов: " + $files.Count)
         $bkMan = Join-Path $made[0].FullName 'backup-sig.json'
         $bkSigs = $(if (Test-Path -LiteralPath $bkMan) { (Get-Content -LiteralPath $bkMan -Raw | ConvertFrom-Json).files } else { $null })
         Check 'копия подписана: у файла ветки есть подпись, и она сходится' ($files.Count -eq 1 -and $bkSigs -and
-            "$($bkSigs.PSObject.Properties[$files[0].Name].Value)" -eq (Get-BackupFileSig $files[0].FullName $made[0].Name $files[0].Name)) (($bkLines -join ' | '))
+            "$($bkSigs.PSObject.Properties[$files[0].Name].Value)" -eq (Get-BackupBytesSig ([IO.File]::ReadAllBytes($files[0].FullName)) $made[0].Name $files[0].Name)) (($bkLines -join ' | '))
         Check 'недоступная ветка не засчитана' (@($bkLines | Where-Object { $_ -match 'сохранено веток: 1' }).Count -ge 1) `
               (($bkLines -join ' | '))
         Check 'о невыгруженной ветке сказано' (@($bkLines | Where-Object { $_ -match 'не выгрузились ветки' }).Count -ge 1)
@@ -895,9 +1120,12 @@ if (Get-Command Ensure-Backup -ErrorAction SilentlyContinue) {
     Check 'файл не в UTF-16 не засчитывается' ($xAnsi -match 'UTF-16') $xAnsi
 
     Ensure-Backup
-    Check 'повторный вызов не плодит папки' (@(Get-ChildItem $BackupRoot -Directory).Count -eq 1)
+    Check 'повторный вызов не плодит папки' (@(Get-ChildItem $bkStore -Directory).Count -eq 1)
     Remove-Item -LiteralPath $BackupRoot -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path 'Function:\Get-SignKey' -ErrorAction SilentlyContinue
+    Check 'рабочая папка копии в защищённом корне не остаётся' (@(Get-ChildItem -LiteralPath $script:SafeRoot -Directory -Force | Where-Object { $_.Name -ne 'backups' }).Count -eq 0)
+    Remove-Item -LiteralPath $script:SafeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    $script:SafeRoot = $bkSavedSafe
+    Remove-Item -Path 'Function:\Get-SignKey', 'Function:\Assert-SafeRoot', 'Function:\Test-ItemTrusted' -ErrorAction SilentlyContinue
 } else {
     Check 'Ensure-Backup найдена в движке' $false
 }
@@ -1751,7 +1979,8 @@ if (Test-Path $cleanupCs) {
 }
 $actionsCleanCs = Join-Path (Split-Path $engine) 'Actions.cs'
 if (Test-Path $actionsCleanCs) {
-    Check 'окно спрашивает про корзину отдельно' ((Get-Content $actionsCleanCs -Raw -Encoding UTF8) -match '-EmptyRecycleBin')
+    # корзина — только по отдельному согласию (bin), флагом запроса к движку
+    Check 'окно спрашивает про корзину отдельно' ((Get-Content $actionsCleanCs -Raw -Encoding UTF8) -match 'req\.Switch\("EmptyRecycleBin", bin\)')
 }
 
 # --------------------------------------------------------------------------- #
@@ -1845,7 +2074,7 @@ Check 'правка VS Code пишется в журнал заранее и и�
       ([regex]::Match($engineText, "(?s)function Set-VsCodeValue \{.*?\n\}").Value -match "(?s)Write-AheadEntry \`$entry.*Write-VsCodeKey") -and
       ($engineText -match "Invoke-AsUser 'vscode'"))
 Check 'политики Firefox не обрезаются по глубине' (
-      ([regex]::Match($engineText, "(?s)function Write-FirefoxKey \{.*?\n\}").Value -match 'ConvertTo-Json -Depth 20'))
+      ([regex]::Match($engineText, "(?s)function Update-FirefoxPoliciesFile \{.*?\n\}").Value -match 'ConvertTo-Json -Depth 20'))
 Check 'запись настройки сторонней программы попадает в журнал как appcfg' (
       ($engineText -match "if \(\`$k -eq 'appcfg'\)") -and ($engineText -match "'appcfg' \{"))
 
@@ -1951,7 +2180,7 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
               'Open-RegKeyRead', 'Test-RegKeyExists', 'Test-RegSameRaw', 'Replace-FileAtomic',
               'Get-TopMissingKey', 'Test-KeyTreeEmpty', 'Remove-CreatedKeys',
               'Get-SignKey', 'Get-JournalSig', 'Test-KeyFileSecure', 'Test-JournalEntryKnown', 'Test-PortableTaskTrust', 'Test-AclVolume',
-              'Test-DirChainSecure', 'Test-ItemTrusted', 'Get-UntrustedItems', 'Test-TaskGlobPath', 'Get-TaskGlobFolders', 'Split-TaskPath',
+              'Test-DirChainSecure', 'Test-ItemTrusted', 'Get-UntrustedRights', 'Get-UntrustedItems', 'Move-UntrustedAside', 'Test-TaskGlobPath', 'Get-TaskGlobFolders', 'Split-TaskPath',
               'Set-Reg', 'Get-RegValue', 'ConvertTo-RegComparable', 'Set-RegDirect', 'Test-RegKeyWritable', 'Write-AheadEntry', 'Undo-AheadEntry',
               'Test-CanModify', 'Test-JournalEntryShape')
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
@@ -1964,6 +2193,9 @@ $jJob = Start-Job -ArgumentList $engine, $jRoot, $isAdmin -ScriptBlock {
     $script:Log = New-Object System.Collections.Generic.List[string]
     function Write-Log { param($m) $script:Log.Add("$m") }
     function Test-Admin { $Admin }
+    # Путь до временной папки принадлежит пользователю — цепочку до корня тут
+    # не проверить; сама проверка цепочки — в разделе W11P-006.
+    function Test-SafeRootChain { $true }
     $DryRun = $false; $script:Failures = 0
     $script:Journal = New-Object System.Collections.Generic.List[object]
     $script:SafeRoot = Join-Path $Root 'safe'; New-Item -ItemType Directory -Force $script:SafeRoot | Out-Null
@@ -2872,7 +3104,15 @@ Write-Host 'Резервная копия: возврат только подп�
 $bkJob = Start-Job -ArgumentList $engine -ScriptBlock {
     param($EnginePath)
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
-    foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Restore-BackupFolder', 'Get-BackupFileSig') }, $true)) { Invoke-Expression $fn.Extent.Text }
+    foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Restore-BackupFolder',
+            'Get-BackupBytesSig', 'Get-BackupManifestSig', 'Read-BackupManifest', 'Get-BackupAllowedBranches', 'Test-RegImportContent', 'New-SafeWorkDir',
+            'Remove-StaleWorkDirs', 'Remove-TreeNoFollow', 'ConvertFrom-EngineRequest', 'Read-RqValue', 'Read-RqString', 'Read-RqChar', 'Step-RqSpace',
+            'Test-BackupV1Allowed', 'Get-BackupStoreDir') }, $true)) { Invoke-Expression $fn.Extent.Text }
+    $script:BackupManifestName = 'backup-sig.json'
+    $script:BackupFileRx = [regex]::Match((Get-Content -LiteralPath $EnginePath -Raw -Encoding UTF8), "\`$script:BackupFileRx = '([^']+)'").Groups[1].Value
+    $script:BackupV2Since = [regex]::Match((Get-Content -LiteralPath $EnginePath -Raw -Encoding UTF8), "\`$script:BackupV2Since = '(\d{8})'").Groups[1].Value
+    $script:RegTypes = @('reg'); $script:Defs = @(@{ T = 'reg'; P = 'HKLM:\SOFTWARE\X' })
+    function Test-ItemTrusted { param($Item) -not ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) }
     $root = Join-Path $env:TEMP ('w11p-bk-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     $script:SafeRoot = Join-Path $root 'safe'; New-Item -ItemType Directory -Force $script:SafeRoot | Out-Null
     function Assert-SafeRoot { $true }
@@ -2886,8 +3126,8 @@ $bkJob = Start-Job -ArgumentList $engine -ScriptBlock {
     $bk = Join-Path $root 'Win11Privacy-Backup-20260101-000000'
     New-Item -ItemType Directory -Force $bk | Out-Null
     $a = Join-Path $bk 'HKLM_SOFTWARE_X.reg'
-    Set-Content -LiteralPath $a -Value @('Windows Registry Editor Version 5.00', '', '[HKEY_LOCAL_MACHINE\SOFTWARE\X]', '"A"=dword:00000001') -Encoding Unicode
-    $sig = Get-BackupFileSig $a (Split-Path $bk -Leaf) (Split-Path $a -Leaf)
+    Set-Content -LiteralPath $a -Value @('Windows Registry Editor Version 5.00', '', '[HKEY_LOCAL_MACHINE\SOFTWARE\X]', '"A"=dword:00000001', '') -Encoding Unicode
+    $sig = Get-BackupBytesSig ([IO.File]::ReadAllBytes($a)) (Split-Path $bk -Leaf) (Split-Path $a -Leaf)
     (@{ version = 1; files = @{ 'HKLM_SOFTWARE_X.reg' = $sig } } | ConvertTo-Json) | Set-Content -LiteralPath (Join-Path $bk 'backup-sig.json') -Encoding UTF8
     $r = @{}
     $x = Restore-BackupFolder $bk
@@ -2897,13 +3137,13 @@ $bkJob = Start-Job -ArgumentList $engine -ScriptBlock {
     Add-Content -LiteralPath $a -Value @('', '[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\X]', '"ImagePath"="C:\\evil.exe"') -Encoding Unicode
     $script:Imported.Clear()
     $x = Restore-BackupFolder $bk
-    $r.tamperRefused = ($x.refused -eq 1 -and $x.restored -eq 0 -and $script:Imported.Count -eq 0)
+    $r.tamperRefused = ($x.refused -eq 1 -and $x.restored -eq 0 -and [bool]$x.error -and $script:Imported.Count -eq 0)
     # подложенный файл, которого в копии не было
     Set-Content -LiteralPath (Join-Path $bk 'extra.reg') -Value 'Windows Registry Editor Version 5.00' -Encoding Unicode
     $x = Restore-BackupFolder $bk
-    $r.extraRefused = ($x.refused -eq 2 -and $script:Imported.Count -eq 0)
+    $r.extraRefused = ($x.refused -ge 1 -and $x.restored -eq 0 -and [bool]$x.error -and $script:Imported.Count -eq 0)
     # тот же файл из другой копии (другое имя папки) — подпись не подходит
-    Set-Content -LiteralPath $a -Value @('Windows Registry Editor Version 5.00', '', '[HKEY_LOCAL_MACHINE\SOFTWARE\X]', '"A"=dword:00000001') -Encoding Unicode
+    Set-Content -LiteralPath $a -Value @('Windows Registry Editor Version 5.00', '', '[HKEY_LOCAL_MACHINE\SOFTWARE\X]', '"A"=dword:00000001', '') -Encoding Unicode
     Remove-Item -LiteralPath (Join-Path $bk 'extra.reg')
     $bk2 = Join-Path $root 'Win11Privacy-Backup-20260202-000000'
     Copy-Item -LiteralPath $bk -Destination $bk2 -Recurse
@@ -3201,8 +3441,10 @@ Check 'откат без журнала (нет или пуст) не говор
 Check 'откат «по умолчанию» — только для доверенного журнала прежнего образца' (($engineText -match '\$legacyRevert = \("\$\(\$rj\.state\)" -eq ''legacy''\)') -and ($engineText -notmatch '\$legacyRevert = \[bool\]\$rj\.legacy -or'))
 $oemApply = [regex]::Match($engineText, "(?s)if \(\(Use-Module 'oem'\).*?\n\}").Value
 Check 'отключение компонентов производителя пишется в подписанный журнал заранее' (($oemApply -match '(?s)Write-AheadEntry \$was.*Set-Service') -and ($oemApply -match '(?s)Write-AheadEntry \$tj.*Disable-ScheduledTask') -and ($oemApply -notmatch "Save-Json 'oem-disabled\.json'"))
+$sensorBlock = [regex]::Match($engineText, "(?s)function Invoke-SensorSet \{.*?\n\}").Value
 Check 'изменения в обход журнала закрыты: датчики, кусты профилей, автозагрузка, точка восстановления, служба истории' (
-    ($engineText -match "(?s)if \(\`$SensorSet\) \{.*?SensorKey -notmatch '\^\[A-Za-z0-9_\]\{1,64\}\$'.*?Set-Reg -Path \`$root") -and
+    ($sensorBlock.Contains('$root = Get-ConsentKeyPath $Key') -and $sensorBlock.Contains('Set-Reg -Path $root') -and
+     [regex]::Match($engineText, "(?s)function Get-ConsentKeyPath \{.*?\n\}").Value.Contains('[\x00-\x1f\x7f"/]')) -and
     ([regex]::Match($engineText, "(?s)function Apply-ProfilesHives \{.*?\n\}").Value -match '(?s)Save-JournalEntries -Quiet.*New-ItemProperty -LiteralPath \$p\.kp') -and
     ($engineText -match "(?s)if \(\`$StartupSet\) \{.*?Write-AheadEntry \`$sj.*?Set-StartupState") -and
     ([regex]::Match($engineText, "(?s)function Ensure-Backup \{.*?\n\}").Value -match '\$srOld') -and
@@ -3221,11 +3463,732 @@ $engineCs = Join-Path (Split-Path $engine) 'Engine.cs'
 if (Test-Path $engineCs) {
     $ecs = Get-Content $engineCs -Raw -Encoding UTF8
     Check 'движок не кладётся во временную папку, если защищённую подготовить не вышло' (($ecs -notmatch 'GetTempPath') -and ($ecs -match 'throw new InvalidOperationException\(L\.T\("Не удалось подготовить защищённую папку'))
-    Check 'окно проверяет папку данных на любой глубине' ($ecs -match 'Quarantine\(d, r, aside\)')
+    Check 'окно проверяет папку данных на любой глубине' ($ecs -match 'Quarantine\(d, r, aside, withInherited\)')
+    Check 'окно (W11P-006): после замены прав корня проверяет всё ещё раз, с унаследованным' (($ecs -match 'if \(HasUntrusted\(root\)\) Quarantine\(root, "", FreshQuarantine\(root\), true\)') -and ($ecs -match 'GetAccessRules\(true, withInherited,'))
+    Check 'окно (W11P-006): не трогает корень данных, если путь до него (ProgramData) можно подменить' ($ecs -match 'if \(!ChainSecure\(Path\.GetDirectoryName\(root\)\)\)')
     Check 'PowerShell запускается только по полному системному пути' (($ecs -match 'throw new FileNotFoundException\(L\.T\("Не найден системный PowerShell') -and
         (@(Get-ChildItem (Split-Path $engine) -Filter '*.cs' | Where-Object { (Get-Content $_.FullName -Raw -Encoding UTF8) -match '"powershell\.exe"' }).Count -eq 0))
 }
 Check 'копия движка для задач — только через защищённую установку' (($engineText -notmatch "Copy-Item -LiteralPath \`$PSCommandPath -Destination \`$engineDst") -and ([regex]::Matches($engineText, '\$engineDst = Install-TaskEngine').Count -eq 4))
+
+# --------------------------------------------------------------------------- #
+#  W11P-001: резервная копия только через защищённую рабочую папку.
+#  Функции движка берутся из него самого (AST); реестр, reg.exe, ключ подписи
+#  и проверка прав — заглушки внутри & { }. Работа — во временных папках.
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Резервная копия (W11P-001): выгрузка, подпись и возврат'
+$bkFns = @('Get-BackupBytesSig', 'Get-BackupManifestSig', 'ConvertTo-BackupManifestText', 'Remove-StaleWorkDirs',
+           'New-SafeWorkDir', 'New-RegBackup', 'Read-BackupManifest', 'Get-BackupAllowedBranches', 'Test-RegImportContent',
+           'Restore-BackupFolder', 'Remove-TreeNoFollow', 'ConvertFrom-EngineRequest', 'Read-RqValue', 'Read-RqString', 'Read-RqChar', 'Step-RqSpace',
+           'Get-BackupStoreDir', 'Limit-BackupStore', 'Test-BackupV1Allowed', 'Get-BackupList')
+$bkFound = @()
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($bkFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $bkFound += $fn.Name }
+}
+$bkText = Get-Content -LiteralPath $engine -Raw -Encoding UTF8
+$script:BackupManifestName = 'backup-sig.json'
+$script:BackupFileRx = [regex]::Match($bkText, "\`$script:BackupFileRx = '([^']+)'").Groups[1].Value
+$script:BackupV2Since = [regex]::Match($bkText, "\`$script:BackupV2Since = '(\d{8})'").Groups[1].Value
+$script:BackupStoreKeep = [int][regex]::Match($bkText, "\`$script:BackupStoreKeep = (\d+)").Groups[1].Value
+Check 'функции резервной копии найдены в движке' ($bkFound.Count -eq $bkFns.Count -and $script:BackupFileRx -and $script:BackupV2Since -and $script:BackupStoreKeep -gt 0) (($bkFns | Where-Object { $bkFound -notcontains $_ }) -join ',')
+
+# Выгрузка ветки так, как её пишет reg.exe (UTF-16 с меткой)
+function New-TestRegBytes {
+    param([string]$Key, [string[]]$Extra = @())
+    $full = ($Key -replace '^HKLM:\\', 'HKEY_LOCAL_MACHINE\' -replace '^HKCU:\\', 'HKEY_CURRENT_USER\' -replace '^HKLM\\', 'HKEY_LOCAL_MACHINE\' -replace '^HKCU\\', 'HKEY_CURRENT_USER\')
+    $t = "Windows Registry Editor Version 5.00`r`n`r`n[" + $full + "]`r`n`"Value`"=dword:00000001`r`n`r`n"
+    foreach ($x in $Extra) { $t += $x + "`r`n`r`n" }
+    return ([byte[]](0xFF, 0xFE) + [Text.Encoding]::Unicode.GetBytes($t))
+}
+function New-TestDirs {
+    $base = Join-Path $env:TEMP ('w11p-bk-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $null = New-Item -ItemType Directory -Force (Join-Path $base 'safe'), (Join-Path $base 'desk')
+    return $base
+}
+$bkKeys = @('HKLM:\SOFTWARE\W11PTest\Alpha', 'HKCU:\Software\W11PTest\Beta')
+
+if ($bkFound.Count -eq $bkFns.Count) {
+& {
+    function Write-Log { param([string]$Message = '') $script:BkLog += $Message }
+    function Get-SignKey { param([switch]$Create) return [byte[]](1..32) }
+    function Assert-SafeRoot { return $true }
+    function Test-ItemTrusted { param($Item) return -not ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) }
+    function Test-Path { param([string]$LiteralPath, [string]$PathType) if ($LiteralPath -like 'HK*:\*') { return $true } return (Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath) }
+    $script:ExportedTo = New-Object System.Collections.Generic.List[string]
+    function Export-RegKey { param([string]$Key, [string]$File) $script:ExportedTo.Add($File); [IO.File]::WriteAllBytes($File, (New-TestRegBytes $Key)); return '' }
+    $script:Imported = New-Object System.Collections.Generic.List[object]
+    $script:OnImport = $null
+    function Invoke-RegExe {
+        param([string]$Arguments)
+        $path = [regex]::Match($Arguments, '^import "(.+)"$').Groups[1].Value
+        $hook = $null
+        if ($script:OnImport) { $hook = & $script:OnImport $path }
+        $script:Imported.Add(@{ path = $path; bytes = [IO.File]::ReadAllBytes($path); hook = $hook })
+        if ($script:FailImportAt -and $script:Imported.Count -eq $script:FailImportAt) { return @{ code = 1; error = 'test failure' } }
+        return @{ code = 0; error = '' }
+    }
+    $script:RegTypes = @('reg', 'regif', 'regpol', 'regsvc')
+    $script:Defs = @(@{ T = 'reg'; P = $bkKeys[0]; M = 't' }, @{ T = 'reg'; P = $bkKeys[1]; M = 't' })
+    $savedSafe = $script:SafeRoot
+    # рабочие папки — всё в защищённом корне, кроме хранилища копий
+    function Get-WorkDirs { return @(Get-ChildItem -LiteralPath $script:SafeRoot -Directory -Force | Where-Object { $_.Name -ne 'backups' }) }
+    # Если движок вдруг снова полезет к задаче от имени пользователя — тест это увидит
+    $script:AsUserCalls = 0
+    function Invoke-AsUser { $script:AsUserCalls++; return @{ ok = $false; why = 'test' } }
+
+    # --- создание копии ---
+    $base = New-TestDirs; $script:SafeRoot = Join-Path $base 'safe'; $desk = Join-Path $base 'desk'
+    $BackupRoot = $desk
+    $bk = New-RegBackup $bkKeys
+    $store = Join-Path $script:SafeRoot 'backups'
+    Check 'копия: подписанная папка — в хранилище программы' ($bk.dir -and (Test-Path -LiteralPath $bk.dir) -and $bk.saved -eq 2 -and $bk.signed -eq 2 -and -not $bk.error -and
+          (Split-Path $bk.dir -Parent) -eq $store) ("{0} {1}" -f $bk.dir, $bk.error)
+    Check 'копия (W11P-005): на рабочий стол и в -BackupRoot ничего не пишется, задачи от имени пользователя нет' (
+          @(Get-ChildItem -LiteralPath $desk -Force).Count -eq 0 -and $script:AsUserCalls -eq 0)
+    $outside = @($script:ExportedTo | Where-Object { -not $_.StartsWith($script:SafeRoot, [StringComparison]::OrdinalIgnoreCase) })
+    Check 'копия: reg.exe выгружает только в защищённую рабочую папку, не на рабочий стол' ($script:ExportedTo.Count -eq 2 -and $outside.Count -eq 0) ($outside -join ' | ')
+    Check 'копия: рабочая папка убрана после переноса в хранилище' ((Get-WorkDirs).Count -eq 0)
+    # список копий: хранилище первым, копия оттуда помечена защищённой; та же
+    # папка на рабочем столе (копия прежней версии) — одна строка, из хранилища
+    $script:DataDir = Join-Path $base 'data'
+    $null = New-Item -ItemType Directory -Force (Join-Path $desk (Split-Path $bk.dir -Leaf))
+    Copy-Item -LiteralPath (Get-ChildItem -LiteralPath $bk.dir -File).FullName -Destination (Join-Path $desk (Split-Path $bk.dir -Leaf))
+    $lst = @(Get-BackupList | Where-Object { $_.name -eq (Split-Path $bk.dir -Leaf) })
+    Check 'список копий: копия из хранилища — одна строка, помечена защищённой' ($lst.Count -eq 1 -and $lst[0].path -eq $bk.dir -and $lst[0].protected -eq $true) ("строк: {0}" -f $lst.Count)
+    Remove-Item -LiteralPath (Join-Path $desk (Split-Path $bk.dir -Leaf)) -Recurse -Force
+    $man = $null; try { $man = Read-BackupManifest $bk.dir } catch { }
+    Check 'копия: список подписей версии 2 читается и сходится' ($null -ne $man -and $man.version -eq 2 -and $man.files.Count -eq 2)
+    $mtext = [IO.File]::ReadAllText((Join-Path $bk.dir 'backup-sig.json'))
+    Check 'копия: список подписей — ASCII, с подписью и именем папки' ($mtext -match '"version":2' -and $mtext -match ('"folder":"' + [regex]::Escape((Split-Path $bk.dir -Leaf)) + '"') -and $mtext -match '"sig":"[0-9a-f]{64}"' -and $mtext -cnotmatch '[^\x20-\x7e]')
+
+    # --- возврат: годная копия ---
+    $script:Imported.Clear()
+    $rb = Restore-BackupFolder $bk.dir
+    $notStaged = @($script:Imported | Where-Object { -not $_.path.StartsWith($script:SafeRoot, [StringComparison]::OrdinalIgnoreCase) })
+    Check 'возврат: годная копия импортирована целиком' ($rb.restored -eq 2 -and $rb.refused -eq 0 -and $rb.failed -eq 0 -and -not $rb.error) ("restored {0} refused {1} err {2}" -f $rb.restored, $rb.refused, $rb.error)
+    Check 'возврат: reg.exe читает только копию из защищённой рабочей папки' ($script:Imported.Count -eq 2 -and $notStaged.Count -eq 0)
+    $same = $true
+    foreach ($im in $script:Imported) {
+        $orig = [IO.File]::ReadAllBytes((Join-Path $bk.dir (Split-Path $im.path -Leaf)))
+        if ([Convert]::ToBase64String($im.bytes) -ne [Convert]::ToBase64String($orig)) { $same = $false }
+    }
+    Check 'возврат: импортированы ровно подписанные байты' $same
+    Check 'возврат: рабочая папка убрана' ((Get-WorkDirs).Count -eq 0)
+
+    # --- подмена файла во время возврата: в папке копии и в рабочей папке ---
+    # (в хранилище менять файлы может только администратор; здесь он доступен
+    #  тесту — так проверяется сама сверка, а не права папки)
+    $script:Imported.Clear()
+    $evil = New-TestRegBytes 'HKLM\SYSTEM\CurrentControlSet\Services\W11PEvil'
+    $script:OnImport = {
+        param($stagedPath)
+        $name = Split-Path $stagedPath -Leaf
+        # подмена исходного файла посреди возврата
+        [IO.File]::WriteAllBytes((Join-Path $bk.dir $name), $evil)
+        # попытка переписать копию в рабочей папке, пока reg.exe её читает
+        $blocked = $false
+        try { [IO.File]::WriteAllBytes($stagedPath, $evil) } catch { $blocked = $true }
+        return $blocked
+    }
+    $rb = Restore-BackupFolder $bk.dir
+    $script:OnImport = $null
+    $allBlocked = (@($script:Imported | Where-Object { -not $_.hook }).Count -eq 0)
+    $noEvil = (@($script:Imported | Where-Object { [Text.Encoding]::Unicode.GetString($_.bytes) -match 'W11PEvil' }).Count -eq 0)
+    Check 'возврат: подмена во время импорта не доходит до reg.exe (копия открыта без права записи)' ($rb.restored -eq 2 -and $allBlocked -and $noEvil) ("restored {0}, blocked {1}, noEvil {2}" -f $rb.restored, $allBlocked, $noEvil)
+
+    # Теперь в папке копии лежат подменённые файлы — возврат отказывает целиком
+    $script:Imported.Clear()
+    $rb = Restore-BackupFolder $bk.dir
+    Check 'возврат: изменённые файлы — отказ целиком, ничего не импортировано' ($rb.restored -eq 0 -and $rb.refused -ge 1 -and $rb.error -and $script:Imported.Count -eq 0) ("restored {0} refused {1}" -f $rb.restored, $rb.refused)
+    Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
+
+    # --- лишний файл, пропавший файл, испорченный и подменённый список ---
+    $cases = [ordered]@{
+        'лишний .reg в папке'              = { param($d) [IO.File]::WriteAllBytes((Join-Path $d 'HKLM__SOFTWARE_Extra.reg'), (New-TestRegBytes 'HKLM\SOFTWARE\W11PTest\Alpha')) }
+        'пропал файл из списка'            = { param($d) Remove-Item -LiteralPath (Get-ChildItem -LiteralPath $d -Filter '*.reg' | Select-Object -First 1).FullName -Force }
+        'список подписей удалён'           = { param($d) Remove-Item -LiteralPath (Join-Path $d 'backup-sig.json') -Force }
+        'список подписей — не JSON'        = { param($d) [IO.File]::WriteAllText((Join-Path $d 'backup-sig.json'), 'not json') }
+        'строка списка удалена'            = { param($d) $m = [IO.File]::ReadAllText((Join-Path $d 'backup-sig.json')); $m = [regex]::Replace($m, '"HKCU[^"]*":"[0-9a-f]{64}",?', ''); $m = $m -replace ',\}', '}'; [IO.File]::WriteAllText((Join-Path $d 'backup-sig.json'), $m) }
+        'повтор поля в списке'             = { param($d) $m = [IO.File]::ReadAllText((Join-Path $d 'backup-sig.json')); [IO.File]::WriteAllText((Join-Path $d 'backup-sig.json'), ($m -replace '\{"version":2,', '{"version":2,"version":2,')) }
+        'путь с переходом вверх в списке'  = { param($d) $m = [IO.File]::ReadAllText((Join-Path $d 'backup-sig.json')); [IO.File]::WriteAllText((Join-Path $d 'backup-sig.json'), ($m -replace '"files":\{', ('"files":{"..\\evil.reg":"' + ('0' * 64) + '",'))) }
+        'неизвестная версия списка'        = { param($d) $m = [IO.File]::ReadAllText((Join-Path $d 'backup-sig.json')); [IO.File]::WriteAllText((Join-Path $d 'backup-sig.json'), ($m -replace '"version":2', '"version":3')) }
+        'список от другой папки'           = { param($d) $m = [IO.File]::ReadAllText((Join-Path $d 'backup-sig.json')); [IO.File]::WriteAllText((Join-Path $d 'backup-sig.json'), ($m -replace '"folder":"[^"]*"', '"folder":"Win11Privacy-Backup-other"')) }
+    }
+    $caseBad = @()
+    foreach ($name in $cases.Keys) {
+        $base = New-TestDirs; $script:SafeRoot = Join-Path $base 'safe'
+        $bk = New-RegBackup $bkKeys
+        & $cases[$name] $bk.dir
+        $script:Imported.Clear()
+        $rb = Restore-BackupFolder $bk.dir
+        if (-not ($rb.restored -eq 0 -and $script:Imported.Count -eq 0 -and $rb.error)) { $caseBad += ("{0}: restored {1}, imported {2}" -f $name, $rb.restored, $script:Imported.Count) }
+        Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Check ("возврат: несостыковки ({0} видов) — отказ целиком, ничего не импортировано" -f $cases.Count) ($caseBad.Count -eq 0) ($caseBad -join ' | ')
+
+    # --- копия прежней версии (список версии 1 без своей подписи) ---
+    # Её делала версия 2.0.0 на рабочем столе: имя папки — с датой до выхода
+    # списка версии 2, подписи файлов — с именем папки.
+    function New-LegacyBackup {
+        param([string]$Parent, [string]$Leaf)
+        $dir = Join-Path $Parent $Leaf; $null = New-Item -ItemType Directory -Force $dir
+        $files = @{}
+        foreach ($k in $bkKeys) {
+            $name = ($k -replace '[:\\ ]', '_') + '.reg'; $b = New-TestRegBytes $k
+            [IO.File]::WriteAllBytes((Join-Path $dir $name), $b)
+            $files[$name] = Get-BackupBytesSig $b $Leaf $name
+        }
+        ((@{ version = 1; files = $files } | ConvertTo-Json -Depth 4)) | Set-Content -LiteralPath (Join-Path $dir 'backup-sig.json') -Encoding UTF8
+        return $dir
+    }
+    $base = New-TestDirs; $script:SafeRoot = Join-Path $base 'safe'
+    $leg = New-LegacyBackup (Join-Path $base 'desk') 'Win11Privacy-Backup-20261001-120000-abcdef'
+    $script:Imported.Clear()
+    $rb = Restore-BackupFolder $leg
+    Check 'возврат: копия прежней версии (список v1, с меткой UTF-8) по-прежнему возвращается' ($rb.restored -eq 2 -and -not $rb.error) ("restored {0} err {1}" -f $rb.restored, $rb.error)
+    # понижение формата: список v1 у копии, сделанной этой версией, — отказ
+    $legNew = New-LegacyBackup (Join-Path $base 'desk') ('Win11Privacy-Backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-abcdef')
+    $script:Imported.Clear()
+    $rb = Restore-BackupFolder $legNew
+    Check 'возврат: список v1 у копии с датой новой версии — отказ (понижение формата)' ($rb.restored -eq 0 -and $script:Imported.Count -eq 0 -and $rb.error) ($rb.error)
+    $bk = New-RegBackup $bkKeys
+    $m = Read-BackupManifest $bk.dir
+    ((@{ version = 1; files = $m.files } | ConvertTo-Json -Depth 4)) | Set-Content -LiteralPath (Join-Path $bk.dir 'backup-sig.json') -Encoding UTF8
+    $script:Imported.Clear()
+    $rb = Restore-BackupFolder $bk.dir
+    Check 'возврат: список v1 у копии из хранилища — отказ (понижение формата)' ($rb.restored -eq 0 -and $script:Imported.Count -eq 0 -and $rb.error) ($rb.error)
+    $leg2 = New-LegacyBackup (Join-Path $base 'desk') 'Win11Privacy-Backup-20261002-120000-abcdef'
+    Rename-Item -LiteralPath $leg2 -NewName 'Win11Privacy-Backup-20261003-120000-abcdef'
+    $script:Imported.Clear()
+    $rb = Restore-BackupFolder (Join-Path $base 'desk\Win11Privacy-Backup-20261003-120000-abcdef')
+    Check 'возврат: копия прежней версии под чужим именем папки — отказ (имя входит в подпись)' ($rb.restored -eq 0 -and $script:Imported.Count -eq 0 -and $rb.error) ($rb.error)
+    Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
+
+    # --- ссылка вместо папки копии ---
+    $base = New-TestDirs; $script:SafeRoot = Join-Path $base 'safe'
+    $bk = New-RegBackup $bkKeys
+    $junction = Join-Path $base 'desk\Win11Privacy-Backup-junction'
+    cmd /c mklink /J "$junction" "$($bk.dir)" 2>&1 | Out-Null
+    $script:Imported.Clear()
+    $rb = Restore-BackupFolder $junction
+    Check 'возврат: ссылка (junction) вместо папки копии — отказ' ((Test-Path -LiteralPath $junction) -and $rb.restored -eq 0 -and $script:Imported.Count -eq 0 -and $rb.error) ($rb.error)
+    cmd /c rmdir "$junction" 2>&1 | Out-Null
+    Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
+
+    # --- чужая ветка и удаление раздела внутри подписанного файла ---
+    $allowed = @{ 'hkey_local_machine\software\w11ptest\alpha' = $true }
+    $okBytes = New-TestRegBytes 'HKLM\SOFTWARE\W11PTest\Alpha' @('[HKEY_LOCAL_MACHINE\SOFTWARE\W11PTest\Alpha\Sub]')
+    Check 'содержимое: ветка программы с подразделом проходит' ((Test-RegImportContent $okBytes $allowed) -eq '')
+    Check 'содержимое: чужая ветка — отказ' ((Test-RegImportContent (New-TestRegBytes 'HKLM\SYSTEM\CurrentControlSet\Services\X') $allowed) -ne '')
+    Check 'содержимое: раздел вне ветки — отказ' ((Test-RegImportContent (New-TestRegBytes 'HKLM\SOFTWARE\W11PTest\Alpha' @('[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run]')) $allowed) -ne '')
+    Check 'содержимое: похожий префикс (Alpha2) — отказ' ((Test-RegImportContent (New-TestRegBytes 'HKLM\SOFTWARE\W11PTest\Alpha' @('[HKEY_LOCAL_MACHINE\SOFTWARE\W11PTest\Alpha2]')) $allowed) -ne '')
+    Check 'содержимое: удаление раздела — отказ' ((Test-RegImportContent (New-TestRegBytes 'HKLM\SOFTWARE\W11PTest\Alpha' @('[-HKEY_LOCAL_MACHINE\SOFTWARE\W11PTest\Alpha\Sub]')) $allowed) -ne '')
+    Check 'содержимое: не UTF-16 — отказ' ((Test-RegImportContent ([Text.Encoding]::ASCII.GetBytes("Windows Registry Editor Version 5.00`r`n")) $allowed) -ne '')
+    $cut = New-TestRegBytes 'HKLM\SOFTWARE\W11PTest\Alpha'; $cut = [byte[]]$cut[0..($cut.Length - 7)]
+    Check 'содержимое: оборванный файл — отказ' ((Test-RegImportContent $cut $allowed) -ne '')
+
+    # --- одновременные копии, оборванная выгрузка, старые рабочие папки ---
+    $base = New-TestDirs; $script:SafeRoot = Join-Path $base 'safe'; $desk = Join-Path $base 'desk'
+    $b1 = New-RegBackup $bkKeys; $b2 = New-RegBackup $bkKeys
+    Check 'копия: два запуска подряд — две разные целые копии' ($b1.dir -and $b2.dir -and $b1.dir -ne $b2.dir -and $null -ne (Read-BackupManifest $b1.dir) -and $null -ne (Read-BackupManifest $b2.dir))
+    # Перенос в хранилище — одно переименование внутри защищённого корня:
+    # другой том (рабочий стол на D:) больше не участвует — копия туда не пишется
+    Check 'копия: хранилище и рабочая папка — в одном защищённом корне (перенос — переименование)' (
+          [IO.Path]::GetPathRoot($b1.dir) -eq [IO.Path]::GetPathRoot($script:SafeRoot) -and $b1.dir.StartsWith($script:SafeRoot, [StringComparison]::OrdinalIgnoreCase))
+    function Export-RegKey { param([string]$Key, [string]$File) $script:ExportedTo.Add($File); if ($script:ExportedTo.Count % 2 -eq 0) { throw 'обрыв выгрузки' } [IO.File]::WriteAllBytes($File, (New-TestRegBytes $Key)); return '' }
+    $before = @(Get-ChildItem -LiteralPath $store -Directory).Count
+    $b3 = New-RegBackup $bkKeys
+    Check 'копия: оборванная выгрузка — в хранилище ничего нового, рабочая папка убрана' ($b3.error -and -not $b3.dir -and @(Get-ChildItem -LiteralPath $store -Directory).Count -eq $before -and (Get-WorkDirs).Count -eq 0 -and @(Get-ChildItem -LiteralPath $desk -Force).Count -eq 0) ($b3.error)
+    # Хранилище не растёт без конца: остаются самая первая копия и последние N
+    $keepSaved = $script:BackupStoreKeep; $script:BackupStoreKeep = 3
+    $st2 = Join-Path $base 'safe2'; $savedSafe2 = $script:SafeRoot; $script:SafeRoot = $st2
+    $null = New-Item -ItemType Directory -Force (Join-Path $st2 'backups')
+    $names = @(1..7 | ForEach-Object { 'Win11Privacy-Backup-2026110{0}-120000-aaaaaa' -f $_ })
+    foreach ($n in $names) { $null = New-Item -ItemType Directory -Force (Join-Path $st2 "backups\$n") }
+    Limit-BackupStore
+    $left = @(Get-ChildItem -LiteralPath (Join-Path $st2 'backups') -Directory | ForEach-Object { $_.Name } | Sort-Object)
+    Check 'хранилище: остаются первая копия и последние N' (($left -join ',') -eq (@($names[0]) + $names[4..6] -join ',')) ($left -join ',')
+    $script:SafeRoot = $savedSafe2; $script:BackupStoreKeep = $keepSaved
+
+    # Хранилище подменено ссылкой (junction) — копия не делается, в цель ссылки ничего не пишется
+    function Export-RegKey { param([string]$Key, [string]$File) $script:ExportedTo.Add($File); [IO.File]::WriteAllBytes($File, (New-TestRegBytes $Key)); return '' }
+    $jb = Join-Path $base 'safe3'; $null = New-Item -ItemType Directory -Force $jb
+    $bait = Join-Path $base 'bait3'; $null = New-Item -ItemType Directory -Force $bait
+    cmd /c mklink /J "$(Join-Path $jb 'backups')" "$bait" 2>&1 | Out-Null
+    $savedSafe3 = $script:SafeRoot; $script:SafeRoot = $jb
+    $bj = New-RegBackup $bkKeys
+    Check 'копия: хранилище — ссылка (junction): отказ, в цель ссылки ничего не пишется, рабочая папка убрана' (
+          $bj.error -and -not $bj.dir -and @(Get-ChildItem -LiteralPath $bait -Force).Count -eq 0 -and (Get-WorkDirs).Count -eq 0) ($bj.error)
+    cmd /c rmdir "$(Join-Path $jb 'backups')" 2>&1 | Out-Null
+    # Перенос в хранилище не удался (нет доступа / нет места): ошибка, в хранилище
+    # ничего, рабочая папка убрана
+    $null = New-Item -ItemType Directory -Force (Join-Path $jb 'backups')
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $sacl = Get-Acl -LiteralPath (Join-Path $jb 'backups')
+    $sdeny = New-Object Security.AccessControl.FileSystemAccessRule($me, [Security.AccessControl.FileSystemRights]'CreateDirectories', 'Deny')
+    $sacl.AddAccessRule($sdeny); Set-Acl -LiteralPath (Join-Path $jb 'backups') -AclObject $sacl
+    $bd = New-RegBackup $bkKeys
+    $sacl = Get-Acl -LiteralPath (Join-Path $jb 'backups'); $null = $sacl.RemoveAccessRule($sdeny); Set-Acl -LiteralPath (Join-Path $jb 'backups') -AclObject $sacl
+    Check 'копия: перенос в хранилище запрещён (нет доступа) — ошибка, в хранилище пусто, рабочая папка убрана' (
+          $bd.error -and -not $bd.dir -and @(Get-ChildItem -LiteralPath (Join-Path $jb 'backups') -Force).Count -eq 0 -and (Get-WorkDirs).Count -eq 0) ($bd.error)
+    # Выгрузка упала на нехватке места: ветка не засчитана, копии без веток нет
+    function Export-RegKey { param([string]$Key, [string]$File) [IO.File]::WriteAllBytes($File, [byte[]](0xFF, 0xFE)); return 'reg.exe, код 1: Недостаточно места на диске.' }
+    $bf = New-RegBackup $bkKeys
+    Check 'копия: нет места на диске при выгрузке — ветки не засчитаны, копии нет, рабочая папка убрана' (
+          $bf.saved -eq 0 -and -not $bf.dir -and @($bf.missed).Count -eq 2 -and @(Get-ChildItem -LiteralPath (Join-Path $jb 'backups') -Force).Count -eq 0 -and (Get-WorkDirs).Count -eq 0) ("saved {0} missed {1}" -f $bf.saved, @($bf.missed).Count)
+    function Export-RegKey { param([string]$Key, [string]$File) $script:ExportedTo.Add($File); [IO.File]::WriteAllBytes($File, (New-TestRegBytes $Key)); return '' }
+    $script:SafeRoot = $savedSafe3
+
+    # Символьная ссылка на файл вместо .reg в папке копии — отказ целиком
+    # (нужно право создавать ссылки: администратор или режим разработчика)
+    $bs = New-RegBackup $bkKeys
+    $victim = (Get-ChildItem -LiteralPath $bs.dir -Filter '*.reg' | Select-Object -First 1).FullName
+    $other = Join-Path $base 'other.reg'; [IO.File]::WriteAllBytes($other, [IO.File]::ReadAllBytes($victim))
+    Remove-Item -LiteralPath $victim -Force
+    cmd /c mklink "$victim" "$other" 2>&1 | Out-Null
+    if (Test-Path -LiteralPath $victim) {
+        $script:Imported.Clear()
+        $rs = Restore-BackupFolder $bs.dir
+        Check 'возврат: символьная ссылка вместо файла копии — отказ целиком, ничего не импортировано' ($rs.restored -eq 0 -and $script:Imported.Count -eq 0 -and $rs.error) ($rs.error)
+    } else {
+        Write-Host '  [--]   символьная ссылка на файл: нет права создавать ссылки, пропущено'
+    }
+
+    # Одновременные копии из разных процессов: у каждой своё имя и своя рабочая
+    # папка, все целые, рабочих папок не остаётся
+    $cc = Join-Path $base 'safe4'; $null = New-Item -ItemType Directory -Force $cc
+    $fnNames = @('Get-BackupBytesSig', 'Get-BackupManifestSig', 'ConvertTo-BackupManifestText', 'Remove-StaleWorkDirs', 'New-SafeWorkDir', 'New-RegBackup', 'Remove-TreeNoFollow', 'Get-BackupStoreDir', 'Limit-BackupStore')
+    $fnText = (@($engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $fnNames -contains $n.Name }, $true)) | ForEach-Object { $_.Extent.Text }) -join "`r`n"
+    $worker = Join-Path $base 'bk-worker.ps1'
+    $wText = @'
+param($Safe, $Rx)
+$script:SafeRoot = $Safe; $script:BackupManifestName = 'backup-sig.json'; $script:BackupFileRx = $Rx; $script:BackupStoreKeep = 50
+function Write-Log { param($m) }
+function Get-SignKey { param([switch]$Create) return [byte[]](1..32) }
+function Assert-SafeRoot { return $true }
+function Test-ItemTrusted { param($Item) return -not ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) }
+function Export-RegKey { param([string]$Key, [string]$File)
+    $full = ($Key -replace '^HKLM\\', 'HKEY_LOCAL_MACHINE\' -replace '^HKCU\\', 'HKEY_CURRENT_USER\')
+    $t = "Windows Registry Editor Version 5.00`r`n`r`n[" + $full + "]`r`n`"Value`"=dword:00000001`r`n`r`n"
+    [IO.File]::WriteAllBytes($File, ([byte[]](0xFF, 0xFE) + [Text.Encoding]::Unicode.GetBytes($t))); return '' }
+function Test-Path { param([string]$LiteralPath, [string]$PathType) if ($LiteralPath -like 'HK*:\*') { return $true } return (Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath) }
+'@ + "`r`n" + $fnText + "`r`n" + @'
+$bad = 0
+foreach ($i in 1..3) { $b = New-RegBackup @('HKLM:\SOFTWARE\W11PTest\Alpha', 'HKCU:\Software\W11PTest\Beta'); if (-not $b.dir -or $b.error) { $bad++; [Console]::Error.WriteLine($b.error) } }
+exit $bad
+'@
+    Set-Content -LiteralPath $worker -Value $wText -Encoding UTF8
+    $procs = @()
+    foreach ($i in 1..4) { $procs += Start-Process -FilePath (Get-Command powershell.exe).Source -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $worker + '"'), '-Safe', ('"' + $cc + '"'), '-Rx', ('"' + $script:BackupFileRx + '"')) -PassThru -WindowStyle Hidden }
+    foreach ($p in $procs) { $p.WaitForExit() }
+    $made = @(Get-ChildItem -LiteralPath (Join-Path $cc 'backups') -Directory -ErrorAction SilentlyContinue)
+    $savedSafe4 = $script:SafeRoot; $script:SafeRoot = $cc
+    $okMan = @($made | Where-Object { $m = $null; try { $m = Read-BackupManifest $_.FullName } catch { }; $null -ne $m -and $m.version -eq 2 -and $m.files.Count -eq 2 }).Count
+    $leftWork = (Get-WorkDirs).Count
+    $script:SafeRoot = $savedSafe4
+    Check 'копия: 4 процесса по 3 копии одновременно — 12 разных целых копий, рабочих папок не осталось' (
+          @($procs | Where-Object { $_.ExitCode -ne 0 }).Count -eq 0 -and $made.Count -eq 12 -and $okMan -eq 12 -and $leftWork -eq 0) ("копий {0}, целых {1}, рабочих {2}, коды {3}" -f $made.Count, $okMan, $leftWork, (($procs | ForEach-Object { $_.ExitCode }) -join ','))
+    $stale = New-Item -ItemType Directory -Force (Join-Path $script:SafeRoot 'backup-stale0000000')
+    $stale.LastWriteTime = (Get-Date).AddHours(-3)
+    $fresh = New-Item -ItemType Directory -Force (Join-Path $script:SafeRoot 'restore-fresh00000000')
+    Remove-StaleWorkDirs 'backup-'; Remove-StaleWorkDirs 'restore-'
+    Check 'рабочие папки: оставшаяся от оборванного запуска убирается, свежая (идущий запуск) — нет' ((-not (Test-Path -LiteralPath $stale.FullName)) -and (Test-Path -LiteralPath $fresh.FullName))
+    Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
+
+    # --- оборванный возврат: reg.exe падает на втором файле ---
+    function Export-RegKey { param([string]$Key, [string]$File) [IO.File]::WriteAllBytes($File, (New-TestRegBytes $Key)); return '' }
+    $base = New-TestDirs; $script:SafeRoot = Join-Path $base 'safe'
+    $bk = New-RegBackup $bkKeys
+    $script:Imported.Clear(); $script:FailImportAt = 2
+    $rb = Restore-BackupFolder $bk.dir
+    $script:FailImportAt = 0
+    Check 'возврат: сбой импорта посередине — посчитан как неудача, рабочая папка убрана' ($rb.restored -eq 1 -and $rb.failed -eq 1 -and (Get-WorkDirs).Count -eq 0) ("restored {0} failed {1}" -f $rb.restored, $rb.failed)
+    Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
+
+    $script:SafeRoot = $savedSafe
+}
+}
+$restoreBlock = [regex]::Match($bkText, "(?s)if \(\`$RestoreBackup\) \{.*?\n\}").Value
+Check 'возврат: «вернулось не всё» — код 2, а не 0' ($restoreBlock -match 'elseif \(\(\$rb\.failed \+ \$rb\.refused\) -gt 0\) \{ 2 \}')
+$ensureBlock = [regex]::Match($bkText, "(?s)function Ensure-Backup \{.*?\n\}").Value
+Check 'копия: Ensure-Backup выгружает только через New-RegBackup (без reg.exe на рабочий стол)' (($ensureBlock -match 'New-RegBackup \$keys') -and ($ensureBlock -notmatch 'Export-RegKey'))
+$newBkBlock = [regex]::Match($bkText, "(?s)function New-RegBackup \{.*?\n\}").Value
+Check 'копия (W11P-005): ни New-RegBackup, ни Ensure-Backup не пишут на рабочий стол и не зовут задачу пользователя' (
+      $newBkBlock -and ($newBkBlock + $ensureBlock) -notmatch "GetFolderPath\('Desktop'\)|Invoke-AsUser|BackupRoot")
+
+# --------------------------------------------------------------------------- #
+#  W11P-002: policies.json Firefox — запись одним действием
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Firefox policies.json (W11P-002): запись одним действием'
+$ffFns = @('Read-Utf8Strict', 'Write-JsonFileAtomic', 'Update-FirefoxPoliciesFile', 'Replace-FileAtomic', 'Write-FirefoxKey', 'Open-FirefoxMutex', 'Test-MutexOwnerTrusted')
+$ffFound = @()
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($ffFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $ffFound += $fn.Name }
+}
+Check 'функции записи policies.json найдены в движке' ($ffFound.Count -eq $ffFns.Count) (($ffFns | Where-Object { $ffFound -notcontains $_ }) -join ',')
+if ($ffFound.Count -eq $ffFns.Count) {
+& {
+    function Write-Log { param([string]$Message = '') }
+    function New-FfDir { $d = Join-Path $env:TEMP ('w11p-ffa-' + [guid]::NewGuid().ToString('N').Substring(0, 8)); $null = New-Item -ItemType Directory -Force (Join-Path $d 'distribution'); return $d }
+    function Get-Tmps { param($d) return @(Get-ChildItem -LiteralPath (Join-Path $d 'distribution') -Force -Filter '*.tmp' -ErrorAction SilentlyContinue) }
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+
+    # существующий файл: чужие политики и кириллица сохраняются, метки нет
+    $d = New-FfDir; $f = Join-Path $d 'distribution\policies.json'
+    [IO.File]::WriteAllText($f, '{"policies":{"Homepage":{"URL":"https://пример.рф/","Locked":true},"DisableAppUpdate":true},"comment":"корпоративная"}', $utf8)
+    $r = Update-FirefoxPoliciesFile $f 'DisableTelemetry' $true
+    $j = [IO.File]::ReadAllText($f, $utf8) | ConvertFrom-Json
+    $raw = [IO.File]::ReadAllBytes($f)
+    Check 'Firefox: ключ добавлен, чужие политики и кириллица на месте' ($r.ok -and $j.policies.DisableTelemetry -eq $true -and $j.policies.Homepage.URL -eq 'https://пример.рф/' -and $j.policies.DisableAppUpdate -eq $true -and $j.comment -eq 'корпоративная') ($r.why)
+    Check 'Firefox: файл в UTF-8 без метки, временных файлов не осталось' (-not ($raw[0] -eq 0xEF -and $raw[1] -eq 0xBB) -and (Get-Tmps $d).Count -eq 0)
+    Remove-Item -LiteralPath $d -Recurse -Force
+
+    # файл с меткой UTF-8 (Set-Content прежних версий) читается
+    $d = New-FfDir; $f = Join-Path $d 'distribution\policies.json'
+    [IO.File]::WriteAllText($f, '{"policies":{"A":"б"}}', (New-Object System.Text.UTF8Encoding($true)))
+    $r = Update-FirefoxPoliciesFile $f 'B' 1
+    $j = [IO.File]::ReadAllText($f, $utf8) | ConvertFrom-Json
+    Check 'Firefox: файл с меткой UTF-8 читается, кириллица не портится' ($r.ok -and $j.policies.A -eq 'б' -and $j.policies.B -eq 1) ($r.why)
+    Remove-Item -LiteralPath $d -Recurse -Force
+
+    # файла нет — создаётся
+    $d = New-FfDir; $f = Join-Path $d 'distribution\policies.json'
+    $r = Update-FirefoxPoliciesFile $f 'DisableTelemetry' $true
+    Check 'Firefox: файла не было — создан целым' ($r.ok -and (Test-Path -LiteralPath $f) -and ([IO.File]::ReadAllText($f) | ConvertFrom-Json).policies.DisableTelemetry -eq $true -and (Get-Tmps $d).Count -eq 0) ($r.why)
+    Remove-Item -LiteralPath $d -Recurse -Force
+
+    # нет даже папки distribution — создаётся
+    $d = Join-Path $env:TEMP ('w11p-ffb-' + [guid]::NewGuid().ToString('N').Substring(0, 8)); $null = New-Item -ItemType Directory -Force $d
+    $f = Join-Path $d 'distribution\policies.json'
+    $r = Update-FirefoxPoliciesFile $f 'X' 1
+    Check 'Firefox: нет папки distribution — создаётся вместе с файлом' ($r.ok -and (Test-Path -LiteralPath $f)) ($r.why)
+    Remove-Item -LiteralPath $d -Recurse -Force
+
+    # неразбираемый JSON и не-UTF-8 — не трогаются
+    $d = New-FfDir; $f = Join-Path $d 'distribution\policies.json'
+    [IO.File]::WriteAllText($f, '{ "policies": { // comment', $utf8); $b0 = [IO.File]::ReadAllBytes($f)
+    $r = Update-FirefoxPoliciesFile $f 'X' 1
+    Check 'Firefox: неразбираемый JSON не перезаписывается' ((-not $r.ok) -and ([Convert]::ToBase64String([IO.File]::ReadAllBytes($f)) -eq [Convert]::ToBase64String($b0)) -and (Get-Tmps $d).Count -eq 0)
+    [IO.File]::WriteAllBytes($f, [byte[]](0x7B, 0x22, 0xE9, 0x22, 0x3A, 0x31, 0x7D)); $b0 = [IO.File]::ReadAllBytes($f)
+    $r = Update-FirefoxPoliciesFile $f 'X' 1
+    Check 'Firefox: файл не в UTF-8 не перезаписывается' ((-not $r.ok) -and ([Convert]::ToBase64String([IO.File]::ReadAllBytes($f)) -eq [Convert]::ToBase64String($b0)))
+    Remove-Item -LiteralPath $d -Recurse -Force
+
+    # сбой записи на диск: в папку нельзя создавать файлы — прежний файл цел
+    $d = New-FfDir; $dist = Join-Path $d 'distribution'; $f = Join-Path $dist 'policies.json'
+    [IO.File]::WriteAllText($f, '{"policies":{"Keep":true}}', $utf8); $b0 = [IO.File]::ReadAllBytes($f)
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl = Get-Acl -LiteralPath $dist
+    $deny = New-Object Security.AccessControl.FileSystemAccessRule($me, [Security.AccessControl.FileSystemRights]'CreateFiles', 'Deny')
+    $acl.AddAccessRule($deny); Set-Acl -LiteralPath $dist -AclObject $acl
+    $r = Update-FirefoxPoliciesFile $f 'X' 1
+    $acl = Get-Acl -LiteralPath $dist; $null = $acl.RemoveAccessRule($deny); Set-Acl -LiteralPath $dist -AclObject $acl
+    Check 'Firefox: сбой записи — ошибка, прежний файл цел, временных нет' ((-not $r.ok) -and ([Convert]::ToBase64String([IO.File]::ReadAllBytes($f)) -eq [Convert]::ToBase64String($b0)) -and (Get-Tmps $d).Count -eq 0) ($r.why)
+
+    # оборванная запись прошлого раза: старый временный файл убирается, свежий — нет
+    $oldTmp = Join-Path $dist '.policies.json.w11p-aaaaaaaaaaaa.tmp'; [IO.File]::WriteAllText($oldTmp, '{"half')
+    (Get-Item -LiteralPath $oldTmp).LastWriteTime = (Get-Date).AddHours(-2)
+    $freshTmp = Join-Path $dist '.policies.json.w11p-bbbbbbbbbbbb.tmp'; [IO.File]::WriteAllText($freshTmp, '{"half')
+    $r = Update-FirefoxPoliciesFile $f 'Y' 2
+    $j = [IO.File]::ReadAllText($f, $utf8) | ConvertFrom-Json
+    Check 'Firefox: недописанный временный файл прошлого раза не мешает и убирается' ($r.ok -and $j.policies.Keep -eq $true -and $j.policies.Y -eq 2 -and -not (Test-Path -LiteralPath $oldTmp) -and (Test-Path -LiteralPath $freshTmp)) ($r.why)
+    Remove-Item -LiteralPath $d -Recurse -Force
+
+    # ссылка на месте папки distribution — отказ
+    $d = New-FfDir; $target = Join-Path $d 'elsewhere'; $null = New-Item -ItemType Directory -Force $target
+    Remove-Item -LiteralPath (Join-Path $d 'distribution') -Force
+    cmd /c mklink /J "$(Join-Path $d 'distribution')" "$target" 2>&1 | Out-Null
+    $r = Update-FirefoxPoliciesFile (Join-Path $d 'distribution\policies.json') 'X' 1
+    Check 'Firefox: ссылка вместо папки distribution — отказ, в цель ничего не пишется' ((-not $r.ok) -and @(Get-ChildItem -LiteralPath $target -Force).Count -eq 0) ($r.why)
+    cmd /c rmdir "$(Join-Path $d 'distribution')" 2>&1 | Out-Null
+    Remove-Item -LiteralPath $d -Recurse -Force
+
+    # удаление последнего ключа программы — файл удаляется (как раньше)
+    $d = New-FfDir; $f = Join-Path $d 'distribution\policies.json'
+    $null = Update-FirefoxPoliciesFile $f 'OnlyMine' 1
+    $r = Update-FirefoxPoliciesFile $f 'OnlyMine' $null -Remove
+    Check 'Firefox: удаление единственного ключа программы удаляет созданный ею файл' ($r.ok -and $r.removedFile -and -not (Test-Path -LiteralPath $f))
+    Remove-Item -LiteralPath $d -Recurse -Force
+
+    # папка Firefox (или папка выше), открытая на запись не только администраторам, — отказ
+    $d = New-FfDir; $f = Join-Path $d 'distribution\policies.json'
+    function Get-FirefoxPoliciesPath { $f }
+    $script:PathAsked = ''
+    function Test-PathTrusted { param($Path) $script:PathAsked = $Path; return $false }
+    function Test-ItemTrusted { param($Item) return $true }
+    $r = Write-FirefoxKey 'X' 1
+    Check 'Firefox: папка не только для администраторов — отказ без записи' ((-not $r.ok) -and -not (Test-Path -LiteralPath $f)) ($r.why)
+    Check 'Firefox (W11P-006): проверяется вся цепочка до папки Firefox, а не одна папка' ($script:PathAsked -eq $d) ($script:PathAsked)
+    # папка Firefox в порядке, а distribution или policies.json — чужие: отказ
+    function Test-PathTrusted { param($Path) return $true }
+    function Test-ItemTrusted { param($Item) return -not ($Item.Name -eq 'distribution') }
+    $r = Write-FirefoxKey 'X' 1
+    Check 'Firefox: чужая папка distribution — отказ без записи' ((-not $r.ok) -and -not (Test-Path -LiteralPath $f)) ($r.why)
+    [IO.File]::WriteAllText($f, '{"policies":{"Keep":true}}', $utf8); $b0 = [IO.File]::ReadAllBytes($f)
+    function Test-ItemTrusted { param($Item) return -not ($Item.Name -eq 'policies.json') }
+    $r = Write-FirefoxKey 'X' 1
+    Check 'Firefox: чужой policies.json — отказ, файл не тронут' ((-not $r.ok) -and ([Convert]::ToBase64String([IO.File]::ReadAllBytes($f)) -eq [Convert]::ToBase64String($b0))) ($r.why)
+    function Test-ItemTrusted { param($Item) return $true }
+    $r = Write-FirefoxKey 'X' 1
+    Check 'Firefox: всё своё — запись идёт' ($r.ok) ($r.why)
+    Remove-Item -LiteralPath $d -Recurse -Force
+
+    # --- замок (W11P-006 / Firefox): только Global\, чужой замок — отказ ---
+    Check 'замок Firefox: владелец — система, администраторы или мы сами; чужие — нет' (
+          (Test-MutexOwnerTrusted 'S-1-5-18') -and (Test-MutexOwnerTrusted 'S-1-5-32-544') -and
+          (Test-MutexOwnerTrusted ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) -and
+          -not (Test-MutexOwnerTrusted 'S-1-5-32-545') -and -not (Test-MutexOwnerTrusted 'S-1-1-0') -and -not (Test-MutexOwnerTrusted 'S-1-5-11') -and -not (Test-MutexOwnerTrusted ''))
+    $m = Open-FirefoxMutex
+    $mAcl = $m.GetAccessControl()
+    $mSids = @($mAcl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | ForEach-Object { $_.IdentityReference.Value } | Sort-Object -Unique)
+    $mWant = @('S-1-5-18', 'S-1-5-32-544', [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) | Sort-Object -Unique
+    Check 'замок Firefox: права только у системы, администраторов и создателя' ($mAcl.AreAccessRulesProtected -and (($mSids -join ',') -eq ($mWant -join ','))) ($mSids -join ',')
+    $m.Dispose()
+    # Замок, заранее заведённый так, что нам его не открыть (у DACL нет ни
+    # одного разрешения): раньше движок молча брал Local\ и писал без общего
+    # замка с задачами стража; теперь — отказ, файл не тронут
+    $d = New-FfDir; $f = Join-Path $d 'distribution\policies.json'
+    [IO.File]::WriteAllText($f, '{"policies":{"Keep":true}}', $utf8); $b0 = [IO.File]::ReadAllBytes($f)
+    $sq = New-Object System.Security.AccessControl.MutexSecurity
+    $sq.SetAccessRuleProtection($true, $false)
+    $sqCreated = $false
+    $squat = $null
+    try { $squat = [System.Threading.Mutex]::new($false, 'Global\Win11Privacy-FirefoxPolicies', [ref]$sqCreated, $sq) } catch { }
+    if ($squat -and $sqCreated) {
+        $r = Update-FirefoxPoliciesFile $f 'X' 1
+        Check 'замок Firefox: занятый чужим и недоступный — отказ, без Local\, файл не тронут' ((-not $r.ok) -and ("$($r.why)" -match 'замок') -and ([Convert]::ToBase64String([IO.File]::ReadAllBytes($f)) -eq [Convert]::ToBase64String($b0))) ($r.why)
+        $squat.Dispose()
+    } else {
+        Check 'замок Firefox: тест занятого замка запущен (замок не был занят другим запуском)' $false
+    }
+    $r = Update-FirefoxPoliciesFile $f 'X' 1
+    Check 'замок Firefox: чужой замок закрыт — запись снова идёт' ($r.ok) ($r.why)
+    Remove-Item -LiteralPath $d -Recurse -Force
+}
+    # одновременные писатели: 6 процессов, у каждого свой ключ — все на месте
+    $ffd = Join-Path $env:TEMP ('w11p-ffc-' + [guid]::NewGuid().ToString('N').Substring(0, 8)); $null = New-Item -ItemType Directory -Force (Join-Path $ffd 'distribution')
+    $fff = Join-Path $ffd 'distribution\policies.json'
+    [IO.File]::WriteAllText($fff, '{"policies":{"Keep":true}}', (New-Object System.Text.UTF8Encoding($false)))
+    $fnText = (@($engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Read-Utf8Strict', 'Write-JsonFileAtomic', 'Update-FirefoxPoliciesFile', 'Replace-FileAtomic', 'Open-FirefoxMutex', 'Test-MutexOwnerTrusted') }, $true)) | ForEach-Object { $_.Extent.Text }) -join "`r`n"
+    $worker = Join-Path $ffd 'worker.ps1'
+    Set-Content -LiteralPath $worker -Encoding UTF8 -Value ('param($F, $K)' + "`r`n" + $fnText + "`r`n" + '$r = Update-FirefoxPoliciesFile $F $K 1; if ($r.ok) { exit 0 } else { [Console]::Error.WriteLine($r.why); exit 1 }')
+    $procs = @()
+    foreach ($i in 1..6) { $procs += Start-Process -FilePath (Get-Command powershell.exe).Source -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $worker + '"'), '-F', ('"' + $fff + '"'), '-K', ('Key' + $i)) -PassThru -WindowStyle Hidden }
+    foreach ($p in $procs) { $p.WaitForExit() }
+    $jc = [IO.File]::ReadAllText($fff) | ConvertFrom-Json
+    $have = @(1..6 | Where-Object { $jc.policies.("Key$_") -eq 1 })
+    Check 'Firefox: 6 одновременных писателей — все ключи на месте, файл цел' ($have.Count -eq 6 -and $jc.policies.Keep -eq $true -and @($procs | Where-Object { $_.ExitCode -ne 0 }).Count -eq 0 -and @(Get-ChildItem -LiteralPath (Join-Path $ffd 'distribution') -Force -Filter '*.tmp').Count -eq 0) ("ключей: " + $have.Count)
+    Remove-Item -LiteralPath $ffd -Recurse -Force -ErrorAction SilentlyContinue
+}
+$ffBlock = [regex]::Match($bkText, "(?s)function Update-FirefoxPoliciesFile \{.*?\n\}").Value
+Check 'Firefox: policies.json пишется только через Write-JsonFileAtomic, без Set-Content' (($ffBlock -match 'Write-JsonFileAtomic \$Path') -and ($ffBlock -notmatch 'Set-Content'))
+Check 'замок Firefox: в движке нет замка Local\ (у окна и задач системы он был бы разный)' (($bkText -notmatch 'Local\\Win11Privacy-FirefoxPolicies') -and ($ffBlock -match 'Open-FirefoxMutex'))
+
+# --------------------------------------------------------------------------- #
+#  W11P-006: проверка прав объекта (Test-ItemTrusted) и пути до него
+#  Права собираются в памяти (SDDL): так проверяется сама логика — явные и
+#  унаследованные записи, запреты, «только для вложенного», создатель-
+#  владелец, — независимо от прав временной папки. Затем — настоящие папки.
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Права объекта и путь до него (W11P-006)'
+& {
+    foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Test-ItemTrusted', 'Get-UntrustedRights', 'Test-DirChainSecure', 'Test-PathTrusted', 'Assert-SafeRoot', 'Test-SafeRootChain') }, $true)) { Invoke-Expression $fn.Extent.Text }
+    foreach ($a in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+        $lt = $a.Left -as [System.Management.Automation.Language.VariableExpressionAst]
+        if ($null -ne $lt -and $lt.VariablePath.UserPath -eq 'script:TrustedSids') { Invoke-Expression $a.Extent.Text }
+    }
+    function Write-Log { param([string]$Message = '') }
+    & {
+    # Get-Acl отдаёт права, собранные из SDDL; владелец — в той же строке
+    $script:FakeSddl = ''
+    $script:FakeAclThrows = $false
+    function Get-Acl {
+        param([string]$LiteralPath, $ErrorAction)
+        if ($script:FakeAclThrows) { throw 'нет доступа к правам' }
+        $sec = $(if ($script:FakeDir) { New-Object System.Security.AccessControl.DirectorySecurity } else { New-Object System.Security.AccessControl.FileSecurity })
+        $sec.SetSecurityDescriptorSddlForm($script:FakeSddl)
+        return $sec
+    }
+    function T {
+        param([string]$Sddl, [bool]$Dir = $true, $Attr = $null)
+        $script:FakeSddl = $Sddl; $script:FakeDir = $Dir
+        $at = $(if ($null -ne $Attr) { $Attr } elseif ($Dir) { [IO.FileAttributes]::Directory } else { [IO.FileAttributes]::Normal })
+        return (Test-ItemTrusted ([pscustomobject]@{ FullName = 'C:\fake'; Name = 'fake'; Attributes = $at; PSIsContainer = $Dir }))
+    }
+    $base = 'O:BAG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'
+    $cases = [ordered]@{
+        'закрытая: система и администраторы, пользователи читают'            = @("$base(A;OICI;0x1200a9;;;BU)", $true, $true)
+        'владелец TrustedInstaller'                                          = @('O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464G:SYD:PAI(A;OICI;FA;;;SY)', $true, $true)
+        'владелец — обычный пользователь'                                    = @('O:BUG:SYD:PAI(A;OICI;FA;;;SY)', $true, $false)
+        'явная запись для пользователей'                                     = @("$base(A;;FW;;;BU)", $true, $false)
+        'унаследованная запись для «Прошедших проверку» (раньше не видна)'   = @('O:BAG:SYD:AI(A;ID;FA;;;SY)(A;OICIID;0x1301bf;;;AU)', $true, $false)
+        'унаследованная запись у файла'                                      = @('O:BAG:SYD:AI(A;ID;FA;;;SY)(A;ID;0x1301bf;;;AU)', $false, $false)
+        'только удаление'                                                    = @("$base(A;;SD;;;BU)", $true, $false)
+        'удаление вложенного у папки'                                        = @("$base(A;;0x40;;;BU)", $true, $false)
+        'смена прав (WriteDAC)'                                              = @("$base(A;;WD;;;BU)", $true, $false)
+        'смена владельца (WriteOwner)'                                       = @("$base(A;;WO;;;BU)", $true, $false)
+        'общее право записи (GW)'                                            = @("$base(A;;GW;;;WD)", $true, $false)
+        'общее право «всё» (GA)'                                             = @("$base(A;;GA;;;BU)", $true, $false)
+        'запись атрибутов'                                                   = @("$base(A;;0x100;;;BU)", $true, $false)
+        'только для вложенного: вложенное получит запись'                    = @("$base(A;OICIIO;FW;;;BU)", $true, $false)
+        'только для вложенного у файла не действует'                         = @("$base(A;OICIIO;FW;;;BU)", $false, $true)
+        'создатель-владелец для вложенного'                                  = @("$base(A;OICIIO;FA;;;CO)", $true, $true)
+        'права владельца (OWNER RIGHTS)'                                     = @("$base(A;;FA;;;OW)", $true, $true)
+        'запись пользователям, явный запрет записи для «Все»'                = @('O:BAG:SYD:P(D;;0x1301bf;;;WD)(A;;FA;;;SY)(A;;0x1301bf;;;BU)', $true, $true)
+        'запрет только для пользователей, запись «Прошедшим проверку»'       = @('O:BAG:SYD:P(D;;0x1301bf;;;BU)(A;;FA;;;SY)(A;;0x1301bf;;;AU)', $true, $false)
+        'унаследованный запрет «Все» не отменяет явной записи'               = @('O:BAG:SYD:AI(A;;0x1301bf;;;BU)(D;ID;0x1301bf;;;WD)(A;ID;FA;;;SY)', $true, $false)
+        'запрет «Все» не первым (порядок нарушен) — не учитывается'          = @('O:BAG:SYD:P(A;;0x1301bf;;;BU)(D;;0x1301bf;;;WD)(A;;FA;;;SY)', $true, $false)
+        'запрет «Все» только для вложенного не закрывает саму папку'        = @('O:BAG:SYD:P(D;OICIIO;0x1301bf;;;WD)(A;;FA;;;SY)(A;;0x1301bf;;;BU)', $true, $false)
+        'пустой список прав (никому ничего)'                                 = @('O:BAG:SYD:P', $true, $true)
+    }
+    $bad = @()
+    foreach ($k in $cases.Keys) {
+        $c = $cases[$k]
+        $got = T $c[0] $c[1]
+        if ([bool]$got -ne [bool]$c[2]) { $bad += ("{0}: ждали {1}, вышло {2}" -f $k, $c[2], $got) }
+    }
+    Check ("права (W11P-006): {0} случаев — явные, унаследованные, запреты, вложенное" -f $cases.Count) ($bad.Count -eq 0) ($bad -join ' | ')
+    Check 'права: ссылка (reparse point) — не верим' (-not (T "$base" $true ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint)))
+    $script:FakeAclThrows = $true
+    Check 'права: права не читаются — не верим' (-not (T "$base" $true))
+    $script:FakeAclThrows = $false
+    Check 'права: нет объекта — не верим' (-not (Test-ItemTrusted $null))
+    # -ExplicitOnly (перенос старой папки данных): унаследованное не в счёт, явное — в счёт
+    $script:FakeSddl = 'O:BAG:SYD:AI(A;ID;FA;;;SY)(A;OICIID;0x1301bf;;;AU)'; $script:FakeDir = $true
+    $fi = [pscustomobject]@{ FullName = 'C:\fake'; Name = 'fake'; Attributes = [IO.FileAttributes]::Directory; PSIsContainer = $true }
+    $explInh = Test-ItemTrusted $fi -ExplicitOnly
+    $script:FakeSddl = "$base(A;;FW;;;BU)"
+    $explOwn = Test-ItemTrusted $fi -ExplicitOnly
+    Check 'права: -ExplicitOnly — унаследованное пропускается, явная запись нет' ($explInh -and -not $explOwn)
+    }
+
+    # Настоящие папки (только чтение прав)
+    $pf = Get-Item -LiteralPath $env:ProgramFiles -Force
+    Check 'права: Program Files — доверенная, путь до неё тоже' ((Test-ItemTrusted $pf) -and (Test-PathTrusted $env:ProgramFiles))
+    Check 'права: System32 — путь доверенный' (Test-PathTrusted (Join-Path $env:SystemRoot 'System32'))
+    Check 'права: в ProgramData пользователи создают файлы — сама она не доверенная, но переименовать её нельзя' (
+          (-not (Test-ItemTrusted (Get-Item -LiteralPath $env:ProgramData -Force))) -and (Test-DirChainSecure $env:ProgramData))
+    Check 'права: временная папка пользователя — не доверенная' (-not (Test-PathTrusted $env:TEMP))
+    # Унаследованное право записи на настоящем диске: папка открыта
+    # пользователям с наследованием, файл в ней своих записей не имеет
+    $inhDir = Join-Path $env:TEMP ('w11p-inh-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $null = New-Item -ItemType Directory -Force $inhDir
+    $acl = Get-Acl -LiteralPath $inhDir
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')), 'Modify', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
+    Set-Acl -LiteralPath $inhDir -AclObject $acl
+    $inhFile = Join-Path $inhDir 'x.json'; [IO.File]::WriteAllText($inhFile, '{}')
+    $fa = Get-Acl -LiteralPath $inhFile
+    $explicitUsers = @($fa.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference.Value -eq 'S-1-5-32-545' }).Count
+    $rights = Get-UntrustedRights $fa $false
+    Check 'права: унаследованная запись у файла на диске видна (явной записи нет)' ($explicitUsers -eq 0 -and (($rights -band 0x2) -ne 0))
+    Remove-Item -LiteralPath $inhDir -Recurse -Force -ErrorAction SilentlyContinue
+
+    # Под администратором — целиком на диске: владелец «Администраторы», и
+    # только права решают. Здесь видно, чего не замечала прежняя проверка
+    # (только явные записи): файл и папка, открытые пользователям наследованием.
+    $isAdm = $false
+    try { $isAdm = (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) } catch { }
+    if ($isAdm) {
+        $ba = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+        function New-AdmDir {
+            param([string]$Path, [bool]$UsersModify)
+            $sec = New-Object System.Security.AccessControl.DirectorySecurity
+            $sec.SetAccessRuleProtection($true, $false)
+            $inh = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+            foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) { $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', $inh, 'None', 'Allow'))) }
+            $usr = $(if ($UsersModify) { 'Modify' } else { 'ReadAndExecute' })
+            $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')), $usr, $inh, 'None', 'Allow')))
+            $sec.SetOwner($ba)
+            $null = [IO.Directory]::CreateDirectory($Path, $sec)
+            return (Get-Item -LiteralPath $Path -Force)
+        }
+        function Set-AdmOwner { param([string]$Path) $a = Get-Acl -LiteralPath $Path; $a.SetOwner($ba); Set-Acl -LiteralPath $Path -AclObject $a }
+        $admBase = Join-Path $env:TEMP ('w11p-acl-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        $null = New-Item -ItemType Directory -Force $admBase
+        $closed = New-AdmDir (Join-Path $admBase 'closed') $false
+        $cf = Join-Path $closed.FullName 'f.json'; [IO.File]::WriteAllText($cf, '{}'); Set-AdmOwner $cf
+        $open = New-AdmDir (Join-Path $admBase 'open') $true
+        $of = Join-Path $open.FullName 'f.json'; [IO.File]::WriteAllText($of, '{}'); Set-AdmOwner $of
+        $od = Join-Path $open.FullName 'sub'; $null = New-Item -ItemType Directory -Force $od; Set-AdmOwner $od
+        Check 'права (админ): закрытая папка и файл в ней — доверенные' ((Test-ItemTrusted $closed) -and (Test-ItemTrusted (Get-Item -LiteralPath $cf -Force)))
+        Check 'права (админ): файл, открытый пользователям наследованием, — не доверенный (раньше считался)' (
+              (-not (Test-ItemTrusted (Get-Item -LiteralPath $of -Force))) -and (Test-ItemTrusted (Get-Item -LiteralPath $of -Force) -ExplicitOnly))
+        Check 'права (админ): папка, открытая пользователям наследованием, — не доверенная' (-not (Test-ItemTrusted (Get-Item -LiteralPath $od -Force)))
+        Check 'права (админ): папка с правом записи для вложенного — не доверенная' (-not (Test-ItemTrusted $open))
+        Check 'права (админ): закрытый файл в папке под временной папкой пользователя — путь не доверенный' (-not (Test-PathTrusted $cf))
+        $dacl = Get-Acl -LiteralPath $cf
+        $dacl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-5-11')), 'Delete', 'Allow'))); Set-Acl -LiteralPath $cf -AclObject $dacl
+        Check 'права (админ): право удалить файл у «Прошедших проверку» — не доверенный' (-not (Test-ItemTrusted (Get-Item -LiteralPath $cf -Force)))
+        & cmd.exe /c ('rmdir /s /q "' + $admBase + '"') 2>$null
+    } else {
+        Write-Host '  [--]   права на диске под администратором: пропущено (нужны права администратора)'
+    }
+
+    # Корень данных: путь до него (ProgramData) проверяется; не прошёл — корня нет
+    $savedSafe = $script:SafeRoot; $savedState = $script:RootState
+    $script:SafeRoot = Join-Path $env:ProgramData 'Win11Privacy'
+    Check 'права: путь до ProgramData\Win11Privacy не подменить' (Test-SafeRootChain)
+    function Protect-DataRoot { param($Dir) return $true }
+    function Test-SafeRootChain { return $false }
+    $script:RootState = $null
+    Check 'права: путь до корня открыт — корень не защищён, даже если сам корень закрыт' (-not (Assert-SafeRoot))
+    function Test-SafeRootChain { return $true }
+    $script:RootState = $null
+    Check 'права: путь закрыт и корень закрыт — корень защищён' ([bool](Assert-SafeRoot))
+    $script:SafeRoot = $savedSafe; $script:RootState = $savedState
+}
+
+# --------------------------------------------------------------------------- #
+#  W11P-003: SensorSet — код выхода совпадает с ответом
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'SensorSet (W11P-003): ответ и код выхода согласованы'
+$ssFound = @()
+foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if (@('Invoke-SensorSet', 'Get-ConsentKeyPath') -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $ssFound += $fn.Name }
+}
+Check 'SensorSet: функции найдены в движке' ($ssFound.Count -eq 2)
+if ($ssFound.Count -eq 2) {
+& {
+    function Write-Log { param([string]$Message = '') }
+    $script:SpyCaps = @(@{ id = 'webcam' }, @{ id = 'microphone' }, @{ id = 'location' })
+    $script:ConsentRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore'
+    $script:RegStore = @{}
+    $script:SetRegFails = $false; $script:JournalFails = $false; $script:ReadBack = $null
+    function Set-Reg { param($Path, $Name, $Value, $Type, $Comment) if ($script:SetRegFails) { $script:Failures++; return } $script:RegStore["$Path|$Name"] = $Value }
+    function Save-JournalEntries { param([switch]$Quiet) if ($script:JournalFails) { $script:Failures++ } }
+    function Get-RegValue { param($Path, $Name) if ($null -ne $script:ReadBack) { return $script:ReadBack } return $script:RegStore["$Path|$Name"] }
+    $key = 'webcam\NonPackaged\C:#App#app.exe'
+    $script:Failures = 0
+    $r = Invoke-SensorSet $key 'Deny'
+    Check 'SensorSet: успех — ok, без ошибки' ($r.ok -and -not $r.error -and -not $r.invalid)
+    $script:SetRegFails = $true; $r = Invoke-SensorSet $key 'Allow'; $script:SetRegFails = $false
+    Check 'SensorSet: сбой записи в реестр — не ok, с причиной' ((-not $r.ok) -and $r.error -and -not $r.invalid) ($r.error)
+    $script:JournalFails = $true; $r = Invoke-SensorSet $key 'Allow'; $script:JournalFails = $false
+    Check 'SensorSet: сбой журнала отката — не ok' ((-not $r.ok) -and $r.error -match 'журнал') ($r.error)
+    $script:ReadBack = 'Allow'; $r = Invoke-SensorSet $key 'Deny'; $script:ReadBack = $null
+    Check 'SensorSet: сверка не сошлась — не ok, видно, что прочиталось' ((-not $r.ok) -and $r.error -match 'читается другое') ($r.error)
+    $r = Invoke-SensorSet 'webcam\..\x' 'Deny'
+    Check 'SensorSet: негодный ключ — invalid' ((-not $r.ok) -and $r.invalid)
+    $r = Invoke-SensorSet $key 'Maybe'
+    Check 'SensorSet: негодное значение — invalid' ((-not $r.ok) -and $r.invalid)
+}
+}
+$ssBlock = [regex]::Match($bkText, "(?s)if \(\`$SensorSet\) \{.*?\n\}").Value
+Check 'SensorSet: код выхода 0 только при ok (1 — негодный запрос, 2 — не удалось)' ($ssBlock -match 'exit \$\(if \(\$r\.ok\) \{ 0 \} elseif \(\$invalid\) \{ 1 \} else \{ 2 \}\)' -and $ssBlock -notmatch 'exit 0')
+# Тот же класс ошибок у других действий: ошибки посчитаны, а код выхода 0
+$failExit = @()
+foreach ($op in @('XrayWipe', 'RemoveApps', 'StartupSet', 'RestoreItems', 'PurgeData')) {
+    $blk = [regex]::Match($bkText, "(?s)\nif \(\`$$op\) \{.*?\n\}").Value
+    $last = @([regex]::Matches($blk, '(?m)^\s+exit .*$') | ForEach-Object { $_.Value.Trim() }) | Select-Object -Last 1
+    if ($last -ne 'exit $(if ($script:Failures -gt 0) { 2 } else { 0 })') { $failExit += ("{0}: {1}" -f $op, $last) }
+}
+Check 'действия с ошибками (XrayWipe, RemoveApps, StartupSet, RestoreItems, PurgeData) не завершаются кодом 0' ($failExit.Count -eq 0) ($failExit -join ' | ')
+$rq = Invoke-EngineRequestText '{"v":1,"op":"SensorSet","args":{"SensorKey":"webcam\\..\\x","SensorValue":"Deny"}}'
+Check 'SensorSet через запрос: негодный ключ — код 1 и ok:false в ответе' ($rq.code -eq 1 -and $null -ne $rq.json -and -not $rq.json.ok) ("код " + $rq.code)
 
 # --------------------------------------------------------------------------- #
 Write-Host ''

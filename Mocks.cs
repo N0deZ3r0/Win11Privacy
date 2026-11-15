@@ -201,6 +201,21 @@ namespace Win11Privacy
             _xrayRecording = true;
             _btnXrayRec.Text = L.T("Выключить запись"); _btnXrayRec.Primary = false;
             foreach (Control c in _xrayList.Controls) { if (c is XrayCatRow) { ((XrayCatRow)c).Expand(); break; } }
+
+            // журнал — так, как его выводит потоковый запуск (EngineRunner)
+            _log.Clear();
+            LogLine(L.T("Применение настроек…").TrimEnd('…', '.', ' '), Theme.Text, LogTitleFont);
+            LogLine(L.T("Команда движка: ") + "-Apply -Modules telemetry,ads", Theme.TextFaint);
+            foreach (string s in new[] { "", "--- Резервная копия реестра ----------------------------------",
+                "   [+] сохранено веток: 14 -> C:\\ProgramData\\Win11Privacy\\backups\\Win11Privacy-Backup-20261115-120000-a1b2c3",
+                "   [i] вернуть копию: «Изменения» -> «Из резервной копии»", "",
+                "--- Телеметрия и диагностика ---------------------------------",
+                "   [+] уровень телеметрии — минимальный", "   [-] служба dmwappushservice уже отключена",
+                "   [!] задача Consolidator -- Windows не разрешает" })
+                LogEngine(s);
+            LogGap();
+            LogLine(L.T("Готово."), Theme.Ok, LogSectionFont);
+            UpdateLogEmpty();
         }
 #endif
     }

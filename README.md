@@ -119,17 +119,30 @@ English, to pin one language.
 
 ## Download and run
 
-**Via winget:**
+**Installer:** take `Win11Privacy-Setup.exe` from [Releases](https://github.com/N0deZ3r0/Win11Privacy/releases/latest)
+and run it. The wizard — in English or Russian, following the Windows language —
+offers a choice:
+
+- **a regular installation** — into Program Files (only administrators can write
+  there, which auto-protection relies on), with a Start menu shortcut and removal
+  in Settings → Apps. Uninstalling removes the auto-protection and monitoring tasks
+  together with the program, and keeps its data (the change journal, history)
+  unless you ask for it to be wiped;
+- **a portable copy** — the program is simply unpacked into a folder of your
+  choice, a USB stick for example, with a `portable.txt` next to it, and all its
+  data lives in that folder. Nothing is registered in the system.
+
+**Via winget** — the same in one command (winget does the regular installation):
 
 ```
-winget install N0deZ3r0.Win11Privacy --scope machine
+winget install N0deZ3r0.Win11Privacy
 ```
 
-`--scope machine` puts the exe in the machine-wide winget folder (inside Program
-Files), which only administrators can write to. Without it winget installs the
-package into your profile, where any program of yours could replace the exe
-before it is next run with administrator rights. Then start it with
-`Win11Privacy` from a new terminal window. Or download it by hand:
+If you installed the program with winget before the installer existed, you got
+it as a bare exe: winget cannot upgrade that copy with the installer — remove it
+(`winget uninstall N0deZ3r0.Win11Privacy`) and install it again.
+
+**Without installing:**
 
 1. Take `Win11Privacy.exe` from [Releases](https://github.com/N0deZ3r0/Win11Privacy/releases/latest).
 2. Right-click the file → **Properties** → tick **Unblock** at the bottom → OK.
@@ -143,7 +156,9 @@ into Windows, and the engine is embedded inside the exe.
 
 > **Tip:** press **Audit** first — you will see the current state without changing
 > anything. A registry backup and a restore point are created automatically before
-> anything is applied.
+> anything is applied. The backup is kept by the program itself in
+> `C:\ProgramData\Win11Privacy\backups` (only administrators can change it) and is
+> restored from the **Changes** page; nothing is put on your desktop.
 
 ---
 
@@ -229,7 +244,9 @@ By hand, if you prefer (after editing `engine/`, run `python tools/build_engine.
 | **docs/security-model.md** | The security model and rollback guarantees: trust boundaries, the signed journal, write-ahead logging, what survives a crash, how restores are verified, known limits. |
 | **tools/build_engine.py** | Builds `Win11-Privacy-Engine.ps1` from the parts in `engine/`. `--check` compares them, and the build insists on it; `--where N` finds a line of the built file in its part. It stops instead of overwriting the built file if that file was edited by hand (`--force` overwrites anyway). |
 | **tools/release_notes.py** | Builds the release text: the version's section from `CHANGELOG.md`, how to run, and the attached files. |
-| **tools/make_winget.py** | Builds the winget catalogue manifest from the version and the release checksum. |
+| **tools/make_winget.py** | Builds the winget catalogue manifest from the version and the release checksum. The catalogue gets the installer `Win11Privacy-Setup.exe`. |
+| **installer/** | The installer (Inno Setup): `Win11Privacy.iss` — the wizard in English and Russian, a regular installation or a portable copy; `build.ps1` builds `Win11Privacy-Setup.exe` from a built `Win11Privacy.exe` (needs Inno Setup 6.6 or newer; the release build installs a pinned version itself). |
+| **tests/installer-tests.ps1** | Installs, reinstalls, uninstalls (with and without the data) and unpacks the portable copy for real. It changes the system, so it runs only with `WIN11_INSTALLER_TEST=1`; the build runs it on a disposable machine. |
 | **tools/set_version.py** | Writes the program version into `app.res` — the one Windows shows in the file properties. `--check` compares them, and the build insists on it. |
 | **tools/submit_winget.py** | Submits the manifest of a new version to the winget catalogue: creates a branch in the fork, uploads the files and opens a pull request. The catalogue itself is never cloned — it weighs gigabytes. |
 | **check-engine.cmd** | Engine self-check. Read-only, changes nothing. |
@@ -239,11 +256,17 @@ By hand, if you prefer (after editing `engine/`, run `python tools/build_engine.
 ## How the program is built
 
 The interface **does nothing itself**. It assembles a list of the selected modules
-and launches the engine:
+and launches the engine with a constant command line; the operation and its data
+go to the engine as one JSON request on standard input, so nothing the user typed
+ever becomes part of a command line:
 
 ```
-powershell.exe -File engine.ps1 -Modules telemetry,ads,cleanup -BackupRoot "C:\...\Desktop"
+powershell.exe -File engine.ps1 -Request
+{"v":1,"op":"Apply","args":{"Modules":["telemetry","ads","cleanup"]}}
 ```
+
+From a console the same operations can be given as switches (see the table below):
+`powershell.exe -File engine.ps1 -Modules telemetry,ads,cleanup`.
 
 The engine prints its progress line by line (the interface colours it: `[+]` green,
 `[!]` red) and at the end may return a structured reply as a `###JSON### {...}`
@@ -404,7 +427,9 @@ reproducible: `python tools/build_engine.py --check` rebuilds it from `engine/`.
 
 ## Building and releases
 
-Locally: double-click **build.cmd** — `Win11Privacy.exe` appears next to it.
+Locally: double-click **build.cmd** — `Win11Privacy.exe` appears next to it. The
+installer: `powershell -ExecutionPolicy Bypass -File installer\build.ps1` (with Inno
+Setup 6.6+ installed) — `dist\Win11Privacy-Setup.exe` appears.
 
 The repository has automated builds (GitHub Actions):
 
@@ -469,9 +494,10 @@ To cut a new version:
 
 4. The rest happens on its own: the build compares the tag with the version
    inside the program, applies and reverts the settings on a disposable machine,
-   creates the release with `Win11Privacy.exe`, `Win11-Privacy-Engine.ps1`,
-   `SHA256SUMS.txt` and `winget-manifest.zip`, and then submits the manifest to
-   the winget catalogue as a pull request.
+   builds the installer and checks it on that machine, creates the release with
+   `Win11Privacy-Setup.exe`, `Win11Privacy.exe`, `Win11-Privacy-Engine.ps1`,
+   `SHA256SUMS.txt` and `winget-manifest.zip`, and then submits the manifest (the
+   installer) to the winget catalogue as a pull request.
 
 If the tag and the version inside the program disagree, the build stops — a
 release with the wrong number never goes out.

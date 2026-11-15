@@ -95,16 +95,16 @@ namespace Win11Privacy
         {
             if (_btnDossierAll != null)
                 _btnDossierAll.Text = _spyShowAll ? L.T("Только использованные") : L.T("Показать все разрешения");
-            RunJson(_spyShowAll ? "-Spy -SpyAll" : "-Spy", L.T("Чтение разрешений…"),
+            RunJson(new EngineRequest("Spy").Switch("SpyAll", _spyShowAll), L.T("Чтение разрешений…"),
                 delegate(Dictionary<string, object> d) { if (d != null) { _lastSpy = d; RenderDossier(); } });
         }
 
         private void RefreshDossier()
         {
-            RunJson(_spyShowAll ? "-Spy -SpyAll" : "-Spy", L.T("Чтение журнала доступа к камере и микрофону…"), delegate(Dictionary<string, object> d)
+            RunJson(new EngineRequest("Spy").Switch("SpyAll", _spyShowAll), L.T("Чтение журнала доступа к камере и микрофону…"), delegate(Dictionary<string, object> d)
             {
                 _lastSpy = d;
-                RunJson("-Footprint", L.T("Сканирование цифрового следа…"), delegate(Dictionary<string, object> f)
+                RunJson(new EngineRequest("Footprint"), L.T("Сканирование цифрового следа…"), delegate(Dictionary<string, object> f)
                 {
                     _lastFoot = f;
                     RenderDossier();
@@ -259,17 +259,64 @@ namespace Win11Privacy
             RefreshHome();
         }
 
+        // Ключ ConsentStore (путь «разрешение\…\приложение») идёт в аргумент
+        // движка одной строкой. Имя подраздела реестра может содержать кавычку,
+        // а завести такой подраздел в своём HKCU может любой пользователь:
+        // кавычка закрыла бы -SensorKey, и остаток командной строки движок (с
+        // правами администратора) разобрал бы как свои ключи. Пропускаем только
+        // строгий вид пути — разрешение (только латинские буквы), затем один-два
+        // непустых сегмента, без кавычек, управляющих знаков и «..».
+        // Та же грамматика, что у движка (engine/20-dossier-footprint.ps1,
+        // Get-ConsentKeyPath): «разрешение», «разрешение\Пакет_ИздательId» или
+        // «разрешение\NonPackaged\C:#путь#к#программе.exe». Движок проверяет
+        // ключ сам и по своему списку разрешений; здесь — чтобы не гонять его
+        // с заведомо негодным ключом. Ключ уходит данными запроса (EngineRequest),
+        // а не в командную строку.
+        private static readonly System.Text.RegularExpressions.Regex ConsentCapRx =
+            new System.Text.RegularExpressions.Regex(@"^[A-Za-z][A-Za-z.]{0,63}$");
+        private static readonly System.Text.RegularExpressions.Regex ConsentPackageRx =
+            new System.Text.RegularExpressions.Regex(@"^[A-Za-z0-9][A-Za-z0-9.-]{1,99}_[A-Za-z0-9]{13}$");
+        private static readonly System.Text.RegularExpressions.Regex ConsentExeRx =
+            new System.Text.RegularExpressions.Regex(@"^[A-Za-z]:(#[^#<>:""|?*\\/]+)+$");
+
+        internal static bool IsSafeConsentKey(string key)
+        {
+            if (string.IsNullOrEmpty(key) || key.Length > 320) return false;
+            if (key.IndexOf('"') >= 0 || key.IndexOf('/') >= 0 || key.IndexOf("..", StringComparison.Ordinal) >= 0) return false;
+            foreach (char c in key) if (c < 0x20 || c == 0x7F) return false;
+            string[] parts = key.Split('\\');
+            if (parts.Length < 1 || parts.Length > 3) return false;
+            foreach (string p in parts) if (p.Length == 0 || p == ".") return false;
+            if (!ConsentCapRx.IsMatch(parts[0])) return false;
+            bool nonPackaged = parts.Length > 1 && string.Equals(parts[1], "NonPackaged", StringComparison.OrdinalIgnoreCase);
+            if (parts.Length == 2) return !nonPackaged && ConsentPackageRx.IsMatch(parts[1]);
+            if (parts.Length == 3)
+            {
+                if (!nonPackaged || !ConsentExeRx.IsMatch(parts[2])) return false;
+                foreach (string p in parts[2].Substring(2).Split('#')) if (p == ".") return false;
+            }
+            return true;
+        }
+
         // Запретить или вернуть программе доступ к камере, микрофону, геолокации
         private void OnSensorToggleAccess(object sender, EventArgs e)
         {
             SpyRow r = sender as SpyRow;
             if (r == null || r.Key.Length == 0) return;
+            // Ключ ConsentStore идёт в командную строку движка. Кавычку в нём мы
+            // не пропускаем: см. IsSafeConsentKey. Обычный ключ всегда проходит.
+            if (!IsSafeConsentKey(r.Key))
+            {
+                MessageBox.Show(this, L.T("Не удалось изменить доступ."), L.T("Доступ к датчику"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             string want = r.Denied ? "Allow" : "Deny";
-            RunJson("-SensorSet -SensorKey \"" + r.Key + "\" -SensorValue " + want,
+            RunJson(new EngineRequest("SensorSet").Str("SensorKey", r.Key).Str("SensorValue", want),
                 r.Denied ? L.T("Возврат доступа…") : L.T("Запрет доступа…"),
                 delegate(Dictionary<string, object> d)
                 {
-                    if (d != null && Json.GetBool(d, "ok"))
+                    if (EngineSucceeded(d))
                     {
                         r.Denied = (want == "Deny");
                         r.Invalidate();
@@ -297,7 +344,7 @@ namespace Win11Privacy
                     L.T("этой же кнопкой или общим откатом. Программа останется\n") +
                     L.T("на месте, но потеряет связь с сетью.\n\nПродолжить?"),
                     L.T("Запрет выхода в сеть"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            RunJson((want ? "-BlockApp" : "-UnblockApp") + " -AppPath \"" + r.AppPath + "\"",
+            RunJson(new EngineRequest(want ? "BlockApp" : "UnblockApp").Str("AppPath", r.AppPath),
                 want ? L.T("Запрет выхода в сеть…") : L.T("Возврат доступа в сеть…"),
                 delegate(Dictionary<string, object> d)
                 {
@@ -327,9 +374,9 @@ namespace Win11Privacy
             if (MessageBox.Show(this, L.T("Выбранные следы (") + ids.Count + L.T(" шт.) будут удалены безвозвратно.\n") +
                 L.T("Пароли Wi-Fi и системные данные не затрагиваются.\n\nПродолжить?"),
                 L.T("Стереть цифровой след"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            RunStreaming("-FootprintWipe -WipeItems " + string.Join(",", ids.ToArray()), L.T("Стирание следов…"), delegate
+            RunStreaming(new EngineRequest("FootprintWipe").List("WipeItems", ids), L.T("Стирание следов…"), delegate
             {
-                RunJson("-Footprint", L.T("Повторное сканирование…"), delegate(Dictionary<string, object> f)
+                RunJson(new EngineRequest("Footprint"), L.T("Повторное сканирование…"), delegate(Dictionary<string, object> f)
                 { _lastFoot = f; Navigate("dossier"); RenderDossier(); });
             });
         }

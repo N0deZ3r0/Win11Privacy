@@ -137,6 +137,7 @@ if ($RestoreItems) {
     Write-Log ("   возвращено записей: {0}" -f $done)
     Emit-Json @{ restored = $done; failures = $script:Failures }
     Write-Log '###DONE###'
-    exit 0
+    # 2 — дошёл до конца, но не всё прошло (окно пишет «Готово, с ошибками»); раньше всегда 0
+    exit $(if ($script:Failures -gt 0) { 2 } else { 0 })
 }
 

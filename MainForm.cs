@@ -122,7 +122,9 @@ namespace Win11Privacy
         private Dictionary<string, object> _lastDiff;
 
 #if BIGFONT
-        private const float BaseFontSize = 13.5F;
+        // Шрифт как при масштабе Windows 150 % (9,5 × 1,5): так CI на агенте со
+        // 100 % проверяет раскладку, которая ломается только на крупном масштабе.
+        private const float BaseFontSize = 14.25F;
 #else
         private const float BaseFontSize = 9.5F;
 #endif
@@ -218,9 +220,9 @@ namespace Win11Privacy
             TryLoadIcon();
 
             int u = Font.Height;
-            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
-            ClientSize = new Size(Math.Min((int)(u * 78), (int)(wa.Width * 0.94)),
-                                  Math.Min((int)(u * 48), (int)(wa.Height * 0.94)));
+            // Раньше окно по умолчанию было 78 × 48 высот шрифта — заметно
+            // больше обычных окон Windows. Теперь как «Безопасность Windows».
+            ClientSize = DefaultClientSize(u, Screen.PrimaryScreen.WorkingArea);
             StartPosition = FormStartPosition.CenterScreen;
             LoadUiState();
 
@@ -554,14 +556,26 @@ namespace Win11Privacy
                 if (!File.Exists(p)) return;
                 Dictionary<string, object> d = Json.ParseObject(File.ReadAllText(p));
                 if (d == null) return;
-                int w = Json.GetInt(d, "w"), h = Json.GetInt(d, "h");
-                Rectangle wa = Screen.PrimaryScreen.WorkingArea;
-                if (w >= 600 && h >= 420) ClientSize = new Size(Math.Min(w, wa.Width), Math.Min(h, wa.Height));
+                // Размер и развёрнутость окна из прошлого запуска не берутся:
+                // окно всегда открывается обычного размера под этот экран
+                // (DefaultClientSize). Раньше запомненный размер в пикселях
+                // возвращал то окно, в котором всё сбивалось в кучу (после
+                // смены масштаба Windows), то огромное — растянутое когда-то.
                 _userCollapsed = Json.GetBool(d, "side");
                 _welcomeSeen = Json.GetBool(d, "welcome");
-                if (Json.GetBool(d, "max")) WindowState = FormWindowState.Maximized;
             }
             catch { }
+        }
+
+        // Окно по умолчанию — примерно как у «Безопасности Windows»: 66 × 42
+        // высоты шрифта (при 150 % около 1716 × 1092), но не больше 94 %
+        // рабочей области экрана. Размеры в высотах шрифта растут вместе с
+        // масштабом Windows, поэтому на любом экране окно одинаково по виду, а
+        // на маленьком — по экрану: страницы перестраиваются под ширину.
+        internal static Size DefaultClientSize(int u, Rectangle wa)
+        {
+            return new Size(Math.Min(u * 66, (int)(wa.Width * 0.94)),
+                            Math.Min(u * 42, (int)(wa.Height * 0.94)));
         }
 
         private void SaveUiState()
@@ -573,10 +587,8 @@ namespace Win11Privacy
             {
                 string p = UiStatePath();
                 Directory.CreateDirectory(Path.GetDirectoryName(p));
-                Size s = (WindowState == FormWindowState.Normal) ? ClientSize : RestoreBounds.Size;
-                string txt = "{ \"w\": " + s.Width + ", \"h\": " + s.Height +
-                             ", \"max\": " + (WindowState == FormWindowState.Maximized ? "true" : "false") +
-                             ", \"side\": " + (_userCollapsed ? "true" : "false") +
+                // размер окна не хранится: оно каждый раз открывается обычным (LoadUiState)
+                string txt = "{ \"side\": " + (_userCollapsed ? "true" : "false") +
                              ", \"lang\": " + _langChoice +
                              ", \"welcome\": " + (_welcomeSeen ? "true" : "false") +
                              ", \"theme\": " + _themeChoice + " }";
@@ -621,7 +633,7 @@ namespace Win11Privacy
         {
             if (_defsLoaded) return;
             _defsLoaded = true;
-            RunJson("-ListDefs", L.T("Чтение списка настроек…"), delegate(Dictionary<string, object> d)
+            RunJson(new EngineRequest("ListDefs"), L.T("Чтение списка настроек…"), delegate(Dictionary<string, object> d)
             {
                 if (d == null || _settingsList == null) return;
                 foreach (object go in Json.GetArr(d, "groups"))
@@ -687,7 +699,7 @@ namespace Win11Privacy
         }
         private void RunDetect()
         {
-            RunJson("-Detect", L.T("Определение системы…"), delegate(Dictionary<string, object> d)
+            RunJson(new EngineRequest("Detect"), L.T("Определение системы…"), delegate(Dictionary<string, object> d)
             {
                 _detect = d;
                 if (d == null) { if (_sysInfoLabel != null) _sysInfoLabel.Text = L.T("Система не определена\n(PowerShell недоступен)"); return; }
@@ -697,7 +709,7 @@ namespace Win11Privacy
                 if (!_spyAutoRan && Environment.GetEnvironmentVariable("WIN11_TEST_MOCK") != "1")
                 {
                     _spyAutoRan = true;
-                    RunJson("-Spy", L.T("Чтение журнала датчиков…"), delegate(Dictionary<string, object> s)
+                    RunJson(new EngineRequest("Spy"), L.T("Чтение журнала датчиков…"), delegate(Dictionary<string, object> s)
                     {
                         if (s != null) { _lastSpy = s; RenderDossier(); }
                         FillHomeExtras();   // очередью, а не четырьмя процессами разом

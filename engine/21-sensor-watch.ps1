@@ -33,9 +33,10 @@ if ($InstallSensorGuard) {
         Write-Log '   [+] новая программа получит доступ к камере, микрофону или геолокации — придёт уведомление'
         Write-Log ("   [+] сейчас программ в журнале: {0}" -f $pairs.Count)
         Write-Log '   [+] попутно накапливается история для графика на «Обзоре»'
-    } catch { Write-Log "   [!] не удалось: $($_.Exception.Message)" }
+    } catch { Write-Log "   [!] не удалось: $($_.Exception.Message)"; $failed = $true }
     Write-Log '###DONE###'
-    exit 0
+    # Код честный: регистрация задачи могла не пройти (раньше здесь всегда был 0).
+    exit $(if ($failed) { 1 } else { 0 })
 }
 
 if ($InstallNetGuard) {
@@ -64,9 +65,10 @@ if ($InstallNetGuard) {
         Write-Log '   [+] слежение включено: сверка журнала брандмауэра каждые 15 минут'
         Write-Log ("   [+] известных программ: {0}; первый час слежение учится и молчит" -f $known.Count)
         Write-Log '   [+] новая программа выйдет в сеть — придёт уведомление, а на странице «Монитор» её можно отрезать'
-    } catch { Write-Log "   [!] не удалось: $($_.Exception.Message)" }
+    } catch { Write-Log "   [!] не удалось: $($_.Exception.Message)"; $failed = $true }
     Write-Log '###DONE###'
-    exit 0
+    # Код честный: регистрация задачи могла не пройти (раньше здесь всегда был 0).
+    exit $(if ($failed) { 1 } else { 0 })
 }
 
 if ($RemoveNetGuard) {

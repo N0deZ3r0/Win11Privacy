@@ -283,9 +283,21 @@ namespace Win11Privacy
         public void Fit()
         {
             int u = Font.Height;
-            Size sz = TextRenderer.MeasureText(Text, Font);
-            int padX = Ghost ? (int)(u * 0.55F) : (int)(u * 1.05F);
+            // Ширина самого текста, без запаса GDI, и поля по бокам — как у
+            // кнопок Windows 11 (11 точек при 100 %, это около 0,65 высоты
+            // шрифта). Прежние 1,05 высоты шрифта плюс запас GDI с каждой
+            // стороны делали кнопки такими широкими, что ряд из пяти-семи
+            // кнопок переносился на вторую строку даже в окне обычного размера.
+            Size sz = TextRenderer.MeasureText(Text, Font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+            int padX = Ghost ? (int)(u * 0.7F) : (int)(u * 0.65F);
             Size = new Size(sz.Width + padX * 2, (int)(u * 2.0F));
+        }
+
+        // Нажатие из кода — для пунктов меню «Ещё», куда уходят кнопки,
+        // не поместившиеся в ряд
+        public void PerformClick()
+        {
+            if (Enabled) OnClick(EventArgs.Empty);
         }
 
         protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); Fit(); }

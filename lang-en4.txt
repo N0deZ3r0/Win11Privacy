@@ -207,8 +207,8 @@ Win11Privacy.exe --audit                                     проверка (�
 Из резервной копии	From a backup
 Поиск резервных копий…	Looking for backups…
 Резервных копий не найдено.\n\n	No backups found.\n\n
-Программа создаёт их на рабочем столе перед первым изменением\n	They are created on the desktop before the first change of\n
-в каждом запуске. Если папку перенесли — верните её на место.	each run. If the folder was moved, put it back.
+Программа создаёт их перед первым изменением в каждом запуске\n	They are created before the first change of each run\n
+и хранит у себя, в папке данных программы.	and kept in the program's data folder.
 Восстановление из копии	Restoring from a backup
 Восстановление из копии…	Restoring from the backup…
  веток	 branches

@@ -90,7 +90,7 @@ namespace Win11Privacy
 
         private void RefreshGdid()
         {
-            RunJson("-GdidStatus", L.T("Чтение номера устройства…"), delegate(Dictionary<string, object> d)
+            RunJson(new EngineRequest("GdidStatus"), L.T("Чтение номера устройства…"), delegate(Dictionary<string, object> d)
             {
                 if (d != null) _lastGdid = d;
                 RenderGdid();
@@ -209,13 +209,13 @@ namespace Win11Privacy
 
         // Флаги применения — как на странице «Настройки»: копия реестра и
         // точка восстановления по выбору человека, снятые пункты не трогаются.
-        private string GdidApplyArgs(string modules)
+        private EngineRequest GdidApplyArgs(params string[] modules)
         {
-            string a = "-Modules " + modules;
+            EngineRequest a = new EngineRequest("Apply").List("Modules", modules);
             List<string> skip = SkippedItems();
-            if (skip.Count > 0) a += " -SkipItems " + string.Join(",", skip.ToArray());
-            if (_optBackup != null && !_optBackup.Checked) a += " -NoBackup";
-            if (_optRestore != null && !_optRestore.Checked) a += " -NoRestorePoint";
+            if (skip.Count > 0) a.List("SkipItems", skip);
+            a.Switch("NoBackup", _optBackup != null && !_optBackup.Checked);
+            a.Switch("NoRestorePoint", _optRestore != null && !_optRestore.Checked);
             return a;
         }
 
@@ -239,7 +239,7 @@ namespace Win11Privacy
                   L.T("• Старый номер у Microsoft останется — стереть чужие записи нельзя.\n") +
                   L.T("• Войдя той же учётной записью, вы привяжете к ней и новый номер.\n\nПродолжить?");
             if (MessageBox.Show(this, text, L.T("Сменить номер устройства"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            RunStreaming("-GdidReissue", L.T("Смена номера устройства…"), delegate { RefreshGdid(); });
+            RunStreaming(new EngineRequest("GdidReissue"), L.T("Смена номера устройства…"), delegate { RefreshGdid(); });
         }
 
         private void OnGdidLock(object sender, EventArgs e)
@@ -257,7 +257,7 @@ namespace Win11Privacy
                 L.T("Нового номера Windows не получит. Вход в учётную запись Microsoft, Магазин, Xbox и OneDrive перестанут работать, пока запрет стоит. ") +
                 L.T("Снять его — «Вернуть как было» здесь или общий откат.\n\nПродолжить?"),
                 L.T("Запретить выдачу номера"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            RunStreaming(GdidApplyArgs("gdid,gdidlock"), L.T("Применение настроек…"), delegate { RefreshGdid(); });
+            RunStreaming(GdidApplyArgs("gdid", "gdidlock"), L.T("Применение настроек…"), delegate { RefreshGdid(); });
         }
 
         private void OnGdidRestore(object sender, EventArgs e)
@@ -266,7 +266,7 @@ namespace Win11Privacy
                 L.T("Службы получат тот тип запуска, что был до программы, а блоки серверов номера будут убраны из hosts и брандмауэра.\n\n") +
                 L.T("Стёртый раньше номер не вернётся: Windows получит новый.\n\nПродолжить?"),
                 L.T("Вернуть как было"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            RunStreaming("-GdidRestore", L.T("Возврат…"), delegate { RefreshGdid(); });
+            RunStreaming(new EngineRequest("GdidRestore"), L.T("Возврат…"), delegate { RefreshGdid(); });
         }
     }
 }

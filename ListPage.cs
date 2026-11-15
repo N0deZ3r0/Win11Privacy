@@ -38,6 +38,7 @@ namespace Win11Privacy
             TableLayoutPanel head = new TableLayoutPanel();
             head.ColumnCount = 2; head.RowCount = 1; head.Dock = DockStyle.Fill; head.AutoSize = true;
             head.BackColor = Theme.WindowBg;
+            head.Margin = new Padding(0, 3, 0, 3);      // заголовок и поиск — вровень с карточками ниже
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             head.Controls.Add(PageTitle(title), 0, 0);
@@ -45,7 +46,7 @@ namespace Win11Privacy
             if (searchKey != null)
             {
                 SearchBox sb = new SearchBox(Font, L.T("Поиск по списку…"));
-                sb.Width = (int)(u * 14F);
+                sb.Width = (int)(u * 16F);          // как на «Настройках»: поиск везде одной ширины
                 sb.Anchor = AnchorStyles.Left;
                 sb.Margin = new Padding((int)(u * 1.0F), 0, (int)(u * 0.5F), 0);
                 head.Controls.Add(sb, 1, 0);
@@ -134,17 +135,97 @@ namespace Win11Privacy
             buttons.Layout += delegate { later(buttons, EventArgs.Empty); };
         }
 
-        // Ряд кнопок переносится на новую строку, когда не помещается по ширине хозяина
-        private static void WrapToWidth(FlowLayoutPanel row, Control host)
+        // Ряд кнопок в одну строку. Что не поместилось по ширине хозяина, по
+        // порядку с конца уходит в меню «Ещё ▾»: кнопка из ряда вынимается и
+        // нажимается из меню (подпись и доступность — её же, на момент
+        // открытия меню). Когда окно шире — кнопки возвращаются в ряд.
+        // Кнопки в такой ряд добавляются после этого вызова, как обычно.
+        private void OverflowToMenu(FlowLayoutPanel row, Control host)
         {
-            row.WrapContents = true;
-            host.Resize += delegate
+            int u = Font.Height;
+            List<Control> all = new List<Control>();       // все кнопки ряда по порядку
+            ModernButton more = new ModernButton(L.T("Ещё") + "  ▾", false);
+            more.Font = Font;
+            more.Margin = new Padding((int)(u * 0.4F), 0, 0, (int)(u * 0.3F));
+            ContextMenuStrip menu = new ContextMenuStrip();
+            menu.Renderer = new ConsoleMenuRenderer();
+            menu.Font = Font;
+            menu.ShowImageMargin = false;
+            bool busy = false;
+
+            MethodInvoker reflow = delegate
             {
-                int w = host.ClientSize.Width - host.Padding.Horizontal;
-                if (w <= 120 || row.MaximumSize.Width == w) return;
-                row.MaximumSize = new Size(w, 0);
-                row.PerformLayout();
+                if (busy) return;
+                int w = host.ClientSize.Width - host.Padding.Horizontal - row.Margin.Horizontal;
+                if (w <= 120 || all.Count == 0) return;
+                int total = 0;
+                foreach (Control c in all) total += c.Width + c.Margin.Horizontal;
+                int fit = all.Count;
+                if (total > w)
+                {
+                    int used = more.Width + more.Margin.Horizontal;
+                    fit = 0;
+                    foreach (Control c in all)
+                    {
+                        int cw = c.Width + c.Margin.Horizontal;
+                        if (used + cw > w) break;
+                        used += cw; fit++;
+                    }
+                    if (fit == 0) fit = 1;              // первая (главная) кнопка остаётся всегда
+                }
+                bool wantMore = fit < all.Count;
+                // Уже так и стоит — ничего не трогаем (перестановка сбивает фокус)
+                bool same = (row.Controls.Contains(more) == wantMore);
+                for (int i = 0; i < all.Count && same; i++)
+                    if ((all[i].Parent == row) != (i < fit)) same = false;
+                if (same) return;
+                busy = true;
+                row.SuspendLayout();
+                try
+                {
+                    for (int i = 0; i < all.Count; i++)
+                    {
+                        if (i < fit && all[i].Parent != row) row.Controls.Add(all[i]);
+                        else if (i >= fit && all[i].Parent == row) row.Controls.Remove(all[i]);
+                    }
+                    if (wantMore && !row.Controls.Contains(more)) row.Controls.Add(more);
+                    if (!wantMore && row.Controls.Contains(more)) row.Controls.Remove(more);
+                    // порядок в ряду — как задумано: кнопки по очереди, «Ещё» в конце
+                    for (int i = 0; i < fit; i++) row.Controls.SetChildIndex(all[i], i);
+                    if (wantMore) row.Controls.SetChildIndex(more, fit);
+                }
+                finally { row.ResumeLayout(true); busy = false; }
                 if (row.Parent != null) row.Parent.PerformLayout();
+            };
+            EventHandler later = delegate
+            {
+                if (busy) return;
+                if (host.IsHandleCreated) host.BeginInvoke(reflow);
+                else reflow();
+            };
+            row.ControlAdded += delegate(object s, ControlEventArgs e)
+            {
+                if (busy || e.Control == more || all.Contains(e.Control)) return;
+                all.Add(e.Control);
+                // подпись сменилась — ширина кнопки тоже (Fit идёт после события TextChanged)
+                e.Control.SizeChanged += later;
+                later(row, EventArgs.Empty);
+            };
+            host.Resize += later;
+            more.Click += delegate
+            {
+                menu.Items.Clear();
+                foreach (Control c in all)
+                {
+                    if (c.Parent == row) continue;
+                    ModernButton b = c as ModernButton;
+                    if (b == null) continue;
+                    ToolStripItem it = menu.Items.Add(b.Text, null, delegate { b.PerformClick(); });
+                    it.Enabled = b.Enabled;
+                    it.ForeColor = Theme.Text;
+                    it.Padding = new Padding(4, 3, 4, 3);
+                }
+                menu.Show(more, new Point(0, more.Height + 2));
             };
         }
 

@@ -16,8 +16,34 @@ true, that is a bug.
 | Guard, sensor watch, network watch, notifications | Scheduled tasks, administrator/SYSTEM, without the user | Only data that nobody but SYSTEM and administrators could have written |
 | Any other program of the same user | Medium integrity, no elevation | Nothing. It must not be able to influence what the elevated engine does |
 
+**Window → engine requests.** The window starts the engine with a constant
+command line — `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy
+Bypass -File "<engine in ProgramData>" -Request` — and writes the operation and
+its data to the engine's standard input as one JSON object
+(`{"v":1,"op":"SensorSet","args":{...}}`, printable ASCII only, everything else
+as `\uXXXX`). Values that other programs of the user can control (ConsentStore
+key names under HKCU, the Desktop path from HKCU shell folders, backup folder
+names, process paths) never reach the command line, so a quote or a `-Switch`
+inside them cannot become another engine operation (F-08: a ConsentStore key
+named `...\evil" -XrayStatus "` used to run `-XrayStatus` elevated). The engine
+parses the request with its own strict parser (size limit, no duplicate keys,
+no unknown fields, limited nesting), takes the operation only from an
+allowlist, accepts per operation only its own arguments, checks each value's
+type and shape itself, and refuses the whole request (exit code 64) before
+doing anything if one check fails. Command-line switches remain for the
+scheduled tasks and manual runs; `-Request` refuses any other switch next to it.
+
 **Data folder.** `C:\ProgramData\Win11Privacy` is created with an explicit ACL:
-SYSTEM and Administrators — full control, Users — read. A folder created
+SYSTEM and Administrators — full control, Users — read. The path to it
+(`C:\ProgramData`, the drive root) must not let anybody else rename or delete it,
+otherwise the protected folder is not used at all (W11P-006). An object is trusted
+only if it is not a reparse point, its owner is SYSTEM, Administrators or
+TrustedInstaller, and nobody else may write, append, delete it or its children,
+change its rights, owner or attributes — counting explicit **and inherited**
+entries (the earlier check saw only explicit ones), the rights a folder passes to
+its children (except CREATOR OWNER), and subtracting only an explicit,
+canonically ordered Deny for Everyone; rights that cannot be read mean "not
+trusted". A folder created
 earlier by someone else is set aside, foreign files and
 links inside an older folder are moved to quarantine at any depth. The quarantine
 folder is created fresh with a random, unguessable name (`*.untrusted-<time>-<rnd>`)
@@ -199,22 +225,52 @@ guarantees; kill during `reg.exe load/unload` itself.
 
 ## Backups
 
-* The registry backup on the desktop is made right before the first real change
-  of a manual apply, never by the guard.
+* The registry backup is made right before the first real change of a manual
+  apply, never by the guard. It is kept only in the program's protected store
+  `C:\ProgramData\Win11Privacy\backups` (W11P-005): nothing is written to the
+  desktop any more. It is restored from the window (*Changes → From a backup*);
+  *Open backup folder* opens the store (everyone can read it, only administrators
+  can change it). The first backup ever made and the 20 newest are kept, older
+  ones are removed when a new one is stored.
 * A branch counts as saved only if `reg.exe export` exits with 0 **and** the file
   starts with `Windows Registry Editor Version 5.00`. A partial file is deleted;
   every branch that was not exported is listed with the reason.
 * The restore point temporarily sets `SystemRestorePointCreationFrequency` to 0
   and puts the previous value back.
-* **Restoring a backup.** The backup folder is on the desktop, where any program
-  of the user can write, while the import runs as administrator. Every `.reg`
-  file is therefore signed when the backup is made (`backup-sig.json`, HMAC-SHA256
-  with the journal key, bound to the backup folder name and the file name). On
-  restore each file is copied into the protected folder, its signature is checked
-  on that copy, and the copy is imported — the file cannot be swapped between the
-  check and the import. A changed, added or unsigned file is not imported; a
-  backup made by an older version (no signatures) can only be imported by hand.
-  Importing a backup is the fallback path and is not written to the undo journal.
+* **Making a backup (W11P-001).** `reg.exe` exports into a fresh work folder
+  inside `C:\ProgramData\Win11Privacy` (only SYSTEM and administrators can write
+  there; the folder is checked not to be a link and to have a trusted owner),
+  never into the user-writable desktop. Each file is read once into memory,
+  checked and signed from exactly those bytes; the list of signatures
+  (`backup-sig.json`, version 2) carries the folder name and its own signature,
+  so a file cannot be dropped from the list unnoticed. Only the finished, signed
+  backup is moved into the store, in one rename inside the same protected root
+  (same volume, no copy). The engine running as administrator writes no backup
+  file into any user-writable folder: the earlier same-volume move onto the
+  desktop and the cross-volume copy with `CreateNew` are gone. Work folders left
+  by an interrupted run stay inside the protected root and are removed after an
+  hour.
+* **Restoring a backup.** The signature list is parsed by the engine's strict
+  parser (no duplicate keys, only known fields and plain file names), and for
+  version 2 its own signature and folder name are checked. The folder must hold
+  exactly the listed files — an extra `.reg`, a missing one, a link or a folder
+  of that name refuses the whole backup. Each file is read once, its signature is
+  checked on those bytes, its content is checked (a complete `reg.exe` export of a
+  branch the program itself backs up, no key deletions, no keys outside that
+  branch), and the same bytes are written into a protected work folder. Only when
+  every file passed is anything imported; right before each import the staged
+  file is opened without write sharing, its signature is checked again, and
+  `reg.exe` reads it while it is held open. A backup made by an older version
+  with a version 1 list (per-file signatures only) is still restored; a backup
+  without signatures can only be imported by hand. **Downgrade protection:** a
+  version 1 list is accepted only for a folder dated before version 2 existed
+  (2026-11-15) and never for a folder in the store — the folder name, date
+  included, is part of every file signature, so it cannot be back-dated. Backups
+  of older versions on the desktop or in `-BackupRoot` are still listed and
+  restored. Importing a backup is the fallback path and is not written to the
+  undo journal; a partial import (reg.exe refusing one file) is reported with exit
+  code 2 and can be repeated (each import is idempotent) or completed with the
+  undo journal.
 
 ## Settings of other programs (VS Code, Firefox)
 
@@ -232,6 +288,14 @@ guarantees; kill during `reg.exe load/unload` itself.
   de-elevated task (see *Folders of the user*); a link on the path is refused.
   Firefox `policies.json` is in Program Files (administrators only) and written
   directly, with a JSON depth of 20 so that deep corporate policies are not cut.
+  The Firefox folder and the whole path to it must be closed to non-administrators
+  (`Test-PathTrusted`: inherited rights included, no parent that others may rename),
+  and an existing `distribution` folder or `policies.json` must be owned by and
+  writable only for SYSTEM/administrators. The file is replaced in one step under
+  the lock `Global\Win11Privacy-FirefoxPolicies`, shared by the window's engine and
+  the SYSTEM tasks: it is created with rights for SYSTEM, administrators and its
+  creator only, a lock pre-created by anybody else is refused, and there is no
+  fallback to a per-session `Local\` lock (W11P-006).
   An existing `policies.json` that does not parse (a comment, another encoding) is
   left untouched instead of overwritten, so policies already there — corporate ones
   included — are not lost.
@@ -292,13 +356,13 @@ number and CSV columns by position (checked on a Russian VM).
   can put back an *older* journal signed by this machine. It contains only
   genuine records of the program, so it cannot inject foreign values — at most
   a rollback returns settings to an earlier "before" state.
-* The registry backup folder is created on the desktop, where the user's programs
-  can write, and `reg.exe` writes into it as administrator. Its name has a random
-  suffix (it cannot be planted in advance) and it is checked not to be a link right
-  after creation, but a program that renames the folder in the short moment between
-  creation and writing could still redirect the `.reg` files and `backup-sig.json`
-  (fixed names, not executable) to another folder. The impact is limited to
-  creating or overwriting files with those names.
+* Registry backups live only in `C:\ProgramData\Win11Privacy\backups`. A user who
+  wants a copy elsewhere copies it by hand; a copy moved back or kept elsewhere is
+  still verified in full before it is imported.
+* A program of the user can pre-create the lock name
+  `Global\Win11Privacy-FirefoxPolicies` (or `Global\Win11Privacy-App`). The engine
+  then refuses to write Firefox policies (and the window may think it is already
+  running) — a denial of service, not a way to change data.
 * **Elevation under another account.** A standard user may type an administrator's
   password. The engine then runs as that administrator while someone else is signed
   in. Settings under `HKCU` still go to the signed-in user (his hive is written like
@@ -367,8 +431,35 @@ number and CSV columns by position (checked on a Russian VM).
 | Страж, слежение, уведомления | задачи планировщика, администратор/SYSTEM, без человека | только данным, которые мог записать лишь SYSTEM или администратор |
 | Любая другая программа того же пользователя | обычные права | ничему: она не должна влиять на то, что делает движок с правами администратора |
 
+**Запросы окна к движку.** Окно запускает движок с постоянной командной
+строкой — `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass
+-File "<движок в ProgramData>" -Request`, — а операцию и её данные пишет на
+стандартный ввод одним JSON (`{"v":1,"op":"SensorSet","args":{...}}`, только
+печатный ASCII, остальное — `\uXXXX`). Значения, которыми могут распоряжаться
+другие программы пользователя (имена разделов ConsentStore в HKCU, путь к
+рабочему столу из HKCU, имена папок резервных копий, пути программ), в
+командную строку не попадают, и кавычка или «-Ключ» внутри них не превращается
+в другую операцию движка (F-08: раздел ConsentStore с именем
+`...\evil" -XrayStatus "` запускал `-XrayStatus` с правами администратора).
+Движок разбирает запрос своим строгим разборщиком (предел размера, без повторов
+ключей, без лишних полей, ограниченная вложенность), берёт операцию только из
+белого списка, принимает у каждой операции только её аргументы, сам проверяет
+тип и форму каждого значения и при любой ошибке отклоняет запрос целиком
+(код 64), ничего не сделав. Ключи командной строки остались для задач
+планировщика и ручного запуска; рядом с `-Request` других ключей движок не
+принимает.
+
 **Папка данных.** `C:\ProgramData\Win11Privacy` создаётся с явными правами:
-SYSTEM и администраторы — полный доступ, пользователи — чтение. Папка, заведённая
+SYSTEM и администраторы — полный доступ, пользователи — чтение. Путь до неё
+(`C:\ProgramData`, корень диска) не должен давать никому другому переименовать
+или удалить её — иначе защищённая папка не используется вовсе (W11P-006).
+Объекту верят, только если он не ссылка, его владелец — система, администраторы
+или TrustedInstaller и никто другой не может его писать, дописывать, удалять
+(его самого и вложенное), менять права, владельца или атрибуты; учитываются
+явные **и унаследованные** записи (прежняя проверка видела только явные), права,
+которые папка передаст вложенному (кроме «создатель-владелец»), а вычитается
+только явный запрет для «Все» в обычном порядке записей; права не читаются —
+не верим. Папка, заведённая
 кем-то другим, откладывается, чужие файлы и ссылки в
 прежней папке уходят в карантин на любой глубине. Папка карантина создаётся
 заново со случайным именем (`*.untrusted-<время>-<rnd>`) и проверяется, что это
@@ -549,22 +640,50 @@ SYSTEM и администраторы — полный доступ, польз
 
 ## Резервные копии
 
-* Копия реестра на рабочем столе делается прямо перед первым настоящим
-  изменением при ручном применении и никогда — стражем.
+* Копия реестра делается прямо перед первым настоящим изменением при ручном
+  применении и никогда — стражем. Хранится она только в защищённом хранилище
+  программы `C:\ProgramData\Win11Privacy\backups` (W11P-005): на рабочий стол
+  больше ничего не пишется. Вернуть копию — из окна («Изменения» → «Из резервной
+  копии»); пункт «Открыть папку резервных копий» открывает хранилище (читать его
+  могут все, менять — только администраторы). Остаются самая первая копия и 20
+  последних, более старые убираются, когда кладётся новая.
 * Ветка считается сохранённой, только если `reg.exe export` закончил с кодом 0
   **и** файл начинается с `Windows Registry Editor Version 5.00`. Недописанный
   файл удаляется; каждая невыгруженная ветка называется вместе с причиной.
 * Точка восстановления на время ставит `SystemRestorePointCreationFrequency` в 0
   и возвращает прежнее значение.
-* **Возврат из копии.** Папка копии лежит на рабочем столе, куда пишет любая
-  программа пользователя, а импорт идёт с правами администратора. Поэтому каждый
-  `.reg` подписывается при создании копии (`backup-sig.json`, HMAC-SHA256 ключом
-  журнала, с привязкой к имени папки копии и имени файла). При возврате файл
-  копируется в защищённую папку, подпись сверяется на этой копии, и
-  импортируется она — подменить файл между сверкой и импортом нельзя.
-  Изменённый, добавленный или неподписанный файл не импортируется; копию прежней
-  версии (без подписей) можно импортировать только вручную. Возврат из копии —
-  запасной путь, в журнал отката он не пишется.
+* **Создание копии (W11P-001).** `reg.exe` выгружает ветки в новую рабочую папку
+  внутри `C:\ProgramData\Win11Privacy` (писать туда могут только система и
+  администраторы; папка проверяется: не ссылка, владелец доверенный), а не на
+  рабочий стол, куда пишет любая программа пользователя. Каждый файл читается
+  один раз в память, проверяется и подписывается ровно этими байтами; у списка
+  подписей (`backup-sig.json`, версия 2) есть имя папки и своя подпись — убрать
+  из него файл незаметно нельзя. В хранилище переносится только готовая
+  подписанная копия — одним переименованием внутри того же защищённого корня (тот
+  же том, без копирования). Движок с правами администратора не пишет файлы копии
+  ни в одну папку, куда может писать пользователь: прежний перенос на рабочий
+  стол и запись на другой том через `CreateNew` убраны. Рабочие папки оборванного
+  запуска остаются внутри защищённого корня и убираются через час.
+* **Возврат из копии.** Список подписей разбирается строгим разбором движка (без
+  повторов полей, только известные поля и простые имена файлов), у версии 2
+  сверяются его подпись и имя папки. В папке должны быть ровно файлы из списка:
+  лишний `.reg`, недостающий, ссылка или папка с таким именем — отказ целиком.
+  Каждый файл читается один раз, подпись сверяется на этих байтах, проверяется
+  содержимое (целая выгрузка `reg.exe` ветки, которую программа сама сохраняет,
+  без удалений разделов и без разделов вне этой ветки), и эти же байты пишутся в
+  защищённую рабочую папку. Импорт начинается, только если прошли все файлы;
+  перед импортом каждого файл открывается без права записи для других, подпись
+  сверяется ещё раз, и `reg.exe` читает его, пока он открыт. Копия прежней версии
+  со списком версии 1 (только подписи файлов) по-прежнему возвращается; копию без
+  подписей можно импортировать только вручную. **Защита от понижения формата:**
+  список версии 1 принимается только у папки с датой раньше появления версии 2
+  (2026-11-15) и никогда — у папки из хранилища; имя папки вместе с датой входит
+  в подпись каждого файла, задним числом его не переименовать. Копии прежних
+  версий на рабочем столе и в `-BackupRoot` по-прежнему видны в списке и
+  возвращаются. Возврат из копии — запасной путь, в журнал отката он не пишется;
+  частичный импорт (reg.exe не принял файл) сообщается кодом 2, его можно
+  повторить (импорт одних и тех же значений не меняет результата) или довести
+  откатом по журналу.
 
 ## Настройки других программ (VS Code, Firefox)
 
@@ -582,7 +701,15 @@ SYSTEM и администраторы — полный доступ, польз
   повышения (см. *Папки пользователя*); ссылка на пути — отказ. `policies.json`
   Firefox лежит в Program Files (писать могут только администраторы) и пишется
   напрямую, с глубиной JSON 20, чтобы глубокие корпоративные политики не
-  обрезались. Уже лежащий `policies.json`, который не разбирается (комментарий,
+  обрезались. Папка Firefox и весь путь до неё должны быть закрыты от всех, кроме
+  администраторов (`Test-PathTrusted`: с унаследованными правами, ни одну папку
+  выше чужой не может переименовать), а уже лежащие `distribution` и
+  `policies.json` — принадлежать системе или администраторам и не быть открыты на
+  запись другим. Файл заменяется одним действием под замком
+  `Global\Win11Privacy-FirefoxPolicies`, общим для движка окна и задач SYSTEM: он
+  заводится с правами только для системы, администраторов и создателя, замок,
+  заранее заведённый кем-то другим, не используется, а перехода на замок
+  `Local\` (у каждого сеанса свой) больше нет (W11P-006). Уже лежащий `policies.json`, который не разбирается (комментарий,
   иная кодировка), не перезаписывается, а оставляется как есть — чтобы не стереть
   уже стоящие там политики, в том числе корпоративные.
 * Записи проверяются по форме при откате: программа из известных, допустимое имя
@@ -643,13 +770,13 @@ ConstrainedLanguage (WDAC/AppLocker) движок сразу останавли�
   папку, может вернуть туда *прежний* журнал, подписанный на этом компьютере. В
   нём только настоящие записи программы, чужого значения так не подставить —
   самое большее откат вернёт настройки к более раннему «до».
-* Папка резервной копии реестра создаётся на рабочем столе, куда пишут программы
-  пользователя, а `reg.exe` пишет в неё с правами администратора. У имени случайный
-  хвост (заранее подложить нельзя), сразу после создания проверяется, что это не
-  ссылка, но программа, которая успеет переименовать папку в короткий миг между
-  созданием и записью, всё же могла бы перенаправить файлы `.reg` и
-  `backup-sig.json` (фиксированные имена, не исполняемые) в другую папку. Последствия
-  ограничены созданием или перезаписью файлов с такими именами.
+* Резервные копии реестра лежат только в `C:\ProgramData\Win11Privacy\backups`.
+  Нужна копия в другом месте — её копируют вручную; копия, перенесённая обратно
+  или лежащая в другом месте, перед импортом всё равно проверяется целиком.
+* Программа пользователя может заранее занять имя замка
+  `Global\Win11Privacy-FirefoxPolicies` (или `Global\Win11Privacy-App`). Тогда
+  движок откажется писать политики Firefox (а окно может решить, что уже
+  запущено) — это отказ в работе, а не способ изменить данные.
 * **Повышение под другой учётной записью.** Обычный пользователь может ввести
   пароль администратора. Тогда движок работает от имени этого администратора, а за
   компьютером сидит другой человек. Настройки `HKCU` всё равно доходят до вошедшего

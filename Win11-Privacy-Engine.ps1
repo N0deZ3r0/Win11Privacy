@@ -122,7 +122,9 @@ param(
     # --- чистка: корзину очищать только по отдельному согласию ---
     [switch]$EmptyRecycleBin,
     [switch]$GdidReissue,
-    [switch]$GdidRestore
+    [switch]$GdidRestore,
+    # --- запрос от окна: операция и её данные — со стандартного ввода (F-08) ---
+    [switch]$Request
 )
 
 # --------------------------------------------------------------------------- #
@@ -249,6 +251,429 @@ foreach ($bad in @('COR_ENABLE_PROFILING', 'COR_PROFILER', 'COR_PROFILER_PATH', 
 }
 
 # --------------------------------------------------------------------------- #
+#  Запрос от окна (F-08). Раньше окно собирало командную строку из кусков:
+#  «-SensorSet -SensorKey "<имя раздела реестра>"». Имя раздела в HKCU может
+#  завести любая программа пользователя, кавычка в нём закрывала значение, а
+#  остаток строки PowerShell разбирал как новые ключи движка — и они
+#  выполнялись с правами администратора. Путь к рабочему столу (-BackupRoot)
+#  тоже читается из HKCU и уходил так же при каждом запуске.
+#
+#  Теперь окно запускает движок с постоянной командной строкой «-Request», а
+#  что делать и с какими данными — пишет на стандартный ввод одним JSON:
+#      {"v":1,"op":"SensorSet","args":{"SensorKey":"...","SensorValue":"Deny"}}
+#  Здесь он разбирается строгим разборщиком (не ConvertFrom-Json и тем более
+#  не как код PowerShell): только ASCII (остальное окно пишет как \uXXXX), без
+#  повторов ключей, без лишних полей, с ограничением размера и вложенности.
+#  Операция берётся только из белого списка, у каждой — свой список
+#  аргументов, у каждого аргумента — тип и форма. Значения ставятся в
+#  переменные параметров явными присваиваниями по имени из списка, а не из
+#  JSON. Любая ошибка — отказ до какой-либо работы (код 64). Повторить
+#  операцию из данных нельзя: значение остаётся значением, сколько бы кавычек
+#  и «-Ключей» в нём ни было.
+#
+#  Обычные ключи командной строки остались для задач стража и ручного
+#  запуска; вместе с -Request их передавать нельзя.
+# --------------------------------------------------------------------------- #
+$script:RequestOps = @{
+    'Apply'              = @('Modules', 'SkipItems', 'EmptyRecycleBin', 'DryRun', 'NoBackup', 'NoRestorePoint', 'AllProfiles')
+    'Audit'              = @('Modules', 'SkipItems', 'WithProof')
+    'Revert'             = @()
+    'LeakTest'           = @()
+    'CleanJunk'          = @()
+    'EnableMonitor'      = @()
+    'DisableMonitor'     = @()
+    'Monitor'            = @('MonitorHours')
+    'InstallNetGuard'    = @()
+    'RemoveNetGuard'     = @()
+    'InstallGuard'       = @('Modules', 'SkipItems', 'GuardDaily')
+    'RemoveGuard'        = @()
+    'GuardNow'           = @()
+    'InstallSensorGuard' = @()
+    'RemoveSensorGuard'  = @()
+    'InstallWatcher'     = @()
+    'RemoveWatcher'      = @()
+    'Snapshot'           = @()
+    'SnapshotList'       = @()
+    'SnapshotDiff'       = @('SnapshotDiff')
+    'ListDefs'           = @()
+    'Detect'             = @()
+    'Spy'                = @('SpyAll')
+    'Footprint'          = @()
+    'FootprintWipe'      = @('WipeItems')
+    'SensorSet'          = @('SensorKey', 'SensorValue')
+    'BlockApp'           = @('AppPath')
+    'UnblockApp'         = @('AppPath')
+    'DataInfo'           = @()
+    'PurgeData'          = @()
+    'ListApps'           = @()
+    'RemoveApps'         = @('AppItems', 'AllUsers')
+    'ListStartup'        = @()
+    'StartupSet'         = @('StartupItems', 'StartupValue')
+    'ChangeLog'          = @()
+    'RestoreItems'       = @('ChangeItems')
+    'RestoreAll'         = @()
+    'ListBackups'        = @()
+    'RestoreBackup'      = @('BackupPath')
+    'Timeline'           = @('TimelineDays')
+    'GdidStatus'         = @()
+    'GdidReissue'        = @()
+    'GdidRestore'        = @()
+    'XrayStatus'         = @()
+    'XrayEnable'         = @()
+    'XrayDisable'        = @()
+    'XrayWipe'           = @()
+    'XrayScan'           = @('XrayHours', 'XrayBaseline')
+    'SelfTest'           = @()
+}
+# Без чего операция не имеет смысла
+$script:RequestNeeds = @{ 'Apply' = 'Modules'; 'SnapshotDiff' = 'SnapshotDiff'; 'FootprintWipe' = 'WipeItems'
+                          'SensorSet' = 'SensorKey'; 'BlockApp' = 'AppPath'; 'UnblockApp' = 'AppPath'
+                          'RemoveApps' = 'AppItems'; 'StartupSet' = 'StartupItems'; 'RestoreItems' = 'ChangeItems'
+                          'RestoreBackup' = 'BackupPath' }
+# Аргументы, которые принимает любая операция: где лежат копии и данные
+$script:RequestCommon = @('BackupRoot', 'DataRoot')
+# Тип и форма каждого аргумента. Форма проверяется здесь, независимо от окна;
+# дальше по движку значения проверяются ещё раз там, где используются.
+$script:RequestArgSpec = @{
+    'Modules'         = @{ t = 'list'; rx = '^[A-Za-z0-9_-]{1,64}$' }
+    'SkipItems'       = @{ t = 'list'; rx = '^[a-z][a-z0-9_]{0,40}#[0-9]{1,4}$' }
+    'WipeItems'       = @{ t = 'list'; rx = '^[A-Za-z0-9_-]{1,64}$' }
+    'AppItems'        = @{ t = 'list'; rx = '^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$' }
+    'StartupItems'    = @{ t = 'list'; rx = '^[A-Za-z0-9._]{1,8192}$' }
+    'ChangeItems'     = @{ t = 'list'; rx = '^[A-Za-z0-9._]{1,8192}$' }
+    'SnapshotDiff'    = @{ t = 'string'; rx = '^[A-Za-z0-9._-]{1,128}\|[A-Za-z0-9._-]{1,128}$' }
+    'SensorKey'       = @{ t = 'string'; rx = '^[^\x00-\x1f\x7f"]{1,320}$' }
+    'SensorValue'     = @{ t = 'string'; rx = '^(Allow|Deny)$' }
+    'StartupValue'    = @{ t = 'string'; rx = '^(On|Off)$' }
+    'AppPath'         = @{ t = 'path' }
+    'BackupPath'      = @{ t = 'path' }
+    'BackupRoot'      = @{ t = 'path' }
+    'DataRoot'        = @{ t = 'path' }
+    'MonitorHours'    = @{ t = 'int'; min = 1; max = 8760 }
+    'TimelineDays'    = @{ t = 'int'; min = 1; max = 3650 }
+    'XrayHours'       = @{ t = 'int'; min = 1; max = 8760 }
+    'EmptyRecycleBin' = @{ t = 'switch' }
+    'DryRun'          = @{ t = 'switch' }
+    'NoBackup'        = @{ t = 'switch' }
+    'NoRestorePoint'  = @{ t = 'switch' }
+    'AllProfiles'     = @{ t = 'switch' }
+    'WithProof'       = @{ t = 'switch' }
+    'GuardDaily'      = @{ t = 'switch' }
+    'SpyAll'          = @{ t = 'switch' }
+    'AllUsers'        = @{ t = 'switch' }
+    'XrayBaseline'    = @{ t = 'switch' }
+}
+$script:RequestMaxBytes = 262144
+
+# Весь стандартный ввод — один раз, с пределом размера. Только печатный ASCII
+# и переводы строк: окно всё остальное пишет escape-последовательностями.
+function Read-EngineRequest {
+    $in = [Console]::OpenStandardInput()
+    $ms = New-Object System.IO.MemoryStream
+    $buf = New-Object byte[] 8192
+    while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+        $ms.Write($buf, 0, $n)
+        if ($ms.Length -gt $script:RequestMaxBytes) { throw 'запрос длиннее допустимого' }
+    }
+    $bytes = $ms.ToArray()
+    # Метка UTF-8 в начале: её дописывает канал окна, если консоль Windows
+    # переведена в UTF-8 (кодовая страница 65001). Сам запрос — ASCII.
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        $bytes = $bytes[3..($bytes.Length - 1)]
+        if ($bytes -isnot [array]) { $bytes = @($bytes) }
+    }
+    if ($bytes.Length -eq 0) { throw 'запрос пуст' }
+    foreach ($b in $bytes) {
+        if (($b -gt 0x7E) -or (($b -lt 0x20) -and ($b -ne 0x09) -and ($b -ne 0x0A) -and ($b -ne 0x0D))) { throw 'в запросе недопустимые байты' }
+    }
+    return [System.Text.Encoding]::ASCII.GetString($bytes)
+}
+
+# --- строгий разбор JSON: объект, массив, строка, целое, true/false -------- #
+function Step-RqSpace {
+    while ($script:Rq.i -lt $script:Rq.s.Length) {
+        $c = $script:Rq.s[$script:Rq.i]
+        if ($c -eq [char]0x20 -or $c -eq [char]0x09 -or $c -eq [char]0x0A -or $c -eq [char]0x0D) { $script:Rq.i++ } else { break }
+    }
+}
+function Read-RqChar {
+    if ($script:Rq.i -ge $script:Rq.s.Length) { throw 'запрос оборван' }
+    $c = $script:Rq.s[$script:Rq.i]; $script:Rq.i++
+    return $c
+}
+function Read-RqString {
+    $sb = New-Object System.Text.StringBuilder
+    while ($true) {
+        $c = Read-RqChar
+        if ($c -eq [char]'"') { break }
+        if ([int]$c -lt 0x20) { throw 'управляющий символ внутри строки' }
+        if ($c -ne [char]'\') { $null = $sb.Append($c); continue }
+        $e = Read-RqChar
+        switch -CaseSensitive ([string]$e) {
+            '"'  { $null = $sb.Append('"') }
+            '\'  { $null = $sb.Append('\') }
+            '/'  { $null = $sb.Append('/') }
+            'b'  { $null = $sb.Append([char]8) }
+            'f'  { $null = $sb.Append([char]12) }
+            'n'  { $null = $sb.Append([char]10) }
+            'r'  { $null = $sb.Append([char]13) }
+            't'  { $null = $sb.Append([char]9) }
+            'u'  {
+                $hex = ''
+                for ($k = 0; $k -lt 4; $k++) { $hex += [string](Read-RqChar) }
+                if ($hex -notmatch '^[0-9A-Fa-f]{4}$') { throw 'неверная escape-последовательность' }
+                $null = $sb.Append([char][Convert]::ToInt32($hex, 16))
+            }
+            default { throw 'неверная escape-последовательность' }
+        }
+        if ($sb.Length -gt 65536) { throw 'слишком длинная строка' }
+    }
+    return $sb.ToString()
+}
+function Read-RqValue {
+    param([int]$Depth)
+    # запрос (1) → args (2) → список (3) → строка списка (4); глубже не бывает
+    if ($Depth -gt 4) { throw 'слишком глубокая вложенность' }
+    Step-RqSpace
+    $c = Read-RqChar
+    if ($c -eq [char]'{') {
+        $h = @{}                                  # ключи без учёта регистра: «A» и «a» — повтор
+        Step-RqSpace
+        if ($script:Rq.i -lt $script:Rq.s.Length -and $script:Rq.s[$script:Rq.i] -eq [char]'}') { $script:Rq.i++; return $h }
+        while ($true) {
+            Step-RqSpace
+            if ((Read-RqChar) -ne [char]'"') { throw 'ожидалось имя поля' }
+            $key = Read-RqString
+            if ($h.ContainsKey($key)) { throw ('поле повторяется: ' + $key) }
+            Step-RqSpace
+            if ((Read-RqChar) -ne [char]':') { throw 'ожидалось двоеточие' }
+            $h[$key] = (Read-RqValue ($Depth + 1))
+            if ($h.Count -gt 64) { throw 'слишком много полей' }
+            Step-RqSpace
+            $sep = Read-RqChar
+            if ($sep -eq [char]'}') { return $h }
+            if ($sep -ne [char]',') { throw 'ожидалась запятая' }
+        }
+    }
+    if ($c -eq [char]'[') {
+        $list = New-Object System.Collections.Generic.List[object]
+        Step-RqSpace
+        if ($script:Rq.i -lt $script:Rq.s.Length -and $script:Rq.s[$script:Rq.i] -eq [char]']') { $script:Rq.i++; return ,@($list.ToArray()) }
+        while ($true) {
+            $list.Add((Read-RqValue ($Depth + 1)))
+            if ($list.Count -gt 4096) { throw 'слишком длинный список' }
+            Step-RqSpace
+            $sep = Read-RqChar
+            if ($sep -eq [char]']') { return ,@($list.ToArray()) }
+            if ($sep -ne [char]',') { throw 'ожидалась запятая' }
+        }
+    }
+    if ($c -eq [char]'"') { return (Read-RqString) }
+    if ($c -eq [char]'t' -or $c -eq [char]'f') {
+        $word = if ($c -eq [char]'t') { 'true' } else { 'false' }
+        for ($k = 1; $k -lt $word.Length; $k++) { if ((Read-RqChar) -ne $word[$k]) { throw 'неизвестное слово' } }
+        return ($word -eq 'true')
+    }
+    if ($c -eq [char]'-' -or ($c -ge [char]'0' -and $c -le [char]'9')) {
+        $num = [string]$c
+        while ($script:Rq.i -lt $script:Rq.s.Length -and $script:Rq.s[$script:Rq.i] -ge [char]'0' -and $script:Rq.s[$script:Rq.i] -le [char]'9') {
+            $num += [string]$script:Rq.s[$script:Rq.i]; $script:Rq.i++
+        }
+        if ($num -notmatch '^-?(0|[1-9][0-9]{0,8})$') { throw 'неверное число' }
+        return [int]$num
+    }
+    throw 'неожиданный символ'
+}
+function ConvertFrom-EngineRequest {
+    param([string]$Text)
+    $script:Rq = @{ s = $Text; i = 0 }
+    $v = Read-RqValue 1
+    Step-RqSpace
+    if ($script:Rq.i -ne $Text.Length) { throw 'лишнее после запроса' }
+    if ($v -isnot [hashtable]) { throw 'запрос — не объект' }
+    return $v
+}
+
+# Проверка значения по описанию аргумента; возвращает значение для параметра
+function Test-RequestArg {
+    param([string]$Name, $Value)
+    $spec = $script:RequestArgSpec[$Name]
+    switch -CaseSensitive ($spec.t) {
+        'switch' {
+            if ($Value -isnot [bool] -or -not $Value) { throw ($Name + ': ожидалось true') }
+            return $true
+        }
+        'int' {
+            if ($Value -isnot [int] -or $Value -lt $spec.min -or $Value -gt $spec.max) { throw ($Name + ': недопустимое число') }
+            return $Value
+        }
+        'string' {
+            if ($Value -isnot [string] -or $Value -cnotmatch $spec.rx) { throw ($Name + ': недопустимое значение') }
+            return $Value
+        }
+        'path' {
+            # полный путь: с буквой диска или сетевой \\сервер\папка (рабочий
+            # стол бывает перенаправлен на сервер), без управляющих символов,
+            # кавычек и знаков, запрещённых в именах файлов, без «..». Пути
+            # устройств (\\?\, \\.\) не годятся: «?» и «.» вместо имени сервера
+            if ($Value -isnot [string] -or $Value.Length -gt 1024 -or
+                ($Value -cnotmatch '^[A-Za-z]:\\' -and $Value -cnotmatch '^\\\\[A-Za-z0-9][^\\/]*\\[^\\/]') -or
+                $Value -match '[\x00-\x1f\x7f"<>|?*/]' -or
+                $Value.Substring(2) -match ':' -or $Value -match '(^|\\)\.\.(\\|$)') { throw ($Name + ': недопустимый путь') }
+            return $Value
+        }
+        'list' {
+            if ($Value -isnot [object[]]) { throw ($Name + ': ожидался список') }
+            foreach ($item in $Value) {
+                if ($item -isnot [string] -or $item -cnotmatch $spec.rx) { throw ($Name + ': недопустимый элемент списка') }
+            }
+            return ,([string[]]$Value)
+        }
+    }
+    throw ($Name + ': неизвестный тип')
+}
+
+# Операция — только явным присваиванием известного ключа
+function Set-RequestOp {
+    param([string]$Op)
+    switch -CaseSensitive ($Op) {
+        'Apply'              { }
+        'Audit'              { $script:Audit = [switch]$true }
+        'Revert'             { $script:Revert = [switch]$true }
+        'LeakTest'           { $script:LeakTest = [switch]$true }
+        'CleanJunk'          { $script:CleanJunk = [switch]$true }
+        'EnableMonitor'      { $script:EnableMonitor = [switch]$true }
+        'DisableMonitor'     { $script:DisableMonitor = [switch]$true }
+        'Monitor'            { $script:Monitor = [switch]$true }
+        'InstallNetGuard'    { $script:InstallNetGuard = [switch]$true }
+        'RemoveNetGuard'     { $script:RemoveNetGuard = [switch]$true }
+        'InstallGuard'       { $script:InstallGuard = [switch]$true }
+        'RemoveGuard'        { $script:RemoveGuard = [switch]$true }
+        'GuardNow'           { $script:GuardNow = [switch]$true }
+        'InstallSensorGuard' { $script:InstallSensorGuard = [switch]$true }
+        'RemoveSensorGuard'  { $script:RemoveSensorGuard = [switch]$true }
+        'InstallWatcher'     { $script:InstallWatcher = [switch]$true }
+        'RemoveWatcher'      { $script:RemoveWatcher = [switch]$true }
+        'Snapshot'           { $script:Snapshot = [switch]$true }
+        'SnapshotList'       { $script:SnapshotList = [switch]$true }
+        'SnapshotDiff'       { }
+        'ListDefs'           { $script:ListDefs = [switch]$true }
+        'Detect'             { $script:Detect = [switch]$true }
+        'Spy'                { $script:Spy = [switch]$true }
+        'Footprint'          { $script:Footprint = [switch]$true }
+        'FootprintWipe'      { $script:FootprintWipe = [switch]$true }
+        'SensorSet'          { $script:SensorSet = [switch]$true }
+        'BlockApp'           { $script:BlockApp = [switch]$true }
+        'UnblockApp'         { $script:UnblockApp = [switch]$true }
+        'DataInfo'           { $script:DataInfo = [switch]$true }
+        'PurgeData'          { $script:PurgeData = [switch]$true }
+        'ListApps'           { $script:ListApps = [switch]$true }
+        'RemoveApps'         { $script:RemoveApps = [switch]$true }
+        'ListStartup'        { $script:ListStartup = [switch]$true }
+        'StartupSet'         { $script:StartupSet = [switch]$true }
+        'ChangeLog'          { $script:ChangeLog = [switch]$true }
+        'RestoreItems'       { $script:RestoreItems = [switch]$true }
+        'RestoreAll'         { $script:RestoreAll = [switch]$true }
+        'ListBackups'        { $script:ListBackups = [switch]$true }
+        'RestoreBackup'      { $script:RestoreBackup = [switch]$true }
+        'Timeline'           { $script:Timeline = [switch]$true }
+        'GdidStatus'         { $script:GdidStatus = [switch]$true }
+        'GdidReissue'        { $script:GdidReissue = [switch]$true }
+        'GdidRestore'        { $script:GdidRestore = [switch]$true }
+        'XrayStatus'         { $script:XrayStatus = [switch]$true }
+        'XrayEnable'         { $script:XrayEnable = [switch]$true }
+        'XrayDisable'        { $script:XrayDisable = [switch]$true }
+        'XrayWipe'           { $script:XrayWipe = [switch]$true }
+        'XrayScan'           { $script:XrayScan = [switch]$true }
+        'SelfTest'           { $script:SelfTest = [switch]$true }
+        default              { throw ('неизвестная операция: ' + $Op) }
+    }
+}
+function Set-RequestArg {
+    param([string]$Name, $Value)
+    switch -CaseSensitive ($Name) {
+        'Modules'         { $script:Modules = [string[]]$Value }
+        'SkipItems'       { $script:SkipItems = [string[]]$Value }
+        'WipeItems'       { $script:WipeItems = [string[]]$Value }
+        'AppItems'        { $script:AppItems = [string[]]$Value }
+        'StartupItems'    { $script:StartupItems = [string[]]$Value }
+        'ChangeItems'     { $script:ChangeItems = [string[]]$Value }
+        'SnapshotDiff'    { $script:SnapshotDiff = [string]$Value }
+        'SensorKey'       { $script:SensorKey = [string]$Value }
+        'SensorValue'     { $script:SensorValue = [string]$Value }
+        'StartupValue'    { $script:StartupValue = [string]$Value }
+        'AppPath'         { $script:AppPath = [string]$Value }
+        'BackupPath'      { $script:BackupPath = [string]$Value }
+        'BackupRoot'      { $script:BackupRoot = [string]$Value }
+        'DataRoot'        { $script:DataRoot = [string]$Value }
+        'MonitorHours'    { $script:MonitorHours = [int]$Value }
+        'TimelineDays'    { $script:TimelineDays = [int]$Value }
+        'XrayHours'       { $script:XrayHours = [int]$Value }
+        'EmptyRecycleBin' { $script:EmptyRecycleBin = [switch]$true }
+        'DryRun'          { $script:DryRun = [switch]$true }
+        'NoBackup'        { $script:NoBackup = [switch]$true }
+        'NoRestorePoint'  { $script:NoRestorePoint = [switch]$true }
+        'AllProfiles'     { $script:AllProfiles = [switch]$true }
+        'WithProof'       { $script:WithProof = [switch]$true }
+        'GuardDaily'      { $script:GuardDaily = [switch]$true }
+        'SpyAll'          { $script:SpyAll = [switch]$true }
+        'AllUsers'        { $script:AllUsers = [switch]$true }
+        'XrayBaseline'    { $script:XrayBaseline = [switch]$true }
+        default           { throw ('неизвестный аргумент: ' + $Name) }
+    }
+}
+
+# Весь запрос проверяется целиком до первого присваивания: частично
+# применённого запроса не бывает
+function Use-EngineRequest {
+    param([hashtable]$Req)
+    foreach ($k in @($Req.Keys)) { if (@('v', 'op', 'args') -cnotcontains $k) { throw ('лишнее поле запроса: ' + $k) } }
+    if (-not $Req.ContainsKey('v') -or $Req['v'] -isnot [int] -or $Req['v'] -ne 1) { throw 'неизвестная версия запроса' }
+    $op = $Req['op']
+    if ($op -isnot [string] -or @($script:RequestOps.Keys) -cnotcontains $op) { throw 'операции нет в списке разрешённых' }
+    $given = @{}
+    if ($Req.ContainsKey('args')) {
+        if ($Req['args'] -isnot [hashtable]) { throw 'args — не объект' }
+        $given = $Req['args']
+    }
+    $allowed = @($script:RequestOps[$op]) + $script:RequestCommon
+    $checked = New-Object System.Collections.Generic.List[object]
+    foreach ($name in @($given.Keys)) {
+        if ($allowed -cnotcontains $name) { throw ('аргумент не положен этой операции: ' + $name) }
+        $checked.Add(@($name, (Test-RequestArg $name $given[$name])))
+    }
+    if ($script:RequestNeeds.ContainsKey($op)) {
+        $need = $script:RequestNeeds[$op]
+        if (-not $given.ContainsKey($need)) { throw ('не хватает аргумента: ' + $need) }
+        $nv = $given[$need]
+        if (($nv -is [object[]] -and $nv.Count -eq 0) -or ($nv -is [string] -and $nv.Length -eq 0)) { throw ('пустой аргумент: ' + $need) }
+    }
+    Set-RequestOp $op
+    foreach ($pair in $checked) { Set-RequestArg $pair[0] $pair[1] }
+    return $op
+}
+
+if ($Request) {
+    $rqError = $null; $rqOp = ''
+    try {
+        if ($PSBoundParameters.Count -ne 1) { throw 'вместе с -Request другие ключи командной строки не принимаются' }
+        if (-not [Console]::IsInputRedirected) { throw 'запрос должен прийти через стандартный ввод' }
+        $rqOp = Use-EngineRequest (ConvertFrom-EngineRequest (Read-EngineRequest))
+    } catch { $rqError = $_.Exception.Message }
+    if ($rqError) {
+        Write-Host ('[!] Запрос к движку отклонён: ' + $rqError)
+        Write-Host '###JSON### {"error":"request rejected"}'
+        Write-Host '###DONE###'
+        exit 64
+    }
+    # Для проверок: какая операция на самом деле выбрана; «2» — только принять
+    # запрос и выйти, ничего не делая. Окно эту переменную движку не передаёт
+    # (EngineFile.Harden убирает её из окружения), её задают только тесты.
+    if ($env:WIN11_ENGINE_TRACE -eq '1' -or $env:WIN11_ENGINE_TRACE -eq '2') { Write-Host ('###OP### ' + $rqOp) }
+    if ($env:WIN11_ENGINE_TRACE -eq '2') { Write-Host '###DONE###'; exit 0 }
+}
+
+# --------------------------------------------------------------------------- #
 #  Списки модулей приходят из интерфейса одной строкой «a,b,c»: powershell.exe
 #  с ключом -File не разбивает аргументы по запятым и отдаёт массив из одного
 #  элемента. Разворачиваем сами, иначе ни один модуль не совпадёт по имени.
@@ -277,7 +702,7 @@ $ChangeItems  = Expand-List $ChangeItems
 # =========================================================================== #
 # Версия. Должна совпадать с AppInfo.Version в интерфейсе -- сборка это
 # проверяет, чтобы вшитый движок и окно не рассказывали о себе разное.
-$script:EngineVersion  = '2.0.0'
+$script:EngineVersion  = '2.1.0'
 # Метки блока в hosts — только латиницей. Раньше они были по-русски, а hosts
 # пишется в ASCII: кириллица превращалась в «?», и своего блока программа
 # потом не узнавала — дописывала его заново при каждом применении, а откат
@@ -977,21 +1402,80 @@ function Test-DirSecure {
     } catch { return $false }
 }
 
-# Можно ли верить файлу или папке внутри папки данных: не ссылка, владелец —
-# система или администраторы, и никому чужому явным правом не открыт на запись
-# (унаследованные права заменит новый корень).
-function Test-ItemTrusted {
-    param($Item)
-    if ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
-    try { $acl = Get-Acl -LiteralPath $Item.FullName -ErrorAction Stop } catch { return $false }
-    if ($script:TrustedSids -notcontains $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value) { return $false }
-    $writeMask = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
-    foreach ($r in $acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier])) {
-        if ("$($r.AccessControlType)" -ne 'Allow') { continue }
-        if ($script:TrustedSids -contains $r.IdentityReference.Value) { continue }
-        if (([int64]$r.FileSystemRights -band $writeMask) -ne 0) { return $false }
+# Можно ли верить файлу или папке: не ссылка, владелец — система,
+# администраторы или TrustedInstaller, и никто другой не может его изменить,
+# удалить, переименовать, сменить права или владельца (W11P-006).
+#
+# Раньше смотрелись только явные права (GetAccessRules($true, $false)):
+# право на запись, доставшееся от родительской папки, проходило незамеченным.
+# Теперь — все права, явные и унаследованные:
+#   * к самому объекту относится всё, кроме «только для вложенного»;
+#   * у папки ещё и то, что она передаст вложенному (её файлы и папки получат
+#     эти права) — кроме «создатель-владелец» и «создатель-группа»: на месте
+#     этих записей у вложенного окажется тот, кто его создал (сам движок);
+#   * запрет вычитается, только если он явный, для «Все» (Everyone), список
+#     прав в обычном порядке и запрет относится к самому объекту: такой
+#     запрет проверяется раньше любого разрешения и касается любого. Запрет
+#     одной группы не закрывает того, у кого право пришло через другую
+#     (например, «Прошедшие проверку»), а унаследованный запрет стоит после
+#     явных разрешений и их не отменяет. Для вложенного запреты не вычитаются
+#     вовсе: у него могут быть свои явные разрешения, которые идут раньше.
+# Права не читаются — не верим (отказ, а не «доступа нет»).
+# -ExplicitOnly — только для переноса старой папки данных (Protect-DataRoot):
+# там унаследованные права тут же заменяет новый корень, а после замены
+# всё проверяется ещё раз полностью.
+function Get-UntrustedRights {
+    param($Acl, [bool]$Container, [switch]$ExplicitOnly)
+    $self = [int64]0; $child = [int64]0; $deny = [int64]0
+    $canonical = [bool]$Acl.AreAccessRulesCanonical
+    $inh = [Security.AccessControl.InheritanceFlags]::ObjectInherit -bor [Security.AccessControl.InheritanceFlags]::ContainerInherit
+    foreach ($r in $Acl.GetAccessRules($true, (-not $ExplicitOnly), [Security.Principal.SecurityIdentifier])) {
+        $sid = $r.IdentityReference.Value
+        $rights = [int64]$r.FileSystemRights
+        $inheritOnly = [bool]($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly)
+        # «не распространять дальше» всё равно достаётся прямым вложенным
+        $toChildren = $Container -and [bool]($r.InheritanceFlags -band $inh)
+        if ("$($r.AccessControlType)" -eq 'Deny') {
+            if ($canonical -and -not $r.IsInherited -and -not $inheritOnly -and $sid -eq 'S-1-1-0') { $deny = $deny -bor $rights }
+            continue
+        }
+        if ($script:TrustedSids -contains $sid) { continue }
+        # «Права владельца» (OWNER RIGHTS) достаются владельцу, а он проверен
+        if ($sid -eq 'S-1-3-4') { continue }
+        if (-not $inheritOnly) { $self = $self -bor $rights }
+        # «создатель-владелец» и «создатель-группа» у вложенного станут тем,
+        # кто его создаст; остальное вложенное получит как есть
+        if ($toChildren -and $sid -ne 'S-1-3-0' -and $sid -ne 'S-1-3-1') { $child = $child -bor $rights }
     }
-    return $true
+    return (($self -band (-bnot $deny)) -bor $child)
+}
+
+function Test-ItemTrusted {
+    param($Item, [switch]$ExplicitOnly)
+    if ($null -eq $Item -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+    try { $acl = Get-Acl -LiteralPath $Item.FullName -ErrorAction Stop } catch { return $false }
+    try {
+        $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+        if ($null -eq $owner -or $script:TrustedSids -notcontains $owner.Value) { return $false }
+        # запись, удаление (своё и вложенного), смена прав или владельца,
+        # атрибутов — в том числе общими правами
+        $writeMask = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
+        $open = Get-UntrustedRights $acl ([bool]$Item.PSIsContainer) -ExplicitOnly:$ExplicitOnly
+        return (($open -band $writeMask) -eq 0)
+    } catch { return $false }
+}
+
+# Объект и весь путь до него (W11P-006): сам он — Test-ItemTrusted, а ни одну
+# папку выше чужой не может переименовать, удалить, перенастроить или
+# вычистить вложенное (Test-DirChainSecure). Иначе папку с проверенными
+# правами можно было бы подменить целиком, переименовав её родителя.
+function Test-PathTrusted {
+    param([string]$Path)
+    try { $it = Get-Item -LiteralPath $Path -Force -ErrorAction Stop } catch { return $false }
+    if (-not (Test-ItemTrusted $it)) { return $false }
+    $parent = Split-Path -Path $it.FullName -Parent
+    if (-not $parent) { return $true }
+    return (Test-DirChainSecure $parent)
 }
 
 # Всё недоверенное на любой глубине. Внутрь ссылок и чужих папок не заходим:
@@ -999,14 +1483,30 @@ function Test-ItemTrusted {
 # Путь внутри собирается из имён: отрезать начало полного пути нельзя — у
 # временной папки бывает короткое имя 8.3, а у найденного — длинное.
 function Get-UntrustedItems {
-    param([string]$Dir, [string]$Rel = '')
+    param([string]$Dir, [string]$Rel = '', [switch]$ExplicitOnly)
     $out = New-Object System.Collections.Generic.List[object]
     foreach ($c in @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue)) {
         $r = $(if ($Rel) { Join-Path $Rel $c.Name } else { $c.Name })
-        if (-not (Test-ItemTrusted $c)) { $out.Add([pscustomobject]@{ Item = $c; Rel = $r }); continue }
-        if ($c.PSIsContainer) { foreach ($x in @(Get-UntrustedItems $c.FullName $r)) { $out.Add($x) } }
+        if (-not (Test-ItemTrusted $c -ExplicitOnly:$ExplicitOnly)) { $out.Add([pscustomobject]@{ Item = $c; Rel = $r }); continue }
+        if ($c.PSIsContainer) { foreach ($x in @(Get-UntrustedItems $c.FullName $r -ExplicitOnly:$ExplicitOnly)) { $out.Add($x) } }
     }
     return $out.ToArray()
+}
+
+# Найденное недоверенное — в свежий карантин рядом, с тем же путём внутри.
+function Move-UntrustedAside {
+    param([string]$Dir, [object[]]$Untrusted)
+    if (@($Untrusted).Count -eq 0) { return $true }
+    $aside = New-QuarantineDir $Dir
+    if (-not $aside) { Write-Log '   [!] не удалось завести папку карантина -- чужое в папке данных не тронуто'; return $false }
+    foreach ($u in $Untrusted) {
+        $to = Join-Path $aside $u.Rel
+        $toDir = Split-Path $to -Parent
+        if (-not (Test-Path -LiteralPath $toDir)) { New-Item -ItemType Directory -Path $toDir -Force | Out-Null }
+        if ($u.Item.PSIsContainer) { [IO.Directory]::Move($u.Item.FullName, $to) } else { [IO.File]::Move($u.Item.FullName, $to) }
+        Write-Log ("   [!] в папке данных лежал чужой файл, он отложен: {0}" -f $u.Rel)
+    }
+    return $true
 }
 
 # Свежая пустая папка карантина рядом с корнем: имя со случайным хвостом,
@@ -1017,10 +1517,38 @@ function Get-UntrustedItems {
 # ссылка — пустая строка, карантин не делается.
 function New-QuarantineDir {
     param([string]$Dir)
+    # Права карантину задаём сразу при создании — только система и
+    # администраторы, наследование выключено. Раньше папка наследовала права
+    # ProgramData, где обычный пользователь вправе заводить свои файлы и папки;
+    # в карантин же «чужое» переносится с правами администратора. Права ставим
+    # лишь под администратором: обычному процессу сменить владельца на
+    # «Администраторы» система не даёт, а наяву карантин делает только
+    # повышенный движок (Protect-DataRoot).
+    $sec = $null
+    $isAdmin = $false
+    try { $isAdmin = (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) } catch { }
+    if ($isAdmin) {
+        try {
+            $sec = New-Object System.Security.AccessControl.DirectorySecurity
+            $sec.SetAccessRuleProtection($true, $false)
+            $inh = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+            foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+                $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', $inh, 'None', 'Allow')))
+            }
+            $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        } catch { $sec = $null }
+    }
     for ($i = 0; $i -lt 20; $i++) {
         $cand = "$Dir.untrusted-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
         if (Test-Path -LiteralPath $cand) { continue }
-        try { $null = [IO.Directory]::CreateDirectory($cand) } catch { continue }
+        try {
+            if ($sec) { $null = [IO.Directory]::CreateDirectory($cand, $sec) }
+            else { $null = [IO.Directory]::CreateDirectory($cand) }
+        } catch {
+            # не вышло задать права — создаём хотя бы саму папку: содержимому
+            # карантина всё равно не верят, а отказ хуже слабых прав
+            try { $null = [IO.Directory]::CreateDirectory($cand) } catch { continue }
+        }
         if ((Get-Item -LiteralPath $cand -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
             try { [IO.Directory]::Delete($cand, $true) } catch { }
             continue
@@ -1065,19 +1593,15 @@ function Protect-DataRoot {
         # проверялось только то, что лежит прямо в корне. Всё, что создал не
         # администратор, любые ссылки и всё, что чужим явным правом открыто
         # на запись, уносим в карантин рядом — с тем же путём внутри.
-        $untrusted = @(Get-UntrustedItems $Dir)
-        if ($untrusted.Count -gt 0) {
-            $aside = New-QuarantineDir $Dir
-            if (-not $aside) { Write-Log '   [!] не удалось завести папку карантина -- чужое в папке данных не тронуто'; return $false }
-            foreach ($u in $untrusted) {
-                $to = Join-Path $aside $u.Rel
-                $toDir = Split-Path $to -Parent
-                if (-not (Test-Path -LiteralPath $toDir)) { New-Item -ItemType Directory -Path $toDir -Force | Out-Null }
-                if ($u.Item.PSIsContainer) { [IO.Directory]::Move($u.Item.FullName, $to) } else { [IO.File]::Move($u.Item.FullName, $to) }
-                Write-Log ("   [!] в папке данных лежал чужой файл, он отложен: {0}" -f $u.Rel)
-            }
-        }
+        # Унаследованные от ProgramData права тут не в счёт: их сейчас же
+        # заменят права нового корня.
+        if (-not (Move-UntrustedAside $Dir @(Get-UntrustedItems $Dir -ExplicitOnly))) { return $false }
         [IO.Directory]::SetAccessControl($Dir, $sec)
+        if (-not (Test-DirSecure $Dir)) { return $false }
+        # Новые права корня разошлись по вложенному — теперь проверяем всё
+        # полностью, с унаследованным (W11P-006). Обычно здесь пусто; если
+        # нет — в карантин и это.
+        if (-not (Move-UntrustedAside $Dir @(Get-UntrustedItems $Dir))) { return $false }
         return (Test-DirSecure $Dir)
     } catch {
         Write-Log ("   [!] не удалось защитить папку данных {0}: {1}" -f $Dir, $_.Exception.Message)
@@ -1085,8 +1609,19 @@ function Protect-DataRoot {
     }
 }
 
+# Корень защищён, и путь до него (ProgramData, корень диска) не даёт чужому
+# переименовать или удалить его целиком (W11P-006): иначе закрытую папку
+# можно было бы отодвинуть и положить на её место свою.
+function Test-SafeRootChain {
+    return [bool](Test-DirChainSecure (Split-Path $script:SafeRoot -Parent))
+}
+
 function Assert-SafeRoot {
-    if ($null -eq $script:RootState) { $script:RootState = [bool](Protect-DataRoot $script:SafeRoot) }
+    if ($null -eq $script:RootState) {
+        $chain = [bool](Test-SafeRootChain)
+        if (-not $chain) { Write-Log ("   [!] папку {0} может переименовать или удалить не администратор -- защищённой папке данных там не место" -f (Split-Path $script:SafeRoot -Parent)) }
+        $script:RootState = $chain -and [bool](Protect-DataRoot $script:SafeRoot)
+    }
     return $script:RootState
 }
 
@@ -1319,17 +1854,174 @@ function Invoke-RegExe {
 # Подпись файла резервной копии — тем же ключом, что и журнал отката
 # (HMAC-SHA256), с отдельной приставкой: подпись журнала за подпись файла не
 # сойдёт. В подпись входят имя папки копии и имя файла: файл из другой копии
-# или под другим именем не подойдёт.
-function Get-BackupFileSig {
-    param([string]$File, [string]$Folder, [string]$Name, [switch]$Create)
+# или под другим именем не подойдёт. Подписываются ровно те байты, что будут
+# записаны или импортированы (W11P-001): не файл по имени, который можно
+# подменить между чтением и подписью, а уже прочитанное в память содержимое.
+function Get-BackupBytesSig {
+    param([byte[]]$Bytes, [string]$Folder, [string]$Name, [switch]$Create)
     $h = [System.Security.Cryptography.HMACSHA256]::new([byte[]](Get-SignKey -Create:$Create))
     try {
         $head = [Text.Encoding]::UTF8.GetBytes(('w11p-backup|{0}|{1}|' -f $Folder.ToLowerInvariant(), $Name.ToLowerInvariant()))
-        $data = [IO.File]::ReadAllBytes($File)
         $null = $h.TransformBlock($head, 0, $head.Length, $null, 0)
-        $null = $h.TransformFinalBlock($data, 0, $data.Length)
+        $null = $h.TransformFinalBlock($Bytes, 0, $Bytes.Length)
         return (($h.Hash | ForEach-Object { $_.ToString('x2') }) -join '')
     } finally { $h.Dispose() }
+}
+
+# --------------------------------------------------------------------------- #
+#  Подписанный список файлов копии (backup-sig.json, версия 2). В версии 1
+#  был только список «файл -> подпись»: удалив из него строку вместе с файлом,
+#  можно было незаметно сократить копию. Теперь у списка своя подпись (тем же
+#  ключом, с отдельной приставкой): в неё входят имя папки и все пары
+#  «файл:подпись». Поле files осталось тем же — прежние версии программы
+#  такую копию тоже читают.
+# --------------------------------------------------------------------------- #
+$script:BackupManifestName = 'backup-sig.json'
+# Имена файлов копии — путь ветки, где «:», «\» и пробелы заменены на «_»
+$script:BackupFileRx = '^[A-Za-z0-9_.(){}+-]{1,200}\.reg$'
+
+function Get-BackupManifestSig {
+    param([string]$Folder, [hashtable]$Files, [switch]$Create)
+    $lines = @($Files.Keys | ForEach-Object { ([string]$_).ToLowerInvariant() + ':' + ([string]$Files[$_]).ToLowerInvariant() } | Sort-Object)
+    $text = 'w11p-backup-manifest|' + $Folder.ToLowerInvariant() + '|' + ($lines -join "`n")
+    $h = [System.Security.Cryptography.HMACSHA256]::new([byte[]](Get-SignKey -Create:$Create))
+    try {
+        $b = [Text.Encoding]::UTF8.GetBytes($text)
+        return (($h.ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) -join '')
+    } finally { $h.Dispose() }
+}
+
+# Текст списка: только ASCII, ключи по порядку — его читает строгий разбор
+# (ConvertFrom-EngineRequest), который отвергает повторы полей
+function ConvertTo-BackupManifestText {
+    param([string]$Folder, [hashtable]$Files, [string]$Sig)
+    $parts = @($Files.Keys | Sort-Object | ForEach-Object { '"' + $_ + '":"' + $Files[$_] + '"' })
+    return ('{"version":2,"folder":"' + $Folder + '","files":{' + ($parts -join ',') + '},"sig":"' + $Sig + '"}')
+}
+
+# Рабочие папки внутри защищённого корня, оставшиеся от оборванных запусков
+# (backup-*, restore-*): удаляются через час, обходом без ссылок
+function Remove-StaleWorkDirs {
+    param([string]$Prefix)
+    if (-not $script:SafeRoot -or -not (Test-Path -LiteralPath $script:SafeRoot)) { return }
+    $cut = (Get-Date).AddHours(-1)
+    foreach ($d in @(Get-ChildItem -LiteralPath $script:SafeRoot -Directory -Force -Filter ($Prefix + '*') -ErrorAction SilentlyContinue)) {
+        if ($d.LastWriteTime -gt $cut) { continue }
+        $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+        Remove-TreeNoFollow $d.FullName $st
+    }
+}
+
+# Новая пустая рабочая папка внутри защищённого корня: имя со случайным
+# хвостом, не ссылка, владелец — система или администраторы, чужим не открыта
+# на запись. Не вышло — исключение: работать с копией негде.
+function New-SafeWorkDir {
+    param([string]$Prefix)
+    if (-not (Assert-SafeRoot)) { throw 'папка ProgramData\Win11Privacy не защищена' }
+    $dir = Join-Path $script:SafeRoot ($Prefix + [guid]::NewGuid().ToString('N').Substring(0, 12))
+    if (Test-Path -LiteralPath $dir) { throw 'рабочая папка уже есть' }
+    $null = [IO.Directory]::CreateDirectory($dir)
+    $item = Get-Item -LiteralPath $dir -Force
+    if (-not (Test-ItemTrusted $item)) {
+        $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+        Remove-TreeNoFollow $dir $st
+        throw 'рабочая папка не защищена (ссылка или чужие права)'
+    }
+    return $dir
+}
+
+# --------------------------------------------------------------------------- #
+#  Резервная копия веток реестра (W11P-001, W11P-005). Раньше reg.exe
+#  выгружал ветки прямо в папку на рабочем столе, куда пишет любая программа
+#  пользователя, а подпись снималась с файла уже там: между выгрузкой и
+#  подписью файл можно было подменить; к тому же движок с правами
+#  администратора писал по пути, где пользователь мог подложить ссылку.
+#  Теперь движок с этими правами не пишет в папки пользователя вовсе:
+#    1. ветки выгружаются в рабочую папку внутри защищённого корня
+#       ProgramData\Win11Privacy (пишут только система и администраторы,
+#       путь до корня проверен целиком — Assert-SafeRoot);
+#    2. каждый файл читается один раз в память, проверяется (Test-RegExportFile)
+#       и подписывается ровно этими байтами; рядом — подписанный список;
+#    3. готовая подписанная копия одним переименованием (тот же том, тот же
+#       корень) становится копией в хранилище ProgramData\Win11Privacy\backups —
+#       менять её могут только администраторы, обычные программы только читают.
+#  Копия на рабочий стол больше не кладётся: вернуть копию можно из окна
+#  («Изменения» -> «Из резервной копии»), а папку хранилища открывает пункт
+#  «Открыть папку резервных копий». Копии прежних версий на рабочем столе и
+#  в -BackupRoot по-прежнему видны в списке и возвращаются после проверки.
+#  Оборванный запуск оставляет рабочую папку только внутри защищённого корня
+#  (её уберёт следующий); в хранилище копия появляется только целиком.
+# --------------------------------------------------------------------------- #
+$script:BackupStoreKeep = 20
+
+function Get-BackupStoreDir { return (Join-Path $script:SafeRoot 'backups') }
+
+# Старые копии в хранилище: остаются самая первая (состояние до программы —
+# самое ценное) и $BackupStoreKeep последних. Имя папки начинается с даты —
+# порядок по имени и есть порядок по времени.
+function Limit-BackupStore {
+    $store = Get-BackupStoreDir
+    $all = @(Get-ChildItem -LiteralPath $store -Directory -Force -Filter 'Win11Privacy-Backup-*' -ErrorAction SilentlyContinue | Sort-Object Name)
+    if ($all.Count -le ($script:BackupStoreKeep + 1)) { return }
+    foreach ($old in @($all[1..($all.Count - $script:BackupStoreKeep - 1)])) {
+        $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+        Remove-TreeNoFollow $old.FullName $st
+    }
+}
+
+function New-RegBackup {
+    param([string[]]$Keys)
+    $res = @{ dir = ''; saved = 0; signed = 0; missed = @(); error = '' }
+    Remove-StaleWorkDirs 'backup-'
+    $leaf = 'Win11Privacy-Backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
+    $stage = $null
+    try {
+        $stage = New-SafeWorkDir 'backup-'
+        # хранилище — внутри того же защищённого корня: перенос в него — одно
+        # переименование на одном томе
+        $store = Get-BackupStoreDir
+        if (-not (Test-Path -LiteralPath $store)) { $null = [IO.Directory]::CreateDirectory($store) }
+        if (-not (Test-ItemTrusted (Get-Item -LiteralPath $store -Force))) { throw 'хранилище копий не защищено (ссылка или чужие права)' }
+        $final = Join-Path $store $leaf
+        if (Test-Path -LiteralPath $final) { throw 'копия с таким именем уже есть' }
+        $sigs = @{}
+        foreach ($k in $Keys) {
+            if (-not (Test-Path -LiteralPath $k)) { continue }
+            $native = $k -replace '^HKLM:\\','HKLM\' -replace '^HKCU:\\','HKCU\'
+            $name = (($k -replace '[:\\ ]','_')) + '.reg'
+            if ($name -cnotmatch $script:BackupFileRx -or $sigs.ContainsKey($name)) { $res.missed += ("{0} -- имя файла копии не годится или повторяется" -f $k); continue }
+            $file = Join-Path $stage $name
+            # Считаем только то, что выгрузилось целиком (см. Export-RegKey).
+            # Недописанный файл удаляется: восстановить из него нельзя.
+            $why = Export-RegKey $native $file
+            if ($why) {
+                Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+                $res.missed += ("{0} -- {1}" -f $k, $why)
+                continue
+            }
+            # Один раз в память: проверяются и подписываются одни и те же байты
+            # (рабочая папка закрыта для чужой записи — эти байты и остаются в файле)
+            $bytes = [IO.File]::ReadAllBytes($file)
+            $sigs[$name] = Get-BackupBytesSig $bytes $leaf $name -Create
+            $res.saved++
+        }
+        if ($res.saved -eq 0) { return $res }
+        $msig = Get-BackupManifestSig $leaf $sigs -Create
+        [IO.File]::WriteAllBytes((Join-Path $stage $script:BackupManifestName), [Text.Encoding]::ASCII.GetBytes((ConvertTo-BackupManifestText $leaf $sigs $msig)))
+        $res.signed = $sigs.Count
+        # Готовая копия — в хранилище одним действием
+        [IO.Directory]::Move($stage, $final)
+        $stage = $null
+        $res.dir = $final
+        Limit-BackupStore
+    } catch { $res.error = $_.Exception.Message }
+    finally {
+        if ($stage -and (Test-Path -LiteralPath $stage)) {
+            $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+            Remove-TreeNoFollow $stage $st
+        }
+    }
+    return $res
 }
 
 # Выгружает ветку реестра в .reg и проверяет, что выгрузилась: reg.exe
@@ -1369,60 +2061,23 @@ function Ensure-Backup {
 
     if (-not $NoBackup) {
         Write-Section 'Резервная копия реестра'
-        $root = if ($BackupRoot) { $BackupRoot } else { [Environment]::GetFolderPath('Desktop') }
-        # Папка лежит там, куда пишет любая программа пользователя, а reg.exe
-        # пишет в неё с правами администратора. Имя с случайным хвостом
-        # заранее не угадать — раньше по метке времени с точностью до секунды
-        # можно было подложить на её место ссылку на чужую папку.
-        $dir = Join-Path $root ('Win11Privacy-Backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
         $keys = @($script:Defs | Where-Object { $script:RegTypes -contains $_.T -and $Modules -contains $_.M } | ForEach-Object { $_.P } | Select-Object -Unique)
-        try {
-            if (Test-Path -LiteralPath $dir) { throw 'папка копии уже есть -- её завёл не этот запуск' }
-            $null = [IO.Directory]::CreateDirectory($dir)
-            if ((Get-Item -LiteralPath $dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'на месте папки копии оказалась ссылка' }
-            $saved = 0
-            $missed = @()
-            foreach ($k in $keys) {
-                if (-not (Test-Path -LiteralPath $k)) { continue }
-                $native = $k -replace '^HKLM:\\','HKLM\' -replace '^HKCU:\\','HKCU\'
-                $file = Join-Path $dir ((($k -replace '[:\\ ]','_')) + '.reg')
-                # Считаем только то, что выгрузилось целиком (см. Export-RegKey).
-                # Недописанный файл удаляется: восстановить из него нельзя, а
-                # лежащий рядом с целыми он выглядел бы такой же копией.
-                $why = Export-RegKey $native $file
-                if (-not $why) { $saved++ }
-                else {
-                    Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
-                    $missed += ("{0} -- {1}" -f $k, $why)
-                }
-            }
-            if ($saved -gt 0) {
-                $script:BackupDir = $dir
-                Write-Log ("   [+] сохранено веток: {0} -> {1}" -f $saved, $dir)
-                # Подписи файлов: копия лежит там, куда пишет любая программа
-                # пользователя, а возвращается с правами администратора
-                # (см. Restore-BackupFolder). Без подписи программа её не вернёт.
-                try {
-                    $sigs = @{}
-                    foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter '*.reg')) {
-                        $sigs[$f.Name] = Get-BackupFileSig $f.FullName (Split-Path $dir -Leaf) $f.Name -Create
-                    }
-                    (@{ version = 1; files = $sigs } | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath (Join-Path $dir 'backup-sig.json') -Encoding UTF8 -ErrorAction Stop
-                } catch {
-                    Write-Log ("   [-] копия не подписана ({0}) -- вернуть её кнопкой программы будет нельзя, только вручную" -f $_.Exception.Message)
-                }
-            } else {
-                # Remove-Item -Recurse в PowerShell 5.1 идёт по ссылкам: папку
-                # убираем тем же обходом без ссылок, что и при чистке
-                $rmStat = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
-                Remove-TreeNoFollow $dir $rmStat
-                Write-Log '   [-] сохранять нечего: ни одна ветка не выгрузилась'
-            }
-            if ($missed.Count -gt 0) {
-                Write-Log ("   [-] не выгрузились ветки: {0} (обычно Windows не отдаёт их даже на чтение; почему -- в каждой строке)" -f $missed.Count)
-                foreach ($k in $missed) { Write-Log ("       {0}" -f $k) }
-            }
-        } catch { Write-Log "   [!] не удалось создать резервную копию: $($_.Exception.Message)" }
+        # Выгрузка, проверка и подпись — в защищённой рабочей папке, затем
+        # готовая подписанная копия — в хранилище программы (New-RegBackup)
+        $bk = New-RegBackup $keys
+        if ($bk.dir) {
+            $script:BackupDir = $bk.dir
+            Write-Log ("   [+] сохранено веток: {0} -> {1}" -f $bk.saved, $bk.dir)
+            Write-Log '   [i] вернуть копию: «Изменения» -> «Из резервной копии»'
+        } elseif ($bk.error) {
+            Write-Log "   [!] не удалось создать резервную копию: $($bk.error)"
+        } else {
+            Write-Log '   [-] сохранять нечего: ни одна ветка не выгрузилась'
+        }
+        if ($bk.missed.Count -gt 0) {
+            Write-Log ("   [-] не выгрузились ветки: {0} (обычно Windows не отдаёт их даже на чтение; почему -- в каждой строке)" -f $bk.missed.Count)
+            foreach ($k in $bk.missed) { Write-Log ("       {0}" -f $k) }
+        }
     }
 
     if (-not $NoRestorePoint) {
@@ -3083,7 +3738,6 @@ function Remove-CreatedAppFile {
 
 function Set-VsCodeValue {
     param([string]$Key, $Value, [string]$Comment)
-    $p = Get-VsCodeSettingsPath
     if ($DryRun) { Write-Log "   [тест] $Comment"; return }
     # файл настроек не переписываем, если там уже стоит нужное
     $curVal = Get-VsCodeValue $Key
@@ -3122,11 +3776,56 @@ function Get-FirefoxPoliciesPath {
     return $null
 }
 
+# Текст файла в UTF-8 (с меткой или без) — строго: файл в другой кодировке
+# не «перекодируется» молча, а даёт ошибку. Раньше Get-Content без метки
+# читал policies.json в кодировке ANSI, и при записи обратно кириллица в
+# чужих политиках (адреса, названия закладок) превращалась в мусор.
+function Read-Utf8Strict {
+    param([string]$Path)
+    $b = [IO.File]::ReadAllBytes($Path)
+    $off = $(if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { 3 } else { 0 })
+    return (New-Object System.Text.UTF8Encoding($false, $true)).GetString($b, $off, $b.Length - $off)
+}
+
 function Get-FirefoxPolicy {
     param([string]$Key)
     $p = Get-FirefoxPoliciesPath
     if (-not $p -or -not (Test-Path -LiteralPath $p)) { return $null }
-    try { $j = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json; return $j.policies.$Key } catch { return $null }
+    try { $j = Read-Utf8Strict $p | ConvertFrom-Json; return $j.policies.$Key } catch { return $null }
+}
+
+# --------------------------------------------------------------------------- #
+#  Запись файла JSON одним действием (W11P-002). Раньше Set-Content писал
+#  policies.json прямо на месте: оборванная запись (сбой, нехватка места,
+#  выключение) оставляла файл пустым или недописанным — и с ним пропадали все
+#  политики Firefox, в том числе корпоративные. Теперь:
+#    1. текст проверяется разбором ещё в памяти;
+#    2. пишется во временный файл с уникальным именем в той же папке (только
+#       новым — CreateNew: на месте чужого файла или ссылки запись не идёт),
+#       UTF-8 без метки, со сбросом на диск;
+#    3. записанное читается обратно и разбирается ещё раз;
+#    4. встаёт на место одним действием системы (Replace-FileAtomic:
+#       ReplaceFile, если файл есть, — права и атрибуты прежнего сохраняются;
+#       иначе переименование);
+#    5. при любой ошибке прежний файл не тронут, временный удаляется.
+# --------------------------------------------------------------------------- #
+function Write-JsonFileAtomic {
+    param([string]$Path, [string]$Json)
+    $null = $Json | ConvertFrom-Json -ErrorAction Stop
+    $dir = Split-Path $Path -Parent
+    $tmp = Join-Path $dir ('.' + (Split-Path $Path -Leaf) + '.w11p-' + [guid]::NewGuid().ToString('N').Substring(0, 12) + '.tmp')
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Json)
+    try {
+        $fs = [IO.File]::Open($tmp, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try { $fs.Write($bytes, 0, $bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
+        $back = Read-Utf8Strict $tmp
+        if ($back -cne $Json) { throw 'записанный временный файл не совпадает с подготовленным' }
+        $null = $back | ConvertFrom-Json -ErrorAction Stop
+        Replace-FileAtomic $tmp $Path
+        $tmp = $null
+    } finally {
+        if ($tmp -and (Test-Path -LiteralPath $tmp)) { try { [IO.File]::Delete($tmp) } catch { } }
+    }
 }
 
 function Set-FirefoxPolicy {
@@ -3171,23 +3870,97 @@ function Write-FirefoxKey {
     param([string]$Key, $Value, [switch]$Remove)
     $p = Get-FirefoxPoliciesPath
     if (-not $p) { return @{ ok = $false; why = 'Firefox не найден' } }
+    # Папка Firefox должна быть закрыта на запись для всех, кроме системы и
+    # администраторов (так в Program Files по умолчанию): иначе между
+    # проверками и заменой файла в ней мог бы подложить ссылку кто угодно.
+    # W11P-006: проверяются и унаследованные права, и весь путь до папки —
+    # её родителя тоже нельзя давать переименовать чужому.
+    $ffPath = Split-Path (Split-Path $p -Parent) -Parent
+    if (-not (Test-Path -LiteralPath $ffPath -PathType Container)) { return @{ ok = $false; why = 'папка Firefox не читается' } }
+    if (-not (Test-PathTrusted $ffPath)) { return @{ ok = $false; why = 'папка Firefox (или папка выше) открыта на запись не только администраторам -- policies.json не трогаем' } }
+    # Уже существующие distribution и policies.json — тоже только «свои»:
+    # если их завела или может менять обычная программа, файл между чтением и
+    # заменой подменили бы, а замена шла бы с правами администратора.
+    foreach ($x in @((Split-Path $p -Parent), $p)) {
+        if (-not (Test-Path -LiteralPath $x)) { continue }
+        $xi = $null
+        try { $xi = Get-Item -LiteralPath $x -Force -ErrorAction Stop } catch { }
+        if (-not (Test-ItemTrusted $xi)) { return @{ ok = $false; why = ("{0} заведён не администратором или открыт на запись -- policies.json не трогаем" -f (Split-Path $x -Leaf)) } }
+    }
+    return (Update-FirefoxPoliciesFile $p $Key $Value -Remove:$Remove)
+}
+
+# Замок policies.json — общий для всех, кто его пишет: окно (движок с правами
+# администратора в сеансе пользователя), страж и откат (задачи от имени
+# системы в сеансе 0). Только Global\: раньше при ошибке открытия замок молча
+# брался в Local\ — у каждого сеанса свой, и окно с задачей стража могли
+# писать одновременно, теряя правки друг друга. Теперь не открылся — отказ.
+#  * Новый замок заводится с правами только для системы, администраторов и
+#    самого создателя — замок, заведённый задачей от имени системы, откроет и
+#    движок окна (с правами по умолчанию системный замок администраторам
+#    недоступен, и раньше это и уводило в Local\).
+#  * Уже существующий замок годится, только если его владелец — система,
+#    администраторы или мы сами. Замок, заранее заведённый обычной программой,
+#    не используется: она могла бы держать его или отпускать, когда ей нужно.
+function Test-MutexOwnerTrusted {
+    param([string]$Sid)
+    if (-not $Sid) { return $false }
+    if (@('S-1-5-18', 'S-1-5-32-544') -contains $Sid) { return $true }
+    try { return ($Sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) } catch { return $false }
+}
+
+function Open-FirefoxMutex {
+    $name = 'Global\Win11Privacy-FirefoxPolicies'
+    $sec = New-Object System.Security.AccessControl.MutexSecurity
+    $sec.SetAccessRuleProtection($true, $false)
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    foreach ($sid in @((New-Object Security.Principal.SecurityIdentifier('S-1-5-18')), (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')), $me)) {
+        $sec.AddAccessRule((New-Object System.Security.AccessControl.MutexAccessRule($sid, [System.Security.AccessControl.MutexRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)))
+    }
+    $created = $false
+    try { $m = [System.Threading.Mutex]::new($false, $name, [ref]$created, $sec) }
+    catch { throw ('замок policies.json не открылся ({0}) -- его мог заранее занять кто-то чужой' -f $_.Exception.Message) }
+    if (-not $created) {
+        $owner = ''
+        try { $owner = $m.GetAccessControl().GetOwner([Security.Principal.SecurityIdentifier]).Value } catch { }
+        if (-not (Test-MutexOwnerTrusted $owner)) { $m.Dispose(); throw 'замок policies.json заведён чужой программой -- не пишем' }
+    }
+    return $m
+}
+
+# Сам ключ в файле по явному пути (его же проверяют тесты на временной папке).
+# Чтение, правка и запись — под общим замком всех запусков программы
+# (окно, страж, откат): два писателя одновременно теряли бы правку друг друга.
+function Update-FirefoxPoliciesFile {
+    param([string]$Path, [string]$Key, $Value, [switch]$Remove)
+    $mtx = $null; $got = $false
     try {
-        $dir = Split-Path $p -Parent
-        foreach ($d in @($dir, $p)) {
+        $mtx = Open-FirefoxMutex
+        try { $got = $mtx.WaitOne(30000) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+        if (-not $got) { return @{ ok = $false; why = 'policies.json сейчас меняет другой запуск программы' } }
+        $dir = Split-Path $Path -Parent
+        foreach ($d in @($dir, $Path)) {
             if ((Test-Path -LiteralPath $d) -and ((Get-Item -LiteralPath $d -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
                 return @{ ok = $false; why = 'на пути к policies.json стоит ссылка' }
             }
         }
-        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+        if (-not (Test-Path -LiteralPath $dir)) {
+            $null = [IO.Directory]::CreateDirectory($dir)
+            if ((Get-Item -LiteralPath $dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { return @{ ok = $false; why = 'на пути к policies.json стоит ссылка' } }
+        }
+        # Свои временные файлы, оставшиеся от оборванной записи, — через час
+        foreach ($old in @(Get-ChildItem -LiteralPath $dir -File -Force -Filter ('.' + (Split-Path $Path -Leaf) + '.w11p-*.tmp') -ErrorAction SilentlyContinue)) {
+            if ($old.LastWriteTime -lt (Get-Date).AddHours(-1) -and -not ($old.Attributes -band [IO.FileAttributes]::ReparsePoint)) { try { [IO.File]::Delete($old.FullName) } catch { } }
+        }
         $obj = $null
-        if (Test-Path -LiteralPath $p -PathType Leaf) {
-            $ff = Get-Content -LiteralPath $p -Raw -ErrorAction Stop
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            $ff = $null
+            try { $ff = Read-Utf8Strict $Path } catch { return @{ ok = $false; why = 'policies.json не в кодировке UTF-8 -- не трогаем, чтобы не испортить чужие политики' } }
             if ("$ff".Trim()) {
                 try { $obj = $ff | ConvertFrom-Json -ErrorAction Stop } catch { $obj = $null }
-                # Файл есть, но не разобрался (комментарий, иная кодировка,
-                # политика, с которой не справился разбор PowerShell 5.1). Не
-                # перезаписываем: иначе пропали бы уже стоящие там политики, в
-                # том числе корпоративные, которые программа не ставила.
+                # Файл есть, но не разобрался (комментарий, политика, с которой
+                # не справился разбор PowerShell 5.1). Не перезаписываем: иначе
+                # пропали бы уже стоящие там политики, в том числе корпоративные.
                 if ($null -eq $obj) { return @{ ok = $false; why = 'policies.json есть, но не разбирается как JSON -- не трогаем, чтобы не стереть чужие политики' } }
             }
         }
@@ -3196,14 +3969,18 @@ function Write-FirefoxKey {
         if ($Remove) {
             if ($obj.policies.PSObject.Properties.Name -contains $Key) { $obj.policies.PSObject.Properties.Remove($Key) }
             if (@($obj.policies.PSObject.Properties).Count -eq 0 -and @($obj.PSObject.Properties).Count -eq 1) {
-                if (Test-Path -LiteralPath $p -PathType Leaf) { [IO.File]::Delete($p) }
+                if (Test-Path -LiteralPath $Path -PathType Leaf) { [IO.File]::Delete($Path) }
                 return @{ ok = $true; why = ''; removedFile = $true }
             }
         } elseif ($obj.policies.PSObject.Properties.Name -contains $Key) { $obj.policies.$Key = $Value }
         else { $obj.policies | Add-Member -NotePropertyName $Key -NotePropertyValue $Value }
-        ($obj | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $p -Encoding UTF8 -ErrorAction Stop
+        Write-JsonFileAtomic $Path ($obj | ConvertTo-Json -Depth 20)
         return @{ ok = $true; why = '' }
     } catch { return @{ ok = $false; why = $_.Exception.Message } }
+    finally {
+        if ($got) { try { $mtx.ReleaseMutex() } catch { } }
+        if ($null -ne $mtx) { $mtx.Dispose() }
+    }
 }
 
 # =========================================================================== #
@@ -3810,7 +4587,26 @@ function Write-HostsFile {
 }
 
 # --- брандмауэр ------------------------------------------------------------- #
-function Get-FwRuleName { param([string]$Kind, [string]$Target) if ($Kind -eq 'svc') { return "Win11Privacy: служба $Target" } return ("Win11Privacy: " + (Split-Path $Target -Leaf)) }
+function Get-FwRuleName {
+    param([string]$Kind, [string]$Target)
+    if ($Kind -eq 'svc') { return "Win11Privacy: служба $Target" }
+    # Имя правила для программы включает короткий хеш её полного пути. Раньше в
+    # имени было только имя файла: у двух программ с одинаковым именем в разных
+    # папках правило было одно. Блокировка второй не создавала правила («имя уже
+    # есть»), но отвечала «заблокировано», а возврат одной снимал правило другой.
+    $full = $Target
+    try { $full = [IO.Path]::GetFullPath($Target) } catch { }
+    $h = ''
+    try {
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $h = (($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($full.ToLowerInvariant()))[0..3] | ForEach-Object { $_.ToString('x2') }) -join '') } finally { $sha.Dispose() }
+    } catch { }
+    # Хвост «#хеш», а не «[хеш]»: Get-NetFirewallRule -DisplayName понимает имя
+    # как шаблон, и квадратные скобки стали бы в нём классом символов — правило
+    # потом не нашлось бы ни для проверки, ни для снятия. В «#» и шестнадцатеричных
+    # цифрах знаков шаблона нет.
+    return ("Win11Privacy: " + (Split-Path $Target -Leaf) + $(if ($h) { " #$h" } else { '' }))
+}
 
 function Test-FwRule {
     param([string]$Kind, [string]$Target)
@@ -5686,9 +6482,12 @@ if ($InstallGuard) {
         else { Write-Log '   [-] пробуждение после обновлений недоступно на этой системе' }
         Write-Log ("   [+] отслеживается модулей: {0}" -f $mods.Count)
         Write-Log ("   [+] журнал: {0}" -f (Join-Path $script:DataDir 'guard.log'))
-    } catch { Write-Log "   [!] не удалось установить стража: $($_.Exception.Message)" }
+    } catch { Write-Log "   [!] не удалось установить стража: $($_.Exception.Message)"; $failed = $true }
     Write-Log '###DONE###'
-    exit 0
+    # Код честный: регистрация задачи могла не пройти (например, повышение под
+    # другой учётной записью не даёт поставить задачу с наивысшими правами).
+    # Раньше здесь всегда был 0, и окно показывало «Готово» при неудаче.
+    exit $(if ($failed) { 1 } else { 0 })
 }
 
 if ($RemoveGuard) {
@@ -6197,7 +6996,8 @@ if ($XrayWipe) {
     }
     Emit-Json (Get-XrayDbInfo)
     Write-Log '###DONE###'
-    exit 0
+    # 2 — дошёл до конца, но не всё прошло (окно пишет «Готово, с ошибками»); раньше всегда 0
+    exit $(if ($script:Failures -gt 0) { 2 } else { 0 })
 }
 
 # --- Страж запускается после объявления рентгена: он делает дневной замер --- #
@@ -6333,9 +7133,10 @@ if ($InstallWatcher) {
         Register-ScheduledTask -TaskName $script:WatcherTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
         Write-Log '   [+] уведомления включены: всплывашка при перехвате отправки телеметрии'
         Write-Log '   [+] чтобы не мешать, одно уведомление не чаще чем раз в 10 минут'
-    } catch { Write-Log "   [!] не удалось: $($_.Exception.Message)" }
+    } catch { Write-Log "   [!] не удалось: $($_.Exception.Message)"; $failed = $true }
     Write-Log '###DONE###'
-    exit 0
+    # Код честный: регистрация задачи могла не пройти (раньше здесь всегда был 0).
+    exit $(if ($failed) { 1 } else { 0 })
 }
 
 if ($RemoveWatcher) {
@@ -6752,24 +7553,80 @@ function Invoke-FootprintWipe {
 }
 
 # --- отозвать или вернуть доступ программы к датчику ---
-if ($SensorSet) {
-    # Раньше разрешение датчика писалось в реестр напрямую: мимо журнала
-    # отката (полный откат его не возвращал) и без проверки имени — «..\» в
-    # имени датчика увёл бы запись в другую ветку. Теперь — только имя датчика
-    # из букв и цифр, только Allow/Deny, и через Set-Reg: журнал заранее,
-    # сверка записанного.
-    $r = @{ key = $SensorKey; value = $SensorValue; ok = $false }
-    if ($SensorKey -notmatch '^[A-Za-z0-9_]{1,64}$' -or $SensorValue -notin @('Allow', 'Deny')) {
-        $r.error = 'недопустимое имя датчика или значение'; Emit-Json $r; exit 1
+# --------------------------------------------------------------------------- #
+#  Ключ ConsentStore -> путь в реестре (F-02). Окно присылает ключ таким, каким
+#  его отдал -Spy (относительный путь под ConsentStore). Годятся три вида:
+#      <разрешение>                              разрешение целиком
+#      <разрешение>\<Пакет>_<ИздательId>          приложение из Store
+#      <разрешение>\NonPackaged\<C:#путь#app.exe> обычная программа: путь к exe,
+#                                                  где «\» заменены на «#»
+#  Разрешение — только из списка, который движок сам показывает ($SpyCaps);
+#  пакет — семейство пакета; программа — путь с буквой диска. Не годятся:
+#  пустые сегменты, «.» и «..», кавычки, управляющие знаки, «/», корни
+#  реестра, пути вместо ключей, сетевые пути программ. Путь в реестре
+#  собирается из постоянного корня и проверенных сегментов, а не дописыванием
+#  присланной строки. Плохой ключ — $null, и ничего не пишется.
+# --------------------------------------------------------------------------- #
+$script:ConsentRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore'
+function Get-ConsentKeyPath {
+    param([string]$Key)
+    if (-not $Key -or $Key.Length -gt 320) { return $null }
+    if ($Key -match '[\x00-\x1f\x7f"/]' -or $Key.Contains('..')) { return $null }
+    $seg = $Key.Split([char]'\')
+    if ($seg.Count -lt 1 -or $seg.Count -gt 3) { return $null }
+    foreach ($s in $seg) { if ($s.Length -eq 0 -or $s -eq '.') { return $null } }
+    $cap = $null
+    foreach ($c in $script:SpyCaps) { if ($c.id -ieq $seg[0]) { $cap = [string]$c.id } }
+    if (-not $cap) { return $null }
+    $path = $script:ConsentRoot + '\' + $cap
+    if ($seg.Count -eq 2) {
+        if ($seg[1] -ieq 'NonPackaged') { return $null }
+        if ($seg[1] -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]{1,99}_[A-Za-z0-9]{13}$') { return $null }
+        $path += '\' + $seg[1]
+    } elseif ($seg.Count -eq 3) {
+        if ($seg[1] -ine 'NonPackaged') { return $null }
+        if ($seg[2] -notmatch '^[A-Za-z]:(#[^#<>:"|?*\\/]+)+$') { return $null }
+        foreach ($p in $seg[2].Substring(2).Split([char]'#')) { if ($p -eq '.') { return $null } }
+        $path += '\NonPackaged\' + $seg[2]
     }
-    $root = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\' + $SensorKey
+    return $path
+}
+
+# Разрешение датчика пишется через Set-Reg: журнал заранее, сверка
+# записанного (прямая запись шла бы мимо отката). Ключ проверяет
+# Get-ConsentKeyPath (выше) — независимо от проверок окна. Успех — только
+# если и запись, и журнал отката прошли (счётчик ошибок не вырос), и в
+# реестре читается ровно записанное значение. Ответ: @{ key; value; ok;
+# error } — как и раньше; invalid — признак негодного запроса (для кода выхода).
+function Invoke-SensorSet {
+    param([string]$Key, [string]$Value)
+    $r = @{ key = $Key; value = $Value; ok = $false }
+    $root = Get-ConsentKeyPath $Key
+    if (-not $root -or $Value -notin @('Allow', 'Deny')) {
+        $r.error = 'недопустимое имя датчика или значение'; $r.invalid = $true; return $r
+    }
     $failBefore = $script:Failures
-    Set-Reg -Path $root -Name 'Value' -Value $SensorValue -Type 'String' -Comment ("датчик {0}: {1}" -f $SensorKey, $SensorValue)
+    Set-Reg -Path $root -Name 'Value' -Value $Value -Type 'String' -Comment ("датчик {0}: {1}" -f $Key, $Value)
     Save-JournalEntries -Quiet
-    $r.ok = ($script:Failures -eq $failBefore) -and ("$(Get-RegValue $root 'Value')" -eq $SensorValue)
-    if (-not $r.ok) { $r.error = 'Windows не дала изменить разрешение или журнал отката не пишется' }
+    $wrote = ($script:Failures -eq $failBefore)
+    $now = "$(Get-RegValue $root 'Value')"
+    $r.ok = $wrote -and ($now -eq $Value)
+    if (-not $r.ok) {
+        $r.error = $(if (-not $wrote) { 'Windows не дала изменить разрешение или журнал отката не пишется' }
+                     else { 'записано, но в реестре читается другое: ' + $(if ($now) { $now } else { 'пусто' }) })
+    }
+    return $r
+}
+
+if ($SensorSet) {
+    $r = Invoke-SensorSet $SensorKey $SensorValue
+    $invalid = [bool]$r.invalid
+    $r.Remove('invalid')
     Emit-Json $r
-    exit 0
+    # Код выхода согласован с ответом (W11P-003): 0 — только при ok; 1 —
+    # негодный ключ или значение (ничего не делалось); 2 — запись, журнал
+    # или сверка не прошли. Раньше здесь всегда был 0.
+    exit $(if ($r.ok) { 0 } elseif ($invalid) { 1 } else { 2 })
 }
 
 # --- список отдельных настроек внутри модулей ---
@@ -6846,9 +7703,10 @@ if ($InstallSensorGuard) {
         Write-Log '   [+] новая программа получит доступ к камере, микрофону или геолокации — придёт уведомление'
         Write-Log ("   [+] сейчас программ в журнале: {0}" -f $pairs.Count)
         Write-Log '   [+] попутно накапливается история для графика на «Обзоре»'
-    } catch { Write-Log "   [!] не удалось: $($_.Exception.Message)" }
+    } catch { Write-Log "   [!] не удалось: $($_.Exception.Message)"; $failed = $true }
     Write-Log '###DONE###'
-    exit 0
+    # Код честный: регистрация задачи могла не пройти (раньше здесь всегда был 0).
+    exit $(if ($failed) { 1 } else { 0 })
 }
 
 if ($InstallNetGuard) {
@@ -6877,9 +7735,10 @@ if ($InstallNetGuard) {
         Write-Log '   [+] слежение включено: сверка журнала брандмауэра каждые 15 минут'
         Write-Log ("   [+] известных программ: {0}; первый час слежение учится и молчит" -f $known.Count)
         Write-Log '   [+] новая программа выйдет в сеть — придёт уведомление, а на странице «Монитор» её можно отрезать'
-    } catch { Write-Log "   [!] не удалось: $($_.Exception.Message)" }
+    } catch { Write-Log "   [!] не удалось: $($_.Exception.Message)"; $failed = $true }
     Write-Log '###DONE###'
-    exit 0
+    # Код честный: регистрация задачи могла не пройти (раньше здесь всегда был 0).
+    exit $(if ($failed) { 1 } else { 0 })
 }
 
 if ($RemoveNetGuard) {
@@ -7064,7 +7923,8 @@ if ($RemoveApps) {
     Write-Log ("   удалено приложений: {0}" -f $done)
     Emit-Json @{ removed = $done }
     Write-Log '###DONE###'
-    exit 0
+    # 2 — дошёл до конца, но не всё прошло (окно пишет «Готово, с ошибками»); раньше всегда 0
+    exit $(if ($script:Failures -gt 0) { 2 } else { 0 })
 }
 
 if ($CleanJunk) {
@@ -7084,72 +7944,208 @@ if ($CleanJunk) {
 #  руками. Теперь круг замкнут: снимок -> откат по журналу -> импорт копии.
 # =========================================================================== #
 function Get-BackupList {
-    $roots = @()
+    # Первым — защищённое хранилище (W11P-005): копия оттуда и копия той же
+    # папки на рабочем столе — одна копия, показывается защищённая
+    $roots = @(Get-BackupStoreDir)
     if ($BackupRoot) { $roots += $BackupRoot }
     $roots += [Environment]::GetFolderPath('Desktop')
     $roots += $script:DataDir
     $seen = @{}
+    $names = @{}
     $list = @()
     foreach ($root in $roots) {
         if (-not $root -or $seen.ContainsKey($root) -or -not (Test-Path -LiteralPath $root)) { continue }
         $seen[$root] = $true
         foreach ($dir in @(Get-ChildItem -LiteralPath $root -Directory -Filter 'Win11Privacy-Backup-*' -ErrorAction SilentlyContinue)) {
+            if ($names.ContainsKey($dir.Name)) { continue }
             $files = @(Get-ChildItem -LiteralPath $dir.FullName -File -Filter '*.reg' -ErrorAction SilentlyContinue)
             if ($files.Count -eq 0) { continue }
+            $names[$dir.Name] = $true
             $size = 0
             foreach ($f in $files) { $size += $f.Length }
             $list += @{ path = $dir.FullName; name = $dir.Name
                         when = $dir.CreationTime.ToString('yyyy-MM-dd HH:mm')
                         branches = $files.Count; kb = [math]::Round($size / 1KB, 1)
-                        signed = (Test-Path -LiteralPath (Join-Path $dir.FullName 'backup-sig.json')) }
+                        signed = (Test-Path -LiteralPath (Join-Path $dir.FullName 'backup-sig.json'))
+                        protected = ($root -eq (Get-BackupStoreDir)) }
         }
     }
     return @($list | Sort-Object { $_.when } -Descending)
 }
 
-# Возврат из резервной копии. Папку копии на рабочем столе может переписать
-# любая программа пользователя, а импорт идёт с правами администратора:
-# раньше дописанный в .reg ключ (путь к программе службы, автозагрузка всех
-# пользователей) выполнился бы с этими правами. Теперь каждый файл подписан
-# при создании копии (backup-sig.json, тем же ключом, что и журнал отката).
-# Файл копируется в защищённую папку, подпись сверяется на копии, и
-# импортируется копия: подменить файл между сверкой и импортом нельзя.
-# Неподписанный или изменённый файл не импортируется.
+# Копии, сделанные этой версией и новее, подписаны списком версии 2. Список
+# версии 1 для такой копии — признак подмены (понижение формата, чтобы
+# убрать из копии файл вместе со строкой списка): имя папки с датой входит в
+# подпись каждого файла, и подделать его нельзя.
+$script:BackupV2Since = '20261115'
+function Test-BackupV1Allowed {
+    param([string]$Leaf)
+    if (Test-Path -LiteralPath (Join-Path (Get-BackupStoreDir) $Leaf)) { return $false }
+    $m = [regex]::Match($Leaf, '^Win11Privacy-Backup-(\d{8})-\d{6}')
+    if (-not $m.Success) { return $false }
+    return ($m.Groups[1].Value -lt $script:BackupV2Since)
+}
+
+# --------------------------------------------------------------------------- #
+#  Возврат из резервной копии (W11P-001). Папку копии на рабочем столе может
+#  переписать любая программа пользователя, а импорт идёт с правами
+#  администратора. Порядок:
+#    1. список подписей (backup-sig.json) разбирается строгим разбором — без
+#       повторов полей, только ожидаемые поля и имена файлов; у версии 2
+#       сверяется подпись самого списка и имя папки;
+#    2. в папке должны быть ровно файлы из списка: лишний .reg, ссылка или
+#       недостающий файл — копия не импортируется вовсе;
+#    3. каждый файл читается один раз в память, подпись сверяется на этих
+#       байтах, проверяется содержимое (целая выгрузка reg.exe, ветка из тех,
+#       что выгружает программа, без удалений и разделов вне ветки), и эти же
+#       байты пишутся в рабочую папку внутри защищённого корня;
+#    4. только если проверены все файлы — импорт. Перед импортом каждого файла
+#       он открывается без права записи для других, подпись сверяется ещё раз,
+#       и reg.exe читает файл, пока он открыт: проверенные байты — ровно те,
+#       что импортируются.
+#  Любая несостыковка — отказ целиком, а не «всё, кроме подозрительного»:
+#  частично подменённая копия не возвращает в реестр ничего.
+# --------------------------------------------------------------------------- #
+function Read-BackupManifest {
+    param([string]$Dir)
+    $mf = Join-Path $Dir $script:BackupManifestName
+    $item = Get-Item -LiteralPath $mf -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item -or $item.PSIsContainer) { throw 'копия не подписана (её сделала прежняя версия или подпись удалена) -- программа её не импортирует; при необходимости откройте нужный .reg вручную' }
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'список подписей копии -- ссылка' }
+    if ($item.Length -gt 1MB) { throw 'список подписей копии слишком большой' }
+    $bytes = [IO.File]::ReadAllBytes($mf)
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { $bytes = [byte[]]($bytes[3..($bytes.Length - 1)]) }
+    foreach ($b in $bytes) {
+        if (($b -gt 0x7E) -or (($b -lt 0x20) -and ($b -ne 0x09) -and ($b -ne 0x0A) -and ($b -ne 0x0D))) { throw 'список подписей копии повреждён' }
+    }
+    try { $m = ConvertFrom-EngineRequest ([Text.Encoding]::ASCII.GetString($bytes)) }
+    catch { throw ('список подписей копии не читается: ' + $_.Exception.Message) }
+    foreach ($k in @($m.Keys)) { if (@('version', 'files', 'folder', 'sig') -cnotcontains $k) { throw ('в списке подписей лишнее поле: ' + $k) } }
+    $ver = $m['version']
+    if ($ver -isnot [int] -or ($ver -ne 1 -and $ver -ne 2)) { throw 'неизвестная версия списка подписей' }
+    if ($m['files'] -isnot [hashtable] -or $m['files'].Count -eq 0) { throw 'в списке подписей нет файлов' }
+    $files = @{}
+    foreach ($n in @($m['files'].Keys)) {
+        $s = $m['files'][$n]
+        if ([string]$n -cnotmatch $script:BackupFileRx) { throw ('недопустимое имя файла в списке подписей: ' + $n) }
+        if ($s -isnot [string] -or $s -cnotmatch '^[0-9a-f]{64}$') { throw ('недопустимая подпись в списке: ' + $n) }
+        $files[[string]$n] = $s
+    }
+    $leaf = Split-Path $Dir -Leaf
+    if ($ver -eq 2) {
+        if ($m['folder'] -isnot [string] -or $m['folder'] -ine $leaf) { throw 'список подписей от другой папки копии' }
+        if ($m['sig'] -isnot [string] -or $m['sig'] -cne (Get-BackupManifestSig $leaf $files)) { throw 'подпись списка файлов не сходится -- список изменён' }
+    } elseif ($m.ContainsKey('folder') -or $m.ContainsKey('sig')) { throw 'у списка версии 1 не бывает этих полей' }
+    elseif (-not (Test-BackupV1Allowed $leaf)) { throw 'список подписей прежнего вида у копии, сделанной этой версией программы, -- подмена' }
+    return @{ version = $ver; files = $files }
+}
+
+# Ветки, которые программа выгружает в копии (из всех модулей), в виде
+# заголовков .reg: только их и возвращает импорт
+function Get-BackupAllowedBranches {
+    $set = @{}
+    foreach ($d in $script:Defs) {
+        if ($script:RegTypes -notcontains $d.T) { continue }
+        $full = ([string]$d.P -replace '^HKLM:\\', 'HKEY_LOCAL_MACHINE\' -replace '^HKCU:\\', 'HKEY_CURRENT_USER\').TrimEnd('\')
+        $set[$full.ToLowerInvariant()] = $true
+    }
+    return $set
+}
+
+# Содержимое .reg перед импортом: целая выгрузка reg.exe (UTF-16 с меткой,
+# заголовок, законченная последняя запись), первый раздел — ветка из тех, что
+# выгружает программа, остальные разделы — внутри неё, удалений («[-…]») нет.
+# Пустая строка — годится, иначе — почему нет.
+function Test-RegImportContent {
+    param([byte[]]$Bytes, [hashtable]$Allowed)
+    if ($Bytes.Length -lt 4 -or $Bytes[0] -ne 0xFF -or $Bytes[1] -ne 0xFE -or ($Bytes.Length % 2) -ne 0) { return 'файл не в том виде, в каком его пишет reg.exe (UTF-16)' }
+    $t = [Text.Encoding]::Unicode.GetString($Bytes, 2, $Bytes.Length - 2)
+    if (-not $t.StartsWith("Windows Registry Editor Version 5.00`r`n`r`n[", [StringComparison]::Ordinal)) { return 'в начале файла нет заголовка выгрузки' }
+    if (-not $t.EndsWith("`r`n`r`n")) { return 'файл оборван: последняя запись не закончена' }
+    $branch = $null
+    foreach ($line in $t.Split([string[]]@("`r`n"), [StringSplitOptions]::None)) {
+        if (-not $line.StartsWith('[')) { continue }
+        if (-not $line.EndsWith(']')) { return 'непонятная строка раздела' }
+        $key = $line.Substring(1, $line.Length - 2)
+        if ($key.StartsWith('-')) { return 'в копии есть удаление раздела' }
+        $low = $key.ToLowerInvariant()
+        if ($null -eq $branch) {
+            if (-not $Allowed.ContainsKey($low)) { return ('ветка не из тех, что выгружает программа: ' + $key) }
+            $branch = $low
+        } elseif ($low -ne $branch -and -not $low.StartsWith($branch + '\')) { return ('раздел вне выгруженной ветки: ' + $key) }
+    }
+    if ($null -eq $branch) { return 'в файле нет ни одного раздела' }
+    return ''
+}
+
 function Restore-BackupFolder {
     param([string]$Path)
     $res = @{ restored = 0; failed = 0; refused = 0; error = '' }
-    $sigs = $null
-    try { $sigs = (Get-Content -LiteralPath (Join-Path $Path 'backup-sig.json') -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json).files } catch { }
-    if ($null -eq $sigs) {
-        $res.error = 'копия не подписана (её сделала прежняя версия или подпись удалена) -- программа её не импортирует; при необходимости откройте нужный .reg вручную'
-        return $res
-    }
-    if (-not (Assert-SafeRoot)) { $res.error = 'папка ProgramData\Win11Privacy не защищена -- проверять копию негде'; return $res }
-    $folder = Split-Path $Path -Leaf
-    $work = Join-Path $script:SafeRoot ('restore-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $work = $null
     try {
-        # Папка возврата — внутри защищённого корня (туда пишут только система
-        # и администраторы), со случайным именем. Секрета здесь не лежит: это
-        # копии тех же .reg, что у пользователя на рабочем столе; ключ подписи
-        # journal.key сюда не копируется и закрыт собственным ACL. Проверяем
-        # только, что имя ещё свободно, — на всякий случай.
-        if (Test-Path -LiteralPath $work) { throw 'папка возврата уже есть' }
-        New-Item -ItemType Directory -Path $work -Force -ErrorAction Stop | Out-Null
-        foreach ($f in @(Get-ChildItem -LiteralPath $Path -File -Filter '*.reg' -ErrorAction Stop)) {
-            $p = $sigs.PSObject.Properties[$f.Name]
-            $want = $(if ($p) { "$($p.Value)" } else { '' })
-            if (-not $want) { Write-Log ("   [!] {0} -- этого файла в подписанной копии не было, не импортируется" -f $f.Name); $res.refused++; continue }
-            $copy = Join-Path $work $f.Name
-            Copy-Item -LiteralPath $f.FullName -Destination $copy -Force -ErrorAction Stop
-            if ((Get-BackupFileSig $copy $folder $f.Name) -ne $want) {
-                Write-Log ("   [!] {0} -- файл изменён после создания копии, не импортируется" -f $f.Name); $res.refused++; continue
+        $dirItem = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if (-not $dirItem.PSIsContainer -or ($dirItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'папка копии -- ссылка или не папка' }
+        $folder = $dirItem.Name
+        $man = Read-BackupManifest $dirItem.FullName
+
+        # В папке — ровно файлы из подписанного списка
+        $present = @{}
+        foreach ($f in @(Get-ChildItem -LiteralPath $dirItem.FullName -Force -ErrorAction Stop)) {
+            if ($f.Name -ieq $script:BackupManifestName -or $f.Name -notlike '*.reg') { continue }
+            if ($f.PSIsContainer -or ($f.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                Write-Log ("   [!] {0} -- ссылка или папка вместо файла копии" -f $f.Name); $res.refused++; continue
             }
-            $r = Invoke-RegExe ('import "{0}"' -f $copy)
-            if ($r.code -eq 0) { Write-Log ("   [+] вернули: {0}" -f $f.Name); $res.restored++ }
-            else { Write-Log ("   [!] не удалось: {0} (код {1}: {2})" -f $f.Name, $r.code, $r.error); $res.failed++ }
+            if (-not $man.files.ContainsKey($f.Name)) {
+                Write-Log ("   [!] {0} -- этого файла в подписанной копии не было" -f $f.Name); $res.refused++; continue
+            }
+            $present[$f.Name] = $f
+        }
+        foreach ($n in @($man.files.Keys)) {
+            if (-not $present.ContainsKey($n)) { Write-Log ("   [!] {0} -- файла из подписанного списка нет в папке" -f $n); $res.refused++ }
+        }
+        if ($res.refused -gt 0) { throw 'копия изменена после создания -- не импортируется ничего' }
+
+        # Проверка и перенос в защищённую рабочую папку — всех файлов до импорта
+        Remove-StaleWorkDirs 'restore-'
+        $work = New-SafeWorkDir 'restore-'
+        $allowed = Get-BackupAllowedBranches
+        $staged = New-Object System.Collections.Generic.List[object]
+        foreach ($n in @($present.Keys | Sort-Object)) {
+            $src = $present[$n]
+            if ($src.Length -gt 64MB) { Write-Log ("   [!] {0} -- слишком большой файл" -f $n); $res.refused++; continue }
+            $bytes = [IO.File]::ReadAllBytes($src.FullName)
+            if ((Get-BackupBytesSig $bytes $folder $n) -cne $man.files[$n]) { Write-Log ("   [!] {0} -- файл изменён после создания копии" -f $n); $res.refused++; continue }
+            $why = Test-RegImportContent $bytes $allowed
+            if ($why) { Write-Log ("   [!] {0} -- {1}" -f $n, $why); $res.refused++; continue }
+            $dst = Join-Path $work $n
+            $fs = [IO.File]::Open($dst, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try { $fs.Write($bytes, 0, $bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
+            $staged.Add(@{ name = $n; path = $dst; sig = $man.files[$n] })
+        }
+        if ($res.refused -gt 0) { throw 'в копии есть изменённые или чужие файлы -- не импортируется ничего' }
+
+        foreach ($s in $staged) {
+            # Файл открыт без права записи для других, пока reg.exe его читает:
+            # подпись, сверенная здесь, — подпись импортируемых байтов
+            $fs = [IO.File]::Open($s.path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+            try {
+                $ms = New-Object System.IO.MemoryStream
+                $fs.CopyTo($ms)
+                if ((Get-BackupBytesSig $ms.ToArray() $folder $s.name) -cne $s.sig) {
+                    Write-Log ("   [!] {0} -- копия в рабочей папке не сходится с подписью" -f $s.name); $res.refused++; continue
+                }
+                $r = Invoke-RegExe ('import "{0}"' -f $s.path)
+                if ($r.code -eq 0) { Write-Log ("   [+] вернули: {0}" -f $s.name); $res.restored++ }
+                else { Write-Log ("   [!] не удалось: {0} (код {1}: {2})" -f $s.name, $r.code, $r.error); $res.failed++ }
+            } finally { $fs.Dispose() }
         }
     } catch { $res.error = $_.Exception.Message }
-    finally { if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue } }
+    finally {
+        if ($work -and (Test-Path -LiteralPath $work)) {
+            $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+            Remove-TreeNoFollow $work $st
+        }
+    }
     return $res
 }
 
@@ -7182,7 +8178,10 @@ if ($RestoreBackup) {
     if ($rb.restored -gt 0) { Write-Log '   Значения вернулись к состоянию на момент копии. Перезагрузите компьютер.' }
     Emit-Json @{ restored = $rb.restored; failed = $rb.failed; refused = $rb.refused; error = $rb.error; path = $BackupPath }
     Write-Log '###DONE###'
-    exit $(if ($rb.error -or ($rb.restored -eq 0 -and ($rb.failed + $rb.refused) -gt 0)) { 1 } else { 0 })
+    # 1 — ничего не вернулось (отказ или ошибка); 2 — вернулось не всё
+    # (reg.exe не принял часть файлов). Раньше второе давало 0, и окно
+    # писало «Готово».
+    exit $(if ($rb.error -or ($rb.restored -eq 0 -and ($rb.failed + $rb.refused) -gt 0)) { 1 } elseif (($rb.failed + $rb.refused) -gt 0) { 2 } else { 0 })
 }
 
 if ($ListStartup) {
@@ -7226,7 +8225,8 @@ if ($StartupSet) {
     Write-Log ("   изменено записей: {0}" -f $done)
     Emit-Json @{ changed = $done; failures = $script:Failures }
     Write-Log '###DONE###'
-    exit 0
+    # 2 — дошёл до конца, но не всё прошло (окно пишет «Готово, с ошибками»); раньше всегда 0
+    exit $(if ($script:Failures -gt 0) { 2 } else { 0 })
 }
 
 # =========================================================================== #
@@ -7368,23 +8368,21 @@ if ($SelfTest) {
     if ($p.error) { Write-Log ("   [!] {0}" -f $p.error) }
     Write-Log ("   [{0}] запись в реестр системы (HKLM) — сюда идут политики" -f $(if ($r.hklm) { '+' } else { '!' }))
 
-    # --- резервная копия на рабочий стол ---
+    # --- хранилище резервных копий ---
+    # Копии лежат в ProgramData\Win11Privacy\backups (W11P-005): защищённый
+    # корень и путь до него, само хранилище — не ссылка и без чужих прав.
+    # Пробная выгрузка не делается: на рабочий стол движок больше не пишет.
     $r.backup = $false
-    $root = if ($BackupRoot) { $BackupRoot } else { [Environment]::GetFolderPath('Desktop') }
-    Write-Log ("   папка для копий       : {0}" -f $root)
+    $store = Get-BackupStoreDir
+    Write-Log ("   папка для копий       : {0}" -f $store)
     try {
-        # имя с случайным хвостом и без Remove-Item -Recurse: папка на рабочем
-        # столе, куда пишет любая программа пользователя (см. Ensure-Backup)
-        $probeDir = Join-Path $root ('Win11Privacy-SelfTest-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-        $null = [IO.Directory]::CreateDirectory($probeDir)
-        if ((Get-Item -LiteralPath $probeDir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'на месте пробной папки оказалась ссылка' }
-        $probeFile = Join-Path $probeDir 'probe.reg'
-        $null = & reg.exe export 'HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo' "$probeFile" /y 2>&1
-        $r.backup = (Test-Path -LiteralPath $probeDir)
-        $rmProbe = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
-        Remove-TreeNoFollow $probeDir $rmProbe
+        if (-not (Assert-SafeRoot)) { throw 'папка ProgramData\Win11Privacy не защищена' }
+        if (Test-Path -LiteralPath $store) {
+            if (-not (Test-ItemTrusted (Get-Item -LiteralPath $store -Force))) { throw 'хранилище копий не защищено (ссылка или чужие права)' }
+        }
+        $r.backup = $true
     } catch { Write-Log ("   [!] {0}" -f $_.Exception.Message) }
-    Write-Log ("   [{0}] создание папки резервной копии" -f $(if ($r.backup) { '+' } else { '!' }))
+    Write-Log ("   [{0}] хранилище резервных копий" -f $(if ($r.backup) { '+' } else { '!' }))
 
     # --- службы, задачи, брандмауэр, hosts ---
     $r.services = $false
@@ -7409,7 +8407,7 @@ if ($SelfTest) {
     $bad = @()
     if (-not $r.admin)  { $bad += 'нет прав администратора' }
     if (-not $r.hklm)   { $bad += 'нельзя писать в реестр системы' }
-    if (-not $r.backup) { $bad += 'нельзя создать папку резервной копии' }
+    if (-not $r.backup) { $bad += 'хранилище резервных копий не защищено' }
     if ($bad.Count -eq 0) {
         Write-Log 'ИТОГ: всё работает — программа может применять настройки на этом компьютере.'
         Write-Log 'Если изменения всё равно не применяются, пришлите этот журнал целиком.'
@@ -7901,7 +8899,8 @@ if ($RestoreItems) {
     Write-Log ("   возвращено записей: {0}" -f $done)
     Emit-Json @{ restored = $done; failures = $script:Failures }
     Write-Log '###DONE###'
-    exit 0
+    # 2 — дошёл до конца, но не всё прошло (окно пишет «Готово, с ошибками»); раньше всегда 0
+    exit $(if ($script:Failures -gt 0) { 2 } else { 0 })
 }
 
 # --------------------------------------------------------------------------- #
@@ -8052,7 +9051,8 @@ if ($PurgeData) {
     Write-Log '   Журнал отката тоже стёрт — вернуть настройки «как было» программа больше не сможет.'
     Emit-Json @{ removed = $gone }
     Write-Log '###DONE###'
-    exit 0
+    # 2 — дошёл до конца, но не всё прошло (окно пишет «Готово, с ошибками»); раньше всегда 0
+    exit $(if ($script:Failures -gt 0) { 2 } else { 0 })
 }
 
 if ($RestoreAll) {
@@ -8061,6 +9061,10 @@ if ($RestoreAll) {
     $r = Restore-Journal
     Emit-Json $r
     Write-Log '###DONE###'
+    # Код выхода честный: 2 — журналу нельзя верить или вернулось не всё.
+    # Раньше здесь всегда был 0, и окно показывало «Готово», хотя по
+    # недоверенному журналу не возвращалось ничего (полный откат это различает).
+    if ("$($r.state)" -eq 'untrusted' -or [int]$r.failed -gt 0 -or $script:Failures -gt 0) { exit 2 }
     exit 0
 }
 

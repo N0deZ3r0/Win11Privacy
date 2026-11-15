@@ -8,10 +8,15 @@
 и снимает сразу два вопроса: где взять файл и почему SmartScreen ругается на
 скачанный exe — каталог winget проверяет хеш сам.
 
+С версии 2.1 в каталог идёт установщик Win11Privacy-Setup.exe (Inno Setup):
+winget ставит программу в Program Files с удалением через «Приложения». Выбор
+«обычная установка или переносимая версия» — в самом мастере установки, а
+winget всегда делает обычную установку.
+
 Запуск (из корня проекта), хеш берётся из SHA256SUMS.txt релиза или задаётся
 вручную:
 
-    python tools/make_winget.py --sha 6f1c...  [--version 1.9.0]
+    python tools/make_winget.py --sha 6f1c...  [--version 2.1.0]
 
 Готовые файлы кладутся в packaging/winget/<версия>/ — их и отправляют
 отдельным pull request в microsoft/winget-pkgs.
@@ -46,13 +51,19 @@ def read_version():
     return m.group(1)
 
 
-def read_sha(path):
-    """SHA256SUMS.txt из релиза: строки вида «<хеш>  Win11Privacy.exe»."""
-    for line in io.open(path, encoding='utf-8').read().splitlines():
+# Файл, который ставит winget, и ключ удаления, по которому winget узнаёт
+# установленную программу: AppId из installer/Win11Privacy.iss + «_is1».
+SETUP = 'Win11Privacy-Setup.exe'
+PRODUCT_CODE = '{D3C03EE2-3FF3-4F72-9976-D10B9424046B}_is1'
+
+
+def read_sha(path, name=SETUP):
+    """SHA256SUMS.txt из релиза: строки вида «<хеш>  Win11Privacy-Setup.exe»."""
+    for line in io.open(path, encoding='utf-8-sig').read().splitlines():
         parts = line.split()
-        if len(parts) >= 2 and parts[-1].lower().endswith('win11privacy.exe'):
+        if len(parts) >= 2 and parts[-1].lstrip('*').lower() == name.lower():
             return parts[0].lower()
-    sys.exit('в %s нет строки про Win11Privacy.exe' % path)
+    sys.exit('в %s нет строки про %s' % (path, name))
 
 
 VERSION_YAML = u"""# yaml-language-server: $schema={schema_url_version}
@@ -68,20 +79,22 @@ INSTALLER_YAML = u"""# yaml-language-server: $schema={schema_url_installer}
 # Создано tools/make_winget.py — правьте генератор, а не этот файл
 PackageIdentifier: {pkg}
 PackageVersion: {ver}
-InstallerType: portable
-Commands:
-  - Win11Privacy
-# Программа меняет системные настройки и сама запрашивает права администратора
+# Установщик Inno Setup: winget знает его ключи тихой установки
+# (/VERYSILENT /SUPPRESSMSGBOXES /NORESTART) и папки (/DIR=).
+InstallerType: inno
+Scope: machine
+# Установщик сам запрашивает права администратора: программа меняет
+# системные настройки, и её папка должна быть закрыта для записи
 ElevationRequirement: elevatesSelf
-# Поле Scope у portable-пакетов winget не поддерживает (winget validate:
-# «Scope is not supported for InstallerType portable») — область выбирает
-# тот, кто ставит: «winget install ... --scope machine» кладёт exe в папку
-# WinGet внутри Program Files, куда пишут только администраторы. Это сказано в
-# описании пакета и в README.
+UpgradeBehavior: install
+ProductCode: '{product_code}'
+AppsAndFeaturesEntries:
+  - Publisher: {publisher}
+    ProductCode: '{product_code}'
 ReleaseDate: {date}
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/{repo}/releases/download/v{ver}/Win11Privacy.exe
+    InstallerUrl: https://github.com/{repo}/releases/download/v{ver}/{setup}
     InstallerSha256: {sha}
 ManifestType: installer
 ManifestVersion: {schema}
@@ -108,9 +121,10 @@ Description: |-
   Settings changes are journalled and can be reverted one item at a time.
   What the optional cleanup deletes (temporary files, the telemetry buffer,
   removed apps) cannot be brought back.
-  The program runs with administrator rights; install it machine-wide so the
-  exe sits in a folder only administrators can write to:
-  winget install N0deZ3r0.Win11Privacy --scope machine
+  winget runs the regular installer: the program goes to Program Files (a
+  folder only administrators can write to, which auto-protection relies on)
+  and can be removed in Settings > Apps. A portable version is offered by the
+  same installer when it is run by hand.
 Tags:
   - privacy
   - telemetry
@@ -124,7 +138,7 @@ ManifestVersion: {schema}
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--sha', help='SHA-256 файла Win11Privacy.exe')
+    ap.add_argument('--sha', help='SHA-256 файла ' + SETUP)
     ap.add_argument('--sums', help='путь к SHA256SUMS.txt из релиза')
     ap.add_argument('--version', help='версия (по умолчанию — из AppInfo.cs)')
     ap.add_argument('--date', help='дата релиза в виде ГГГГ-ММ-ДД')
@@ -151,7 +165,7 @@ def main():
         os.makedirs(out)
 
     fields = dict(pkg=PKG_ID, ver=version, schema=SCHEMA, repo=REPO, owner=owner,
-                  sha=sha, date=date, publisher=owner,
+                  sha=sha, date=date, publisher=owner, setup=SETUP, product_code=PRODUCT_CODE,
                   schema_url_version=SCHEMA_URL % 'version',
                   schema_url_installer=SCHEMA_URL % 'installer',
                   schema_url_locale=SCHEMA_URL % 'defaultLocale')
