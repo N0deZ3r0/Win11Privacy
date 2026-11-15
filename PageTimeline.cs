@@ -86,7 +86,21 @@ namespace Win11Privacy
             Dwm.DarkScrollbars(_timelineNotes);
             notes.Controls.Add(_timelineNotes);
             page.Controls.Add(notes, 0, 3);
-            return page;
+
+            // Окну не хватает высоты (экран 1024 × 768 при крупном шрифте) —
+            // страница прокручивается целиком, а не сплющивает график и список:
+            // раньше доли 62/38 оставляли от списка меньше двух строк, а подписи
+            // оси графика наезжали друг на друга. Ниже этой высоты страница не
+            // сжимается: заголовок, карточка, график не меньше 9 высот шрифта
+            // и список не меньше 6.
+            Panel scroll = new Panel();
+            scroll.AutoScroll = true;
+            scroll.BackColor = Theme.WindowBg;
+            Dwm.DarkScrollbars(scroll);
+            page.Dock = DockStyle.Fill;
+            scroll.AutoScrollMinSize = new Size(0, (int)(u * (3F + 7.6F + 9F + 6F)));
+            scroll.Controls.Add(page);
+            return scroll;
         }
 
         private void RefreshTimeline()

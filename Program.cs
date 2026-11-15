@@ -98,6 +98,13 @@ namespace Win11Privacy
                     else if (p2.Length == 2 && int.TryParse(p2[0], out tw) && int.TryParse(p2[1], out th2))
                         f.ClientSize = new Size(tw, th2);
                 }
+                // Подменённый экран (WIN11_TEST_SCREEN): окно больше него Windows
+                // не даёт — так же, как на агенте сборки с экраном 1024 × 768
+                if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WIN11_TEST_SCREEN")))
+                {
+                    Rectangle wa = MainForm.WorkArea();
+                    f.ClientSize = new Size(Math.Min(f.ClientSize.Width, wa.Width), Math.Min(f.ClientSize.Height, wa.Height));
+                }
                 if (mock) f.InjectMocks();
                 // «1» — раскрыть первый модуль; имя модуля — раскрыть его и прокрутить к нему
                 string expand = Environment.GetEnvironmentVariable("WIN11_TEST_EXPAND");

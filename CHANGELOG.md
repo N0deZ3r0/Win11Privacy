@@ -34,6 +34,9 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - «Вернуть как было» после перезагрузки с отключёнными службами: тип запуска теперь всегда передаётся и диспетчеру служб. Раньше он менялся только в реестре, диспетчер до перезагрузки помнил «отключена», и CDPSvc не запускалась (ошибка 1058, найдено на тестовой машине). Если Windows не даёт его передать (DoSvc), служба названа «заработает после перезагрузки», а не сбоем.
 - Отчёт третьего прохода: `docs/security/GDID_AUDIT_3.md`.
 
+**Окно**
+- «Хронология» в невысоком окне (например, экран 1024 × 768 или крупный масштаб) прокручивается целиком. Раньше график сплющивался так, что подписи оси наезжали друг на друга, а список «Что случилось» сжимался меньше чем до двух строк.
+
 ### What's new
 
 **Device ID (GDID): audit and fixes**
@@ -57,6 +60,9 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - Accounts and organisations: a local account with a Microsoft account connected only to apps is not "signing in with a Microsoft account"; Entra ID accounts and `S-1-12-1-…` profiles are taken into account. Domain join, Entra ID join, hybrid join (both), management (MDM, including OMA-DM) and a work account without device management are told apart; anything that cannot be read means refusal, not "home computer".
 - "Restore" after a restart with the services disabled: the start type is now always handed to the service manager too. It used to change only in the registry, the service manager remembered "disabled" until the next restart, and CDPSvc did not start (error 1058, found on the test machine). If Windows does not allow it (DoSvc), the service is reported as "will work after a restart", not as a failure.
 - Third-pass report: `docs/security/GDID_AUDIT_3.md`.
+
+**Window**
+- "Timeline" scrolls as a whole in a short window (for example a 1024 × 768 screen or a large scale). The chart used to be squashed until its axis labels overlapped, and the "What happened" list shrank to less than two lines.
 
 ## 2.1.0 — 2026-11-15
 

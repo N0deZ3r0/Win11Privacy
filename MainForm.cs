@@ -222,7 +222,7 @@ namespace Win11Privacy
             int u = Font.Height;
             // Раньше окно по умолчанию было 78 × 48 высот шрифта — заметно
             // больше обычных окон Windows. Теперь как «Безопасность Windows».
-            ClientSize = DefaultClientSize(u, Screen.PrimaryScreen.WorkingArea);
+            ClientSize = DefaultClientSize(u, WorkArea());
             StartPosition = FormStartPosition.CenterScreen;
             LoadUiState();
 
@@ -439,8 +439,8 @@ namespace Win11Privacy
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
-            MinimumSize = new Size(Math.Min((int)(Font.Height * 44), Screen.PrimaryScreen.WorkingArea.Width),
-                                   Math.Min((int)(Font.Height * 30), Screen.PrimaryScreen.WorkingArea.Height));
+            MinimumSize = new Size(Math.Min((int)(Font.Height * 44), WorkArea().Width),
+                                   Math.Min((int)(Font.Height * 30), WorkArea().Height));
             try { MaximizedBounds = Screen.FromControl(this).WorkingArea; } catch { }
             ApplySidebar();
             if (_settingsList != null) _settingsList.Restack();
@@ -573,6 +573,25 @@ namespace Win11Privacy
         // рабочей области экрана. Размеры в высотах шрифта растут вместе с
         // масштабом Windows, поэтому на любом экране окно одинаково по виду, а
         // на маленьком — по экрану: страницы перестраиваются под ширину.
+        // Рабочая область экрана. В тестовой сборке её можно подменить
+        // (WIN11_TEST_SCREEN=ШxВ): на агенте сборки экран 1024 × 768, окно там
+        // меньше, чем на рабочем столе разработчика, и обрезанный текст,
+        // найденный проверкой на агенте, иначе не воспроизвести у себя.
+        internal static Rectangle WorkArea()
+        {
+            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+#if UITEST
+            string s = Environment.GetEnvironmentVariable("WIN11_TEST_SCREEN");
+            if (!string.IsNullOrEmpty(s))
+            {
+                string[] p = s.Split('x');
+                int w, h;
+                if (p.Length == 2 && int.TryParse(p[0], out w) && int.TryParse(p[1], out h)) wa = new Rectangle(wa.X, wa.Y, w, h);
+            }
+#endif
+            return wa;
+        }
+
         internal static Size DefaultClientSize(int u, Rectangle wa)
         {
             return new Size(Math.Min(u * 76, (int)(wa.Width * 0.94)),

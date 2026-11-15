@@ -209,11 +209,12 @@ jobs:
                           $bad++
                       } elseif ($out -match 'ОБРЕЗАНО') {
                           Write-Host "::error::на странице $what обрезан текст"
-                          Write-Host (($out -split "`n" | Where-Object { $_ -match 'ОБРЕЗАНО' }) -join "`n")
+                          # каждая строка — отдельной аннотацией: их видно без доступа к журналу сборки
+                          foreach ($l in @($out -split "`n" | Where-Object { $_ -match 'ОБРЕЗАНО' } | Select-Object -First 5)) { Write-Host ("::error::  {0}: {1}" -f $what, $l.Trim()) }
                           $bad++
                       } elseif ($out -match 'ВЫЛЕЗ') {
                           Write-Host "::error::на странице $what элемент вылез за родителя"
-                          Write-Host (($out -split "`n" | Where-Object { $_ -match 'ВЫЛЕЗ' }) -join "`n")
+                          foreach ($l in @($out -split "`n" | Where-Object { $_ -match 'ВЫЛЕЗ' } | Select-Object -First 5)) { Write-Host ("::error::  {0}: {1}" -f $what, $l.Trim()) }
                           $bad++
                       } else {
                           Write-Host ("  ok: {0}, контролов: {1}" -f $what, $count)
