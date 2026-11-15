@@ -154,9 +154,31 @@ namespace Win11Privacy
             if (_log == null) return;
             _log.SelectionStart = _log.TextLength; _log.SelectionLength = 0;
             _log.SelectionColor = c; _log.SelectionFont = f ?? _log.Font;
+            // длинная строка переносится под свой текст, а не к самому краю
+            _log.SelectionIndent = 0; _log.SelectionHangingIndent = (f == null) ? LogHangingIndent(s) : 0;
             _log.AppendText(s + Environment.NewLine);
-            _log.SelectionColor = _log.ForeColor; _log.SelectionFont = _log.Font;
+            _log.SelectionColor = _log.ForeColor; _log.SelectionFont = _log.Font; _log.SelectionHangingIndent = 0;
         }
+
+        // Начало строки, под которое встают её продолжения при переносе:
+        // отступ и пометка («   [+] »), подпись с двоеточием («Модули  : »,
+        // «Примечание: ») или просто отступ. Шрифт журнала моноширинный —
+        // ширина считается по числу знаков.
+        private static readonly System.Text.RegularExpressions.Regex LogHangRx =
+            new System.Text.RegularExpressions.Regex(@"^(\s*\[[^\]]{1,2}\]\s+|[^\s:\[][^:]{0,22}?\s*:\s+|\s+)");
+        private int _logCharWidth;
+        private int LogHangingIndent(string s)
+        {
+            System.Text.RegularExpressions.Match m = LogHangRx.Match(s);
+            if (!m.Success || m.Length >= s.Length || m.Length > 26) return 0;
+            if (_logCharWidth <= 0)
+                _logCharWidth = Math.Max(1, TextRenderer.MeasureText("MMMMMMMMMMMMMMMMMMMM", _log.Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width / 20);
+            return m.Length * _logCharWidth;
+        }
+
+        // Ключи команды не рвутся на переносе («-NoBackup -» / «NoRestorePoint»):
+        // дефис в них — неразрывный.
+        private static string LogNoBreak(string s) { return s.Replace('-', '\u2011'); }
 
         // Пустая строка между частями журнала — одна, без двойных.
         private bool LogEndsWithGap()

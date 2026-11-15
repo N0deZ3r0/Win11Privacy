@@ -137,7 +137,7 @@ namespace Win11Privacy
                 if (a.Key == "BackupRoot" || a.Key == "DataRoot") continue;
                 sb.Append(" -").Append(a.Key);
                 if (a.Value is bool) continue;
-                if (a.Value is List<string>) sb.Append(' ').Append(string.Join(",", ((List<string>)a.Value).ToArray()));
+                if (a.Value is List<string>) sb.Append(' ').Append(string.Join(", ", ((List<string>)a.Value).ToArray()));
                 else sb.Append(' ').Append(Convert.ToString(a.Value, System.Globalization.CultureInfo.InvariantCulture));
             }
             return sb.ToString();

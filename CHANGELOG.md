@@ -28,7 +28,7 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - Журнал на странице «О программе» читается легче: название действия и разделы движка — полужирными заголовками с пустой строкой перед ними, вместо полос из чёрточек; итог («Готово.» или ошибка) выделен; текст больше не прижат к левому краю поля.
 
 **Окно при крупном масштабе Windows (125–200 %)**
-- Окно всегда открывается обычного размера под ваш экран — примерно как «Безопасность Windows» (раньше оно было заметно больше), — и всё в нём помещается: страницы перестраиваются под ширину окна. Размер из прошлого запуска больше не берётся: он хранился в пикселях и после смены масштаба Windows давал окно то такое, где всё сбивалось в кучу, то огромное.
+- Окно всегда открывается одного вида под ваш экран — просторным, чтобы описания настроек и строки журнала помещались, но не больше экрана, — и всё в нём помещается: страницы перестраиваются под ширину окна. Размер из прошлого запуска больше не берётся: он хранился в пикселях и после смены масштаба Windows давал окно то такое, где всё сбивалось в кучу, то огромное.
 - «Наблюдение → Сеть»: описание больше не обрезается — карточка растёт по тексту, кнопки переносятся под него, как на других страницах.
 - Плитки со сводкой не разваливаются на 3 + 1: в узком окне они сужаются и остаются в одном ряду, а если не влезают и так — встают ровно, 2 × 2.
 - «Сбор данных» и «Хронология» в невысоком окне (например, 1366 × 768 при 125 %): кнопка «Сохранить отчёт» стоит в общем ряду кнопок, а график делит высоту со списком — список под ними больше не сжимается в полоску. Боковая панель в узком окне сворачивается до значков раньше и оставляет место страницам.
@@ -64,7 +64,7 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - The log on the About page is easier to read: the action name and the engine's sections are bold headings with a blank line before them instead of dashed rules, the outcome ("Done." or the error) stands out, and the text no longer hugs the left edge.
 
 **The window at large Windows scaling (125–200 %)**
-- The window always opens at an ordinary size for your screen — about that of Windows Security (it used to be noticeably larger) — and everything in it fits: pages reflow to the window width. The size from the previous run is no longer reused: it was stored in pixels, and after a Windows scaling change it gave either a window with everything crammed together or a huge one.
+- The window always opens with the same look for your screen — roomy enough for setting descriptions and log lines, but never larger than the screen — and everything in it fits: pages reflow to the window width. The size from the previous run is no longer reused: it was stored in pixels, and after a Windows scaling change it gave either a window with everything crammed together or a huge one.
 - "Observation → Network": the description is no longer cut off — the card grows with the text and the buttons wrap below it, as on the other pages.
 - Summary tiles no longer fall apart as 3 + 1: in a narrow window they get narrower and stay in one row, and if even that does not fit they line up evenly, 2 × 2.
 - "Data collection" and "Timeline" in a short window (e.g. 1366 × 768 at 125 %): the "Save report" button sits in the common button row and the chart shares the height with the list, so the list below no longer shrinks to a strip. In a narrow window the sidebar collapses to icons sooner and leaves room for the pages.

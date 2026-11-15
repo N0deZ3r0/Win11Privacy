@@ -205,7 +205,11 @@ namespace Win11Privacy
             // журнал — так, как его выводит потоковый запуск (EngineRunner)
             _log.Clear();
             LogLine(L.T("Применение настроек…").TrimEnd('…', '.', ' '), Theme.Text, LogTitleFont);
-            LogLine(L.T("Команда движка: ") + "-Apply -Modules telemetry,ads", Theme.TextFaint);
+            LogLine(L.T("Команда движка: ") + LogNoBreak("-Apply -Modules telemetry, errors, activity, input, edge, delivery, apppriv, network, ads, widgets, search, copilot, ai, app_chrome -NoBackup -NoRestorePoint"), Theme.TextFaint);
+            foreach (string s in new[] { "Система : Microsoft Windows 11 Home Single Language (сборка 26300, редакция CoreSingleLanguage)",
+                "Модули  : telemetry, errors, activity, input, edge, delivery, apppriv, network, ads, widgets, search, copilot, ai, app_chrome",
+                "Примечание: на редакциях Home/Pro минимальный уровень телеметрии — «Обязательные данные»; полное отключение доступно только в Enterprise/Education." })
+                LogEngine(s);
             foreach (string s in new[] { "", "--- Резервная копия реестра ----------------------------------",
                 "   [+] сохранено веток: 14 -> C:\\ProgramData\\Win11Privacy\\backups\\Win11Privacy-Backup-20261115-120000-a1b2c3",
                 "   [i] вернуть копию: «Изменения» -> «Из резервной копии»", "",

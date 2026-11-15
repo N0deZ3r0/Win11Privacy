@@ -242,7 +242,7 @@ namespace Win11Privacy
                 return;
             }
 
-            LogLine(L.T("Команда движка: ") + req.Describe(), Theme.TextFaint);
+            LogLine(L.T("Команда движка: ") + LogNoBreak(req.Describe()), Theme.TextFaint);
             if (_detect != null && !Json.GetBool(_detect, "admin"))
                 LogLine(L.T("ВНИМАНИЕ: программа запущена без прав администратора — изменения применить нельзя."), Theme.Err);
 

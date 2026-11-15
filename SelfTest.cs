@@ -391,17 +391,17 @@ namespace Win11Privacy
             Console.WriteLine("Размер окна при открытии на разных экранах");
             System.Drawing.Size s;
             s = MainForm.DefaultClientSize(26, Wa(3072, 1848));
-            Check("3072 × 1920, 150 % — полный размер", s == Sz(1716, 1092), s.ToString());
+            Check("3072 × 1920, 150 % — полный размер", s == Sz(1976, 1196), s.ToString());
             s = MainForm.DefaultClientSize(26, Wa(2560, 1368));
-            Check("2560 × 1440, 150 % — полный размер", s == Sz(1716, 1092), s.ToString());
+            Check("2560 × 1440, 150 % — полный размер", s == Sz(1976, 1196), s.ToString());
             s = MainForm.DefaultClientSize(34, Wa(3840, 2064));
-            Check("3840 × 2160, 200 % — полный размер", s == Sz(2244, 1428), s.ToString());
+            Check("3840 × 2160, 200 % — полный размер", s == Sz(2584, 1564), s.ToString());
             s = MainForm.DefaultClientSize(26, Wa(1920, 1008));
-            Check("1920 × 1080, 150 % — ниже, по экрану", s == Sz(1716, 947), s.ToString());
+            Check("1920 × 1080, 150 % — по экрану с обеих сторон", s == Sz(1804, 947), s.ToString());
             s = MainForm.DefaultClientSize(17, Wa(1920, 1032));
-            Check("1920 × 1080, 100 % — полный размер", s == Sz(1122, 714), s.ToString());
+            Check("1920 × 1080, 100 % — полный размер", s == Sz(1292, 782), s.ToString());
             s = MainForm.DefaultClientSize(17, Wa(1366, 720));
-            Check("1366 × 768, 100 % — ниже, по экрану", s == Sz(1122, 676), s.ToString());
+            Check("1366 × 768, 100 % — по экрану с обеих сторон", s == Sz(1284, 676), s.ToString());
             s = MainForm.DefaultClientSize(21, Wa(1366, 708));
             Check("1366 × 768, 125 % — по экрану с обеих сторон", s == Sz(1284, 665), s.ToString());
         }

@@ -3555,7 +3555,11 @@ if ($bkFound.Count -eq $bkFns.Count) {
     $null = New-Item -ItemType Directory -Force (Join-Path $desk (Split-Path $bk.dir -Leaf))
     Copy-Item -LiteralPath (Get-ChildItem -LiteralPath $bk.dir -File).FullName -Destination (Join-Path $desk (Split-Path $bk.dir -Leaf))
     $lst = @(Get-BackupList | Where-Object { $_.name -eq (Split-Path $bk.dir -Leaf) })
-    Check 'список копий: копия из хранилища — одна строка, помечена защищённой' ($lst.Count -eq 1 -and $lst[0].path -eq $bk.dir -and $lst[0].protected -eq $true) ("строк: {0}" -f $lst.Count)
+    # Путь сравнивается по папкам, а не строкой: на GitHub временная папка
+    # задана коротким именем 8.3 (RUNNER~1), а Get-ChildItem отдаёт длинное.
+    Check 'список копий: копия из хранилища — одна строка, помечена защищённой' (
+          $lst.Count -eq 1 -and (Split-Path $lst[0].path -Leaf) -eq (Split-Path $bk.dir -Leaf) -and
+          (Split-Path (Split-Path $lst[0].path -Parent) -Leaf) -eq 'backups' -and $lst[0].protected -eq $true) ("строк: {0}, путь: {1}" -f $lst.Count, $(if ($lst.Count) { $lst[0].path } else { '' }))
     Remove-Item -LiteralPath (Join-Path $desk (Split-Path $bk.dir -Leaf)) -Recurse -Force
     $man = $null; try { $man = Read-BackupManifest $bk.dir } catch { }
     Check 'копия: список подписей версии 2 читается и сходится' ($null -ne $man -and $man.version -eq 2 -and $man.files.Count -eq 2)
