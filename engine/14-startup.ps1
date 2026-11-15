@@ -264,6 +264,10 @@ function Run-Guard {
         if ($d.T -in @('taskglob','svcopt')) { continue }
         $r = Check-Def $d
         if ($r.na) { continue }                      # чего нет на этой Windows — не сбито
+        # «не проверено» (места без доступа, профили не в Windows) — тоже не
+        # сбито: повторное стирание доступа туда не даст, а службы останавливало
+        # бы при каждом запуске стража
+        if ($r.unverified) { continue }
         if (-not $r.ok) { $drifted += $r }
     }
     $driftModules = @($drifted | ForEach-Object { $_.module } | Select-Object -Unique)

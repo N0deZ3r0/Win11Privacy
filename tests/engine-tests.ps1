@@ -609,7 +609,8 @@ if ($ipFound.Count -eq $ipFns.Count) {
 # Метки были по-русски, а файл пишется в ASCII — они превращались в «?»,
 # блок дописывался заново при каждом применении, и откат его не находил.
 $hostsFns = @('Test-HostsBlock', 'Apply-Hosts', 'Remove-HostsBlock', 'Test-HostsMarkKind', 'Get-HostsWanted', 'Get-HostsBlockLines', 'Test-HostsBlockCurrent',
-              'Get-HostsEncoding', 'Read-HostsLines', 'Get-HostsLinesWithout', 'Write-HostsFile', 'Replace-FileAtomic')
+              'Get-HostsEncoding', 'Read-HostsLines', 'Get-HostsLinesWithout', 'Write-HostsFile', 'Replace-FileAtomic',
+              'Get-HostsMarkInfo', 'Test-HostsKindMatch', 'Get-HostsKindDomains', 'Split-HostsBlocks')
 $hostsFound = @()
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($hostsFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $hostsFound += $fn.Name }
@@ -717,6 +718,71 @@ if ($hostsFound.Count -eq $hostsFns.Count) {
         Check 'hosts не переписался — это ошибка, а файл прежний' ((-not $okRemove) -and $script:Failures -ge 1 -and
             ([Convert]::ToBase64String($lockedBefore) -eq [Convert]::ToBase64String($lockedAfter))) ("ошибок: $($script:Failures)")
         Check '…и копия рядом с hosts не осталась' (-not (Test-Path -LiteralPath ($script:HostsPath + '.w11p-new')))
+
+        # --- GDID-аудит: побитые блоки, сироты-метки, повторы (сценарии 18, 19) ---
+        $script:GdidHosts = @('dds.example', 'cdpcs.example'); $script:GdidLockHosts = @('login.example')
+        $hk = { @(Get-Content -LiteralPath $script:HostsPath) }
+        # у блока номера стёрта закрывающая метка, следом — своя строка человека
+        # «0.0.0.0»: раньше она уходила вместе с блоком как «наша»
+        Set-Content -LiteralPath $script:HostsPath -Encoding Default -Value ($own + @('', $script:HostsMarkGdidStart, '0.0.0.0 dds.example', ':: dds.example', '0.0.0.0 ads.mine.example', '10.0.0.5 nas.local'))
+        Check 'побитый блок номера (без конца) не считается стоящим' ((Test-HostsBlock -Kind 'gdid') -and -not (Test-HostsBlockCurrent -Kind 'gdid'))
+        $null = Remove-HostsBlock -Kind 'gdid'
+        Check 'блок без конца: своя строка «0.0.0.0» человека остаётся' (((& $hk) -join '|') -eq (($own + @('0.0.0.0 ads.mine.example', '10.0.0.5 nas.local')) -join '|')) (((& $hk) -join '|'))
+        # закрывающая метка без начала (начало стёрли): раньше она «открывала»
+        # блок, и общий откат уносил строки человека после неё
+        Set-Content -LiteralPath $script:HostsPath -Encoding Default -Value ($own + @($script:HostsMarkEnd, '0.0.0.0 ads.mine.example', '0.0.0.0 telemetry.example'))
+        $null = Remove-HostsBlock
+        Check 'осиротевшая закрывающая метка убирается, строки после неё — нет' (((& $hk) -join '|') -eq (($own + @('0.0.0.0 ads.mine.example', '0.0.0.0 telemetry.example')) -join '|')) (((& $hk) -join '|'))
+        # чужая строка внутри целого блока: блок снимается, строка остаётся, соседний блок цел
+        Set-Content -LiteralPath $script:HostsPath -Encoding Default -Value $own
+        Apply-Hosts -Kind 'gdid'; Apply-Hosts
+        $cur = @(& $hk); $gi = [array]::IndexOf($cur, $script:HostsMarkGdidStart)
+        $withForeign = @($cur[0..$gi] + @('10.9.9.9 printer.local') + $cur[($gi + 1)..($cur.Count - 1)])
+        Set-Content -LiteralPath $script:HostsPath -Encoding Default -Value $withForeign
+        Check 'чужая строка внутри блока не ломает его проверку' ((Test-HostsBlockCurrent -Kind 'gdid') -and (Test-HostsBlockCurrent))
+        $null = Remove-HostsBlock -Kind 'gdid'
+        $now = @(& $hk)
+        Check 'снятие блока номера: чужая строка из него остаётся, блок телеметрии цел' (($now -contains '10.9.9.9 printer.local') -and -not (Test-HostsBlock -Kind 'gdid') -and (Test-HostsBlockCurrent)) ($now -join '|')
+        # два одинаковых блока номера — не «стоит», а применение оставляет один
+        Set-Content -LiteralPath $script:HostsPath -Encoding Default -Value $own
+        Apply-Hosts -Kind 'gdid'
+        $one = @(& $hk | Where-Object { $_ -match $script:HostsMarkRegex -or $_ -match '^(0\.0\.0\.0|::) ' })
+        Set-Content -LiteralPath $script:HostsPath -Encoding Default -Value (@(& $hk) + $one)
+        Check 'повторённый блок номера не считается стоящим' (-not (Test-HostsBlockCurrent -Kind 'gdid'))
+        Apply-Hosts -Kind 'gdid'
+        Check 'применение оставляет ровно один блок номера' ((@(& $hk | Where-Object { $_ -eq $script:HostsMarkGdidStart }).Count -eq 1) -and (Test-HostsBlockCurrent -Kind 'gdid'))
+        # блок запрета без строк (их вычистили) — задуман, но сервер не закрыт
+        Set-Content -LiteralPath $script:HostsPath -Encoding Default -Value ($own + @('', $script:HostsMarkLockStart, $script:HostsMarkLockEnd))
+        Check 'пустой блок запрета: задуман, но выдача не закрыта' ((Test-HostsBlock -Kind 'lock') -and -not (Test-HostsBlockCurrent -Kind 'lock'))
+        # повторное применение запрета: один блок, IPv4 и IPv6, блок номера не тронут
+        Set-Content -LiteralPath $script:HostsPath -Encoding Default -Value $own
+        Apply-Hosts -Kind 'gdid'; Apply-Hosts -Kind 'lock'; Apply-Hosts -Kind 'lock'; Apply-Hosts -Kind 'lock'
+        $now = @(& $hk)
+        Check 'повторный запрет выдачи не дописывает блоков' ((@($now | Where-Object { $_ -eq $script:HostsMarkLockStart }).Count -eq 1) -and (@($now | Where-Object { $_ -eq $script:HostsMarkLockEnd }).Count -eq 1)) ($now -join '|')
+        Check 'запрет выдачи закрывает и IPv4, и IPv6' (($now -contains '0.0.0.0 login.example') -and ($now -contains ':: login.example') -and (Test-HostsBlockCurrent -Kind 'lock'))
+        Check 'блоки номера и запрета независимы' ((Test-HostsBlockCurrent -Kind 'gdid') -and (Test-HostsBlockCurrent -Kind 'lock'))
+        $null = Remove-HostsBlock -Kind 'lock'
+        Check 'снятие запрета оставляет блок номера целым' ((Test-HostsBlockCurrent -Kind 'gdid') -and -not (Test-HostsBlock -Kind 'lock'))
+        # блок номера с лишней (устаревшей) строкой — не «стоит», обновляется
+        $now = @(& $hk); $gi = [array]::IndexOf($now, $script:HostsMarkGdidStart)
+        Set-Content -LiteralPath $script:HostsPath -Encoding Default -Value @($now[0..$gi] + @('0.0.0.0 old.dds.example') + $now[($gi + 1)..($now.Count - 1)])
+        Check 'лишняя строка в блоке номера — блок устарел' (-not (Test-HostsBlockCurrent -Kind 'gdid'))
+        Apply-Hosts -Kind 'gdid'
+        Check '…после обновления лишней строки нет' ((Test-HostsBlockCurrent -Kind 'gdid') -and -not (@(& $hk) -contains '0.0.0.0 old.dds.example'))
+        # записалось не то (файл тут же поправил антивирус) — не «заблокировано»
+        Set-Content -LiteralPath $script:HostsPath -Encoding Default -Value $own
+        $realWrite = ${function:Write-HostsFile}
+        function Write-HostsFile { param([string[]]$Lines) }
+        $script:Failures = 0; $script:Changes = 0
+        Apply-Hosts -Kind 'lock'
+        ${function:Write-HostsFile} = $realWrite
+        Check 'hosts «записан», но блока нет — это ошибка, а не «заблокировано»' ($script:Failures -eq 1 -and $script:Changes -eq 0 -and -not (Test-HostsBlockCurrent -Kind 'lock')) ("ошибок $($script:Failures), изменений $($script:Changes)")
+        # закрытый на запись hosts при запрете выдачи — ошибка, файл прежний
+        (Get-Item -LiteralPath $script:HostsPath).IsReadOnly = $true
+        $script:Failures = 0; $script:Changes = 0
+        Apply-Hosts -Kind 'lock'
+        (Get-Item -LiteralPath $script:HostsPath).IsReadOnly = $false
+        Check 'запрет выдачи: hosts не записался — ошибка' ($script:Failures -eq 1 -and $script:Changes -eq 0 -and ((& $hk) -join '|') -eq ($own -join '|'))
     } finally {
         if (Test-Path -LiteralPath $script:HostsPath) { (Get-Item -LiteralPath $script:HostsPath).IsReadOnly = $false }
         Remove-Item -LiteralPath ($script:HostsPath + '.w11p-new') -Force -ErrorAction SilentlyContinue
@@ -1457,7 +1523,7 @@ foreach ($asg in $engineAst.FindAll({ param($n) $n -is [System.Management.Automa
 }
 Check 'запрет выдачи закрывает login.live.com' (@($script:GdidLockHosts) -contains 'login.live.com')
 Check 'при входе через учётную запись Microsoft запрет не ставится' ($engineText -match [regex]::Escape("if (`$m -eq 'gdidlock' -and (Get-GdidLockRefusal))"))
-Check 'без закрытого сервера номер не стирается под видом запрета' ($engineText -match [regex]::Escape("-not (Test-HostsBlock -Kind 'lock')"))
+Check 'без закрытого сервера номер не стирается под видом запрета' ($engineText -match [regex]::Escape("-not (Test-HostsBlockCurrent -Kind 'lock')"))
 $auditLock = Get-EngineJson @('-Audit', '-Modules', 'gdidlock')
 $auditLockGroup = @($(if ($auditLock) { @($auditLock.groups) | Where-Object { "$($_.module)" -eq 'gdidlock' } }))
 Check 'проверка запрета выдачи отвечает' ($auditLockGroup.Count -eq 1 -and @($auditLockGroup[0].items).Count -eq 3)
@@ -1469,6 +1535,14 @@ if ($gst) {
     Check 'номер в состоянии — g:число или пусто' ("$($gst.gdid)" -match '^(g:\d+)?$') ("получено: " + $gst.gdid)
     Check 'состояние знает четыре службы цепочки' (@($gst.services).Count -eq 4)
     Check 'состояние говорит, можно ли запрещать выдачу' (($null -ne $gst.msaLogon) -and ($null -ne $gst.managed))
+    # GDID 20: прежние поля на месте, новые — с допустимыми значениями
+    Check 'передача — одной проверкой: состояние и полнота' (("$($gst.transmitState)" -in @('Off', 'Pending', 'On', 'Unknown')) -and ($null -ne $gst.transmitKnown) -and
+          ($null -ne $gst.transmitOff) -and ([bool]$gst.transmitOff -eq ("$($gst.transmitState)" -eq 'Off'))) ("$($gst.transmitState) / $($gst.transmitOff)")
+    Check 'опись говорит, можно ли верить «копий нет»' ("$($gst.scanState)" -in @('Found', 'NotFound', 'Unverified')) "$($gst.scanState)"
+    $gUser = @(@($gst.services) | Where-Object { "$($_.name)" -eq 'CDPUserSvc' })
+    Check 'у CDPUserSvc в состоянии — её копии у пользователей' ($gUser.Count -eq 1 -and $null -ne $gUser[0].PSObject.Properties['instances'])
+    Check 'у каждой службы — тип запуска словом' (@(@($gst.services) | Where-Object { "$($_.state)" -notin @('Boot', 'System', 'Automatic', 'Manual', 'Disabled', 'Missing', 'ReadError') }).Count -eq 0)
+    Check 'блоки hosts: стоит и задуман — отдельно' (($null -ne $gst.ddsPresent) -and ($null -ne $gst.lockPresent) -and (-not $gst.locked -or $gst.lockPresent))
 }
 $auditGdid = Get-EngineJson @('-Audit', '-Modules', 'gdid')
 $gdidAuditGroup = @($(if ($auditGdid) { @($auditGdid.groups) | Where-Object { "$($_.module)" -eq 'gdid' } }))
@@ -1478,6 +1552,8 @@ Check '«Цифровой след» показывает номер устро�
 if ($footGdid.Count -eq 1) {
     Check 'номер устройства в виде g:число или прочерк' ("$($footGdid[0].value)" -match '^(g:\d+|—)$') ("получено: " + $footGdid[0].value)
     Check 'номер устройства не предлагается стереть' (-not $footGdid[0].canWipe)
+    # «Цифровой след» и вкладка номера судят о передаче одной проверкой
+    if ($gst) { Check '«Цифровой след» и вкладка номера согласны о передаче' ((("$($footGdid[0].warn)" -eq 'передаётся') -eq ("$($footGdid[0].value)" -ne '—' -and -not $gst.transmitOff))) ("след: «$($footGdid[0].warn)», передача отключена: $($gst.transmitOff)") }
 }
 Check 'страж запоминает снятые пункты' ($engineText -match [regex]::Escape('skip=@($SkipItems)'))
 Check 'страж не возвращает снятые пункты' (($engineText -match [regex]::Escape('if ($skipped -contains $d.Id) { continue }')) -and
@@ -1525,7 +1601,8 @@ Write-Host 'Стирание номера устройства (на своём 
 # Настоящую «личность» устройства стирать в проверке нельзя: номер сменился бы
 # по-настоящему. Поэтому функции берутся из движка, а пути и всё, что
 # касается системы, — службы, хранилище учётных данных, файлы, — подменены.
-$wipeFns = @('Get-RegValue', 'Get-GdidCopies', 'Invoke-GdidWipe', 'Remove-RegStatus', 'Get-CredCheckCmd', 'Get-UncheckedProfiles', 'Restore-GdidServices')
+$wipeFns = @('Get-RegValue', 'Get-GdidCopies', 'Invoke-GdidWipe', 'Remove-RegStatus', 'Get-CredCheckCmd', 'Get-UncheckedProfiles', 'Restore-GdidServices',
+              'Get-GdidScan', 'Remove-GdidRegistryCopies', 'Clear-GdidCdpCache', 'Clear-GdidUserCreds', 'Disable-GdidWlid', 'Restore-GdidWlid', 'Get-GdidWlidJournalEntry')
 $wipeFound = @()
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($wipeFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $wipeFound += $fn.Name }
@@ -1576,6 +1653,26 @@ if ($wipeFound.Count -eq $wipeFns.Count) {
     function cmdkey.exe { $script:wipeCalls.Add("cmdkey $args") }
     function Clear-Folder { $script:wipeCalls.Add('clear-cdp'); return 0.0 }
     function Write-Log { param([string]$Message = '') }
+    # профили и кусты настоящей машины тут ни при чём: один пользователь, все
+    # профили в Windows, журнал отката — пробный (wlidsvc в нём на время стирания).
+    # Часть этих имён раньше описал раздел записи в реестр — после блока они
+    # возвращаются такими, какими были.
+    $wipeSaved = @{}
+    foreach ($nm in @('Get-UncheckedProfiles', 'Get-GdidCredUsers', 'Get-OtherSessionUser', 'Convert-ToSessionPath', 'Read-JournalFile', 'Get-SvcJournalState',
+                      'Write-AheadEntry', 'Undo-AheadEntry', 'Restore-JournalEntry', 'Remove-JournalKey')) {
+        $fi = Get-Item -Path ("Function:\" + $nm) -ErrorAction SilentlyContinue
+        if ($fi) { $wipeSaved[$nm] = $fi.ScriptBlock }
+    }
+    function Get-UncheckedProfiles { return 0 }
+    function Get-GdidCredUsers { return @(@{ name = 'test'; sid = 'S-1-5-21-0-0-0-1001'; session = $true }) }
+    function Get-OtherSessionUser { return $null }
+    function Convert-ToSessionPath { param([string]$Path) return $Path }
+    function Read-JournalFile { param([switch]$ReadOnly) return @{ trusted = $true; items = @() } }
+    function Get-SvcJournalState { param([string]$Name, $Svc) return @{ kind = 'svc'; name = $Name; old = '3'; delayed = ''; running = $false; newValue = '4' } }
+    function Write-AheadEntry { param($Entry) $script:wipeCalls.Add('journal-ahead'); return $true }
+    function Undo-AheadEntry { param($Entry) $script:wipeCalls.Add('journal-undo') }
+    function Restore-JournalEntry { param($e) $script:wipeCalls.Add(("restore-svc {0}={1}" -f $e.name, $e.old)); return @{ ok = $true } }
+    function Remove-JournalKey { param([string]$Key) $script:wipeCalls.Add("journal-remove $Key") }
     $DryRun = $false; $script:Changes = 0; $script:Failures = 0
     $dev = '0018ABCDEF012345'; $usr = '0003AAAAAAAAAAAA'
     try {
@@ -1657,11 +1754,478 @@ if ($wipeFound.Count -eq $wipeFns.Count) {
         foreach ($lk in $locks) { try { Set-TestKeyLock $lk $false } catch { } }
         Remove-Item -LiteralPath $gt -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $script:CdpCache -Recurse -Force -ErrorAction SilentlyContinue
-        foreach ($f in @('Get-ManagedReason', 'Stop-ServiceWait', 'Get-Service', 'Set-Service', 'Start-Service', 'Invoke-OneShotTask', 'cmdkey.exe', 'Clear-Folder', 'Get-IdCrlRoots', 'Set-TestKeyLock')) {
+        foreach ($f in @('Get-ManagedReason', 'Stop-ServiceWait', 'Get-Service', 'Set-Service', 'Start-Service', 'Invoke-OneShotTask', 'cmdkey.exe', 'Clear-Folder', 'Get-IdCrlRoots', 'Set-TestKeyLock',
+                         'Get-UncheckedProfiles', 'Get-GdidCredUsers', 'Get-OtherSessionUser', 'Convert-ToSessionPath', 'Read-JournalFile', 'Get-SvcJournalState',
+                         'Write-AheadEntry', 'Undo-AheadEntry', 'Restore-JournalEntry', 'Remove-JournalKey')) {
             Remove-Item -Path ("Function:\" + $f) -ErrorAction SilentlyContinue
         }
+        foreach ($nm in @($wipeSaved.Keys)) { Set-Item -Path ("Function:\" + $nm) -Value $wipeSaved[$nm] }
     }
     Check 'проверочный ключ убран' (-not (Test-Path -LiteralPath 'HKCU:\Software\Win11PrivacyGdidTest'))
+}
+
+# --------------------------------------------------------------------------- #
+#  Номер устройства: аудит GDID — передача (три службы и копии CDPUserSvc),
+#  опись без ложного «чисто», стирание по шагам и при сбоях, возврат служб
+#  по журналу, учётные записи. Всё на заглушках и своих пробных ключах:
+#  службы, хранилище учётных данных и журнал настоящей системы не трогаются.
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Номер устройства: аудит GDID (службы, опись, стирание, возврат, учётные записи)'
+$gaJob = Start-Job -ArgumentList $engine -ScriptBlock {
+    param($EnginePath)
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
+    $want = @('Get-SvcStartInfo', 'Get-SvcStart', 'Get-SvcScmView', 'Get-GdidUserSvcInstances', 'Get-GdidTransmitState', 'Get-GdidCopies', 'Get-GdidScan',
+              'Get-UncheckedProfiles', 'Get-IdCrlRoots', 'Get-GdidHiveNames', 'Remove-RegStatus', 'Get-RegValue', 'Get-RegRaw', 'Open-RegKeyRead', 'Test-RegKeyExists',
+              'Get-GdidUserHiveRoots', 'Test-GdidKeyHasChildren', 'Test-MsaAccount', 'Test-MsaLogon', 'Get-OtherMsaAccounts', 'Get-ManagedReason', 'Get-ManagedReasonNow',
+              'Get-GdidLockRefusal', 'Get-GdidWlidJournalEntry', 'Disable-GdidWlid', 'Restore-GdidWlid', 'Restore-GdidServices', 'Get-GdidCredUsers', 'Clear-GdidUserCreds',
+              'Remove-GdidRegistryCopies', 'Clear-GdidCdpCache', 'Invoke-GdidWipe', 'Get-CredCheckCmd', 'Restore-GdidServiceStarts', 'Sync-GdidRestoredServices',
+              'ConvertTo-Fields', 'Get-JournalKey', 'Test-JournalEntryShape', 'Test-RegKind', 'Check-Def', 'Test-DefApplicable', 'ConvertTo-Gdid')
+    $got = @()
+    foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+        if ($want -contains $fn.Name -and $got -notcontains $fn.Name) { Invoke-Expression $fn.Extent.Text; $got += $fn.Name }
+    }
+    foreach ($asg in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+        $lt = $asg.Left -as [System.Management.Automation.Language.VariableExpressionAst]
+        if ($null -ne $lt -and $lt.VariablePath.UserPath -in @('script:DevicePuidRegex', 'script:GdidCredUser', 'script:GdidCredSystem', 'script:GdidUnreadable', 'script:GdidSvcNames')) { Invoke-Expression $asg.Extent.Text }
+    }
+    $r = @{ missingFns = @($want | Where-Object { $got -notcontains $_ }) -join ',' }
+    $script:LogLines = New-Object System.Collections.Generic.List[string]
+    function Write-Log { param([string]$Message = '') $script:LogLines.Add($Message) }
+    $DryRun = $false; $script:Changes = 0; $script:Failures = 0
+    $script:UserSid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    $script:RunAccount = ([Security.Principal.WindowsIdentity]::GetCurrent()).Name
+
+    # ===== службы: настоящий реестр — только чтение =====
+    $r.realCdp = (Get-SvcStartInfo 'CDPSvc').state
+    $r.realMissing = (Get-SvcStartInfo ('W11PNoSuchService' + [guid]::NewGuid().ToString('N').Substring(0, 6))).state
+    $r.realInst = (Get-GdidUserSvcInstances).ok
+    $realTx = Get-GdidTransmitState
+    $r.realTx = "$($realTx.state)|$($realTx.known)|$(@($realTx.services).Count)"
+
+    # ===== службы на заглушках =====
+    $script:Reg = @{}; $script:Scm = @{}; $script:Inst = @(); $script:ScmFail = ''
+    function Get-RegRaw { param([string]$Path, [string]$Name)
+        $v = $script:Reg[(Split-Path $Path -Leaf)]
+        if ($null -eq $v -or "$v" -eq 'missing') { return @{ ok = $true; exists = $false; kind = ''; value = $null } }
+        if ("$v" -eq 'denied') { return @{ ok = $false; exists = $false; kind = ''; value = $null; denied = $true; error = 'UnauthorizedAccessException: доступ запрещён' } }
+        return @{ ok = $true; exists = $true; kind = 'DWord'; value = [int]$v }
+    }
+    function Test-RegKeyExists { param([string]$Path) $v = $script:Reg[(Split-Path $Path -Leaf)]; if ("$v" -eq 'denied') { return $null }; return ($null -ne $v -and "$v" -ne 'missing') }
+    function Get-GdidUserSvcInstances { return @{ ok = $true; names = @($script:Inst); error = '' } }
+    function Get-Service {
+        [CmdletBinding()] param([string]$Name)
+        if ($Name -and $Name -eq $script:ScmFail) { Write-Error -Message 'диспетчер служб не ответил' -ErrorId 'TestScmFail'; return }
+        if (-not $Name) { foreach ($k in @($script:Scm.Keys)) { [pscustomobject]@{ Name = $k; Status = $script:Scm[$k].status; StartType = $script:Scm[$k].start } }; return }
+        $s = $script:Scm[$Name]
+        if ($s) { return [pscustomobject]@{ Name = $Name; Status = $s.status; StartType = $s.start } }
+        Write-Error -Message ("Cannot find any service with service name '{0}'." -f $Name) -ErrorId 'NoServiceFoundForGivenName'
+    }
+    $setAll = { param([int]$Start, [string]$ScmStart, [string]$Status)
+        $script:Reg = @{ CDPSvc = $Start; CDPUserSvc = $Start; DoSvc = $Start }
+        $script:Scm = @{ CDPSvc = @{ start = $ScmStart; status = $Status }; CDPUserSvc = @{ start = $ScmStart; status = 'Stopped' }; DoSvc = @{ start = $ScmStart; status = $Status } }
+        $script:Inst = @(); $script:ScmFail = ''
+    }
+    $tx = { $t = Get-GdidTransmitState; "$($t.state)|$($t.off)|$($t.known)" }
+    & $setAll 4 'Disabled' 'Stopped'
+    $script:Reg['CDPUserSvc_ab12'] = 4; $script:Scm['CDPUserSvc_ab12'] = @{ start = 'Disabled'; status = 'Stopped' }; $script:Inst = @('CDPUserSvc_ab12')
+    $r.tx1 = & $tx                                   # сценарий 1: все три отключены
+    $t1 = Get-GdidTransmitState
+    $r.tx1Inst = "$(@(@($t1.services) | Where-Object { $_.name -eq 'CDPUserSvc' })[0].instances.Count)"
+    & $setAll 4 'Disabled' 'Stopped'; $script:Reg['CDPUserSvc'] = 2
+    $r.tx2 = & $tx                                   # 2: CDPUserSvc включена
+    & $setAll 4 'Disabled' 'Stopped'; $script:Reg['DoSvc'] = 3
+    $r.tx3 = & $tx                                   # 3: DoSvc включена (по требованию)
+    & $setAll 4 'Disabled' 'Stopped'; $script:Reg['CDPSvc'] = 2
+    $r.tx4 = & $tx                                   # 4: CDPSvc включена
+    & $setAll 4 'Disabled' 'Stopped'; $script:Reg['DoSvc'] = 'missing'; $script:Scm.Remove('DoSvc')
+    $r.tx5 = & $tx                                   # 5: службы нет
+    $r.tx5State = (Get-SvcStartInfo 'DoSvc').state
+    & $setAll 4 'Disabled' 'Stopped'; $script:Reg['CDPSvc'] = 'denied'
+    $r.tx6 = & $tx                                   # 6: реестр не читается
+    $r.tx6State = "$((Get-SvcStartInfo 'CDPSvc').state)|$((Get-SvcStartInfo 'CDPSvc').start)"
+    & $setAll 4 'Disabled' 'Stopped'
+    $script:Reg['CDPUserSvc_cd34'] = 2; $script:Scm['CDPUserSvc_cd34'] = @{ start = 'Automatic'; status = 'Stopped' }; $script:Inst = @('CDPUserSvc_cd34')
+    $r.txInst = & $tx                                # копия CDPUserSvc заведена до отключения
+    & $setAll 4 'Disabled' 'Stopped'; $script:Scm['CDPSvc'] = @{ start = 'Automatic'; status = 'Stopped' }
+    $r.txScm = & $tx                                 # диспетчер служб до перезагрузки помнит прежнее
+    & $setAll 4 'Disabled' 'Running'
+    $r.txRun = & $tx                                 # отключены, но ещё работают
+    & $setAll 4 'Disabled' 'Stopped'; $script:ScmFail = 'DoSvc'
+    $r.txScmFail = & $tx                             # диспетчер служб не ответил
+
+    # ===== опись: свои пробные ключи =====
+    $gt = 'HKCU:\Software\W11PGdidAudit-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $gtRel = $gt -replace '^HKCU:\\', ''
+    $dev = '0018ABCDEF012345'
+    $script:IdCrlNegCache = "$gt\NegativeCache"
+    $script:Roots = @(@{ who = 'user'; path = "$gt\User" }, @{ who = 'system'; path = "$gt\System" }, @{ who = 'other'; path = "$gt\Other" })
+    function Get-IdCrlRoots { return $script:Roots }
+    $script:Hives = $null; $script:HivesFail = $false
+    function Get-GdidHiveNames { if ($script:HivesFail) { throw 'HKU не читается' }; return @($script:Hives) }
+    $plNames = @()
+    $plk = Open-RegKeyRead 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+    if ($plk) { $plNames = @($plk.GetSubKeyNames()); $plk.Close() }
+    $script:Hives = $plNames
+    function Set-TestKeyLock {
+        param([string]$Rel, [bool]$Lock, [string]$Rights = 'QueryValues, EnumerateSubKeys')
+        $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+        $rule = New-Object System.Security.AccessControl.RegistryAccessRule($me, [System.Security.AccessControl.RegistryRights]$Rights, 'Deny')
+        $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($Rel, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
+                                                                [System.Security.AccessControl.RegistryRights]'ChangePermissions, ReadPermissions')
+        if (-not $k) { return }
+        try { $acl = $k.GetAccessControl(); if ($Lock) { $acl.AddAccessRule($rule) } else { $null = $acl.RemoveAccessRule($rule) }; $k.SetAccessControl($acl) }
+        finally { $k.Close() }
+    }
+    $locks = New-Object System.Collections.Generic.List[object]
+    $mkCopies = {
+        foreach ($root in @("$gt\User", "$gt\System", "$gt\Other")) {
+            New-Item -Path "$root\ExtendedProperties" -Force | Out-Null
+            New-ItemProperty -LiteralPath "$root\ExtendedProperties" -Name 'LID' -Value $dev -Force | Out-Null
+        }
+        New-Item -Path "$gt\System\DeviceIdentities\production\$($script:UserSid)\02me" -Force | Out-Null
+        New-ItemProperty -LiteralPath "$gt\System\DeviceIdentities\production\$($script:UserSid)\02me" -Name 'DeviceId' -Value $dev -Force | Out-Null
+        New-Item -Path "$gt\System\DeviceIdentities\production\S-1-5-21-1-2-3-4242\02other" -Force | Out-Null
+        New-ItemProperty -LiteralPath "$gt\System\DeviceIdentities\production\S-1-5-21-1-2-3-4242\02other" -Name 'DeviceId' -Value $dev -Force | Out-Null
+    }
+    # ===== стирание: заглушки системы =====
+    $script:Calls = New-Object System.Collections.Generic.List[string]
+    function New-FakeSvc { param([string]$Name, [string]$StartType)
+        $o = [pscustomobject]@{ Name = $Name; Status = 'Running'; StartType = $StartType }
+        $o | Add-Member -MemberType ScriptMethod -Name WaitForStatus -Value { param($s, $t) if ($this.Name -eq $script:DeadSvc) { throw 'служба не запустилась' } }
+        $o
+    }
+    $script:WipeSvcs = @(); $script:DeadSvc = ''; $script:StuckSvc = ''
+    $script:TaskFail = @{}; $script:ClearThrows = $false; $script:Unchecked = 0
+    $script:Journal = @(); $script:JournalOk = $true; $script:RestoreFail = $false
+    $script:CredUsers = @(@{ name = 'me'; sid = $script:UserSid; session = $true })
+    $script:CdpCache = Join-Path $env:TEMP ('w11p-ga-cdp-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $wipeStubs = {
+        function script:Get-ManagedReason { return '' }
+        function script:Get-UncheckedProfiles { $script:Calls.Add('scan'); return [int]$script:Unchecked }
+        function script:Get-Service { param([string]$Name, $ErrorAction) if ($Name) { @($script:WipeSvcs | Where-Object { $_.Name -eq $Name }) } else { @($script:WipeSvcs) } }
+        function script:Set-Service { param([string]$Name, $StartupType, $ErrorAction) $script:Calls.Add("set $Name=$StartupType") }
+        function script:Start-Service { param([string]$Name, $ErrorAction, $WarningAction) $script:Calls.Add("start $Name") }
+        function script:Stop-ServiceWait { param([string]$Name) $script:Calls.Add("stop $Name"); return ($Name -ne $script:StuckSvc) }
+        function script:Invoke-OneShotTask { param([string]$TaskName, [string]$CmdLine, [switch]$AsSystem, [string]$Account = '', [string]$AccountSid = '', [int]$StartSeconds = 0)
+            $who = $(if ($AsSystem) { 'system' } else { $Account }); $script:Calls.Add("task $who"); return (-not $script:TaskFail.ContainsKey($who)) }
+        function script:cmdkey.exe { $script:Calls.Add("cmdkey $args") }
+        function script:Clear-Folder { if ($script:ClearThrows) { throw 'чистка сломалась' }; $script:Calls.Add('clear-cdp'); return 0.0 }
+        function script:Convert-ToSessionPath { param([string]$Path) return $Path }
+        function script:Get-OtherSessionUser { return $null }
+        function script:Get-GdidCredUsers { return @($script:CredUsers) }
+        function script:Read-JournalFile { param([switch]$ReadOnly) return @{ trusted = $script:JournalOk; items = @($script:Journal) } }
+        function script:Get-SvcJournalState { param([string]$Name, $Svc) return @{ kind = 'svc'; name = $Name; old = '3'; delayed = ''; running = $true; newValue = '4' } }
+        function script:Write-AheadEntry { param($Entry) if (-not $script:JournalOk) { return $false }; $script:Calls.Add('journal-ahead'); return $true }
+        function script:Undo-AheadEntry { param($Entry) $script:Calls.Add('journal-undo') }
+        function script:Restore-JournalEntry { param($e) $script:Calls.Add(("restore {0}={1}" -f $e.name, $e.old)); if ($script:RestoreFail) { return @{ ok = $false; error = 'тип запуска не вернулся' } }; return @{ ok = $true } }
+        function script:Remove-JournalKey { param([string]$Key) $script:Calls.Add("journal-remove $Key") }
+    }
+    $wipe = { $script:Calls.Clear(); $script:LogLines.Clear(); $f0 = $script:Failures
+              $ok = Invoke-GdidWipe; $w = $script:GdidWipeResult
+              @{ ok = $ok; state = "$($w.state)"; calls = (@($script:Calls) -join ' | '); fails = $script:Failures - $f0; res = $w; log = (@($script:LogLines) -join ' / ') } }
+    try {
+        Remove-Item -LiteralPath $gt -Recurse -Force -ErrorAction SilentlyContinue
+        & $mkCopies
+        # --- опись: несколько профилей, чужие личности, места без доступа ---
+        $sc = Get-GdidScan
+        $r.scanFound = "$($sc.state)|$(@($sc.copies).Count)"
+        $r.scanWho = (@(@($sc.copies) | ForEach-Object { "$($_.place):$($_.who)" } | Sort-Object) -join ',')
+        Remove-Item -LiteralPath $gt -Recurse -Force
+        New-Item -Path "$gt\User\Immersive\production\Property" -Force | Out-Null
+        Set-TestKeyLock "$gtRel\User\Immersive\production\Property" $true; $locks.Add("$gtRel\User\Immersive\production\Property")
+        $sc = Get-GdidScan
+        $r.scanDenied = "$($sc.state)|$(@($sc.copies).Count)|$(@($sc.unreadable).Count)"        # 6: нет доступа — не «чисто»
+        Set-TestKeyLock "$gtRel\User\Immersive\production\Property" $false; $locks.Clear()
+        $script:Hives = @()                                                                     # 8: профили не в Windows
+        $sc = Get-GdidScan
+        $r.scanUnloaded = "$($sc.state)|$($sc.unchecked -ge 1)"
+        $script:HivesFail = $true                                                               # список кустов не читается
+        $sc = Get-GdidScan
+        $r.scanHivesFail = "$($sc.state)|$(@($sc.unreadable) -contains 'Registry::HKEY_USERS')"
+        $script:HivesFail = $false; $script:Hives = $plNames
+        $sc = Get-GdidScan
+        $r.scanClean = "$($sc.state)"
+        # проверка модуля: «не проверено» — не «номера нет», и страж это видит
+        $def = @{ M = 'gdidtest'; T = 'gdidwipe'; C = 'номер стёрт'; V = ''; Min = 0 }
+        $script:OsBuild = 0
+        $script:Hives = @()
+        $cd = Check-Def $def
+        $r.checkUnverified = "$($cd.ok)|$($cd.unverified)|$($cd.actual -like 'не проверено*')"
+        $script:Hives = $plNames
+        $cd = Check-Def $def
+        $r.checkClean = "$($cd.ok)|$([bool]$cd.unverified)|$($cd.actual)"
+
+        # --- стирание ---
+        . $wipeStubs
+        & $mkCopies
+        $script:WipeSvcs = @((New-FakeSvc 'wlidsvc' 'Manual'), (New-FakeSvc 'CDPSvc' 'Automatic'), (New-FakeSvc 'CDPUserSvc_ab12' 'Automatic'))
+        $w = & $wipe
+        $r.wipeClean = "$($w.ok)|$($w.state)"
+        $c = $w.calls
+        $iScan = $c.LastIndexOf('scan'); $iRest = $c.IndexOf('restore wlidsvc=3')
+        $r.wipeOrder = ($c.IndexOf('journal-ahead') -ge 0 -and $c.IndexOf('journal-ahead') -lt $c.IndexOf('set wlidsvc=Disabled') -and
+                        $c.IndexOf('stop wlidsvc') -lt $c.IndexOf('task me') -and $c.IndexOf('task me') -lt $c.IndexOf('task system') -and
+                        $c.IndexOf('task system') -lt $c.IndexOf('clear-cdp') -and $iScan -gt $c.IndexOf('clear-cdp') -and $iRest -gt $iScan -and
+                        $c.IndexOf('journal-remove svc|wlidsvc') -gt $iRest -and $c.IndexOf('start CDPUserSvc_ab12') -gt $iRest)
+        $r.wipeCalls = $c
+        $r.wipeStages = (@($w.res.stages.Keys | ForEach-Object { "$_=$($w.res.stages[$_])" }) -join ',')
+        $w = & $wipe
+        $r.wipeAgain = "$($w.ok)|$($w.state)"                                                   # повтор: копий нет
+        # 12: учётные данные пользователя не убрались
+        & $mkCopies; $script:TaskFail = @{ me = $true }
+        $w = & $wipe
+        $r.wipeCredUser = "$($w.ok)|$($w.state)|$($w.res.stages['userCredentials'])|$($w.calls -like '*restore wlidsvc=3*')|$($w.fails)"
+        # учётные данные у системы
+        & $mkCopies; $script:TaskFail = @{ system = $true }
+        $w = & $wipe
+        $r.wipeCredSys = "$($w.ok)|$($w.state)|$($w.res.stages['systemCredentials'])"
+        $script:TaskFail = @{}
+        # другой вошедший пользователь: его задача тоже, не вышло — частично
+        & $mkCopies; $script:CredUsers = @(@{ name = 'me'; sid = $script:UserSid; session = $true }, @{ name = 'other'; sid = 'S-1-5-21-1-2-3-4242'; session = $false })
+        $script:TaskFail = @{ other = $true }
+        $w = & $wipe
+        $r.wipeOtherUser = "$($w.ok)|$($w.state)|$($w.calls -like '*task other*')|$($w.res.unchecked)"
+        $script:TaskFail = @{}; $script:CredUsers = @(@{ name = 'me'; sid = $script:UserSid; session = $true })
+        # 13: реестр — Windows не даёт удалить единственную копию
+        Remove-Item -LiteralPath $gt -Recurse -Force
+        New-Item -Path "$gt\User\Immersive\production\Property" -Force | Out-Null
+        New-ItemProperty -LiteralPath "$gt\User\Immersive\production\Property" -Name $dev -Value 'x' -Force | Out-Null
+        Set-TestKeyLock "$gtRel\User\Immersive\production\Property" $true 'SetValue'; $locks.Add("$gtRel\User\Immersive\production\Property|SetValue")
+        $w = & $wipe
+        $r.wipeRegDenied = "$($w.ok)|$($w.state)|$($w.res.stages['registry'])|$($w.res.after)"
+        Set-TestKeyLock "$gtRel\User\Immersive\production\Property" $false 'SetValue'; $locks.Clear()
+        Remove-Item -LiteralPath $gt -Recurse -Force
+        # 14: в кэше устройств файл остался
+        & $mkCopies
+        New-Item -ItemType Directory -Force (Join-Path $script:CdpCache 'L.me') | Out-Null
+        Set-Content (Join-Path $script:CdpCache 'L.me\ActivitiesCache.db') 'x'
+        $w = & $wipe
+        $r.wipeCdp = "$($w.ok)|$($w.state)|$($w.res.stages['cdp'])"
+        Remove-Item -LiteralPath $script:CdpCache -Recurse -Force -ErrorAction SilentlyContinue
+        # 15: сбой посреди стирания — службы всё равно возвращены
+        & $mkCopies; $script:ClearThrows = $true
+        $w = & $wipe
+        $r.wipeThrow = "$($w.ok)|$($w.state)|$($w.calls -like '*restore wlidsvc=3*')|$($w.calls -like '*start CDPSvc*')|$($w.fails)"
+        $script:ClearThrows = $false
+        # служба не остановилась — не стёрто ничего, службы как были
+        & $mkCopies; $script:StuckSvc = 'CDPSvc'
+        $w = & $wipe
+        $r.wipeStuck = "$($w.ok)|$($w.state)|$(-not ($w.calls -like '*task *'))|$($w.calls -like '*restore wlidsvc=3*')|$((Get-RegValue "$gt\User\ExtendedProperties" 'LID') -eq $dev)"
+        $script:StuckSvc = ''
+        # профили не в Windows — копий нет, но и «стёрто отовсюду» нет
+        $script:Unchecked = 2
+        $w = & $wipe
+        $r.wipeUnchecked = "$($w.ok)|$($w.state)"
+        $script:Unchecked = 0
+        # журнал отката не пишется — wlidsvc не трогается, номер тоже
+        & $mkCopies; $script:JournalOk = $false
+        $w = & $wipe
+        $r.wipeNoJournal = "$($w.ok)|$($w.state)|$(-not ($w.calls -like '*set wlidsvc*'))|$(-not ($w.calls -like '*task *'))"
+        $script:JournalOk = $true
+        # 16: прерванное прежде стирание оставило wlidsvc отключённой, «как было» — в журнале
+        $script:Journal = @([pscustomobject]@{ kind = 'svc'; name = 'wlidsvc'; old = '2'; delayed = '1'; running = $true; newValue = '4'; time = 's'; run = 'old' })
+        $script:WipeSvcs = @((New-FakeSvc 'wlidsvc' 'Disabled'))
+        $w = & $wipe
+        $r.wipeResume = "$($w.ok)|$($w.calls -like '*restore wlidsvc=2*')|$(-not ($w.calls -like '*journal-ahead*'))|$($w.calls -like '*journal-remove svc|wlidsvc*')"
+        # тип запуска wlidsvc не вернулся — это не успех
+        & $mkCopies; $script:RestoreFail = $true; $script:Journal = @()
+        $script:WipeSvcs = @((New-FakeSvc 'wlidsvc' 'Manual'))
+        $w = & $wipe
+        $r.wipeWlidBack = "$($w.ok)|$($w.state)|$(@($w.res.notBack) -join ',')|$(-not ($w.calls -like '*journal-remove*'))"
+        $script:RestoreFail = $false
+        # пробный запуск — ничего не меняется
+        & $mkCopies; $DryRun = $true
+        $w = & $wipe
+        $r.wipeDry = "$($w.ok)|$($w.state)|$(-not ($w.calls -like '*set *'))|$((Get-RegValue "$gt\User\ExtendedProperties" 'LID') -eq $dev)"
+        $DryRun = $false
+    } catch {
+        $r.error = "$($_.Exception.Message) @ $($_.InvocationInfo.ScriptLineNumber)"
+    } finally {
+        foreach ($l in $locks.ToArray()) { $p = "$l" -split '\|'; try { Set-TestKeyLock $p[0] $false $(if ($p.Count -gt 1) { $p[1] } else { 'QueryValues, EnumerateSubKeys' }) } catch { } }
+        Remove-Item -LiteralPath $gt -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:CdpCache -Recurse -Force -ErrorAction SilentlyContinue
+        $r.keyGone = -not (Test-Path -LiteralPath $gt)
+    }
+
+    # ===== «Вернуть как было»: службы по журналу =====
+    $script:Restored = New-Object System.Collections.Generic.List[string]
+    $script:ChangeFail = @{}
+    function Restore-ChangeKey { param([string]$Key) $script:Restored.Add($Key); if ($script:ChangeFail.ContainsKey($Key)) { return @{ ok = $false; error = 'тип запуска не вернулся' } }; return @{ ok = $true } }
+    $kC = 'reg|hklm:\system\currentcontrolset\services\cdpsvc|start'; $kD = 'reg|hklm:\system\currentcontrolset\services\dosvc|start'
+    $script:Journal = @([pscustomobject]@{ kind = 'reg'; path = 'HKLM:\SYSTEM\CurrentControlSet\Services\CDPSvc'; name = 'Start' },
+                        [pscustomobject]@{ kind = 'reg'; path = 'HKLM:\SYSTEM\CurrentControlSet\Services\DoSvc'; name = 'Start' })
+    $script:JournalOk = $true; $script:ChangeFail = @{ $kD = $true }
+    $rs = @(Restore-GdidServiceStarts)
+    $r.restore1 = (@($rs | ForEach-Object { "$($_.name)=$($_.result)" }) -join ',')            # 16: часть не вернулась — «failed», а не «не меняла»
+    $script:Journal = @(); $script:ChangeFail = @{}
+    $rs = @(Restore-GdidServiceStarts)
+    $r.restore2 = (@($rs | ForEach-Object { "$($_.name)=$($_.result)" }) -join ',')            # 17: повторный возврат
+    $script:JournalOk = $false
+    $rs = @(Restore-GdidServiceStarts)
+    $r.restoreUntrusted = (@($rs | ForEach-Object { "$($_.result)" } | Select-Object -Unique) -join ',')
+    $script:JournalOk = $true
+    # службы после возврата: диспетчер служб помнит «отключена», DoSvc не отдаётся
+    $script:Reg = @{ CDPSvc = 2; DoSvc = 2; CDPUserSvc = 2; CDPUserSvc_ab12 = 4 }
+    $script:Scm = @{ CDPSvc = @{ start = 'Disabled'; status = 'Stopped' }; DoSvc = @{ start = 'Disabled'; status = 'Stopped' }
+                     CDPUserSvc = @{ start = 'Disabled'; status = 'Stopped' }; CDPUserSvc_ab12 = @{ start = 'Disabled'; status = 'Stopped' } }
+    $script:Inst = @('CDPUserSvc_ab12'); $script:ScmFail = ''; $script:StartFail = ''
+    function Get-Service {
+        [CmdletBinding()] param([string]$Name)
+        $s = $script:Scm[$Name]
+        if (-not $s) { Write-Error -Message 'нет' -ErrorId 'NoServiceFoundForGivenName'; return }
+        $o = [pscustomobject]@{ Name = $Name; Status = $s.status; StartType = $s.start }
+        $o | Add-Member -MemberType ScriptMethod -Name WaitForStatus -Value { param($st, $t) if ($script:Scm[$this.Name].status -ne 'Running') { throw 'не запустилась' } }
+        $o
+    }
+    function Set-Service { param([string]$Name, $StartupType, $ErrorAction) if ($Name -eq 'DoSvc') { throw 'Отказано в доступе' }; $script:Scm[$Name].start = "$StartupType" }
+    function Start-Service { param([string]$Name, $ErrorAction, $WarningAction) if ($Name -eq $script:StartFail) { throw 'служба не запустилась' }; $script:Scm[$Name].status = 'Running' }
+    $sy = Sync-GdidRestoredServices @('CDPSvc', 'DoSvc', 'CDPUserSvc')
+    $r.syncPending = (@($sy.pending) -join ',')
+    $r.syncFailed = @($sy.failed).Count
+    $r.syncRunning = "$($script:Scm['CDPSvc'].status)|$($script:Scm['CDPUserSvc_ab12'].status)|$($script:Scm['DoSvc'].status)"
+    $script:Scm['CDPSvc'] = @{ start = 'Disabled'; status = 'Stopped' }; $script:StartFail = 'CDPSvc'
+    $sy = Sync-GdidRestoredServices @('CDPSvc')
+    $r.syncStartFail = "$(@($sy.failed).Count)|$(@($sy.pending).Count)"
+
+    # ===== учётные записи (сценарии 9-11) =====
+    $script:Locals = @{}
+    function Get-LocalUser { [CmdletBinding()] param($SID, $Name)
+        if (-not $SID) { foreach ($k in @($script:Locals.Keys)) { [pscustomobject]@{ Name = "u$k"; SID = $k; PrincipalSource = $script:Locals[$k] } }; return }
+        $v = $script:Locals["$SID"]
+        if (-not $v) { throw 'User was not found.' }
+        [pscustomobject]@{ Name = 'u'; SID = "$SID"; PrincipalSource = $v } }
+    $msaRoot = 'HKCU:\Software\W11PGdidMsa-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $script:HiveRoots = @(@{ sid = 'S-1-5-21-9-9-9-500'; root = "$msaRoot\Admin" }, @{ sid = 'S-1-5-21-9-9-9-1001'; root = "$msaRoot\Person" })
+    function Get-GdidUserHiveRoots { return @($script:HiveRoots) }
+    try {
+        # движок — локальный администратор, за компьютером — человек с учётной записью Microsoft
+        $script:Locals = @{ 'S-1-5-21-9-9-9-500' = 'Local'; 'S-1-5-21-9-9-9-1001' = 'MicrosoftAccount' }
+        $r.msaPerson = Test-MsaLogon
+        $script:Locals = @{ 'S-1-5-21-9-9-9-500' = 'Local'; 'S-1-5-21-9-9-9-1001' = 'Local' }
+        $r.msaLocal = Test-MsaLogon
+        # не локальная учётная запись (домен, Entra ID): по профилю
+        $script:Locals = @{}
+        New-Item -Path "$msaRoot\Admin\SOFTWARE\Microsoft\IdentityCRL\UserExtendedProperties" -Force | Out-Null
+        New-Item -Path "$msaRoot\Person\SOFTWARE\Microsoft\IdentityCRL\UserExtendedProperties" -Force | Out-Null
+        $r.msaNoLocalEmpty = Test-MsaLogon
+        New-Item -Path "$msaRoot\Person\SOFTWARE\Microsoft\IdentityCRL\UserExtendedProperties\someone@example.com" -Force | Out-Null
+        $r.msaNoLocalProfile = Test-MsaLogon
+        $script:Locals = @{ 'S-1-5-21-9-9-9-500' = 'Local'; 'S-1-5-21-9-9-9-1001' = 'Local'; 'S-1-5-21-9-9-9-1002' = 'MicrosoftAccount' }
+        $r.otherMsa = (@(Get-OtherMsaAccounts) -join ',')
+    } finally { Remove-Item -LiteralPath $msaRoot -Recurse -Force -ErrorAction SilentlyContinue }
+    # компьютер организации: домен, Entra ID, рабочая учётная запись, MDM; WMI не ответил
+    # (настоящие функции — заново: раздел стирания подменял их заглушками)
+    foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-ManagedReason', 'Get-ManagedReasonNow') }, $true)) { Invoke-Expression $fn.Extent.Text }
+    $script:Cim = 'home'; $script:Keys = @{}
+    function Get-CimInstance { [CmdletBinding()] param($ClassName) if ($script:Cim -eq 'fail') { throw 'WMI не отвечает' }; [pscustomobject]@{ PartOfDomain = ($script:Cim -eq 'domain') } }
+    function Test-GdidKeyHasChildren { param([string]$Path) foreach ($k in @($script:Keys.Keys)) { if ($Path -like "*$k") { return $script:Keys[$k] } }; return $false }
+    $script:Enroll = $null
+    function Open-RegKeyRead { param([string]$Path)
+        if ($Path -ne 'HKLM:\SOFTWARE\Microsoft\Enrollments' -or $null -eq $script:Enroll) { return $null }
+        $o = [pscustomobject]@{ Subs = $script:Enroll }
+        $o | Add-Member ScriptMethod GetSubKeyNames { @($this.Subs.Keys) }
+        $o | Add-Member ScriptMethod OpenSubKey { param($n, $w) $v = $this.Subs[$n]; $k = [pscustomobject]@{ V = $v }
+            $k | Add-Member ScriptMethod GetValue { param($nm) $this.V[$nm] }; $k | Add-Member ScriptMethod Close { }; $k }
+        $o | Add-Member ScriptMethod Close { }
+        $o }
+    $mr = { $script:GdidManagedCache = $null; Get-ManagedReason }
+    $r.mgHome = & $mr
+    $script:Cim = 'domain'; $r.mgDomain = & $mr
+    $script:Cim = 'fail'; $r.mgWmiFail = & $mr
+    $script:Cim = 'home'; $script:Keys = @{ 'CloudDomainJoin\JoinInfo' = $true }; $r.mgEntra = & $mr
+    $script:Keys = @{ 'WorkplaceJoin\JoinInfo' = $true }; $r.mgWork = & $mr
+    $script:Keys = @{ 'CloudDomainJoin\JoinInfo' = $null }; $r.mgUnread = & $mr
+    $script:Keys = @{}; $script:Enroll = @{ 'A1' = @{ ProviderID = 'MS DM Server'; EnrollmentState = 1 } }; $r.mgMdm = & $mr
+    $script:Enroll = @{ 'A1' = @{ ProviderID = 'Local Authority'; EnrollmentState = 1 } }; $r.mgMdmLocal = & $mr
+    $script:Enroll = $null
+    function Test-MsaLogon { return $script:IsMsa }
+    $script:IsMsa = $true; $script:GdidRefusal = $null; $script:Cim = 'domain'; $script:GdidManagedCache = $null
+    $r.refuseMsa = Get-GdidLockRefusal
+    $script:IsMsa = $false; $script:GdidRefusal = $null; $script:GdidManagedCache = $null
+    $r.refuseManaged = Get-GdidLockRefusal
+    $script:Cim = 'home'; $script:GdidRefusal = $null; $script:GdidManagedCache = $null
+    $r.refuseNone = "[$(Get-GdidLockRefusal)]"
+    $r
+}
+$gaDone = Wait-Job $gaJob -Timeout 240
+# в выводе задания — только итог (лишний вывод не должен его подменить)
+$ga = $(if ($gaDone) { @(Receive-Job $gaJob) | Where-Object { $_ -is [hashtable] } | Select-Object -Last 1 } else { $null })
+Remove-Job $gaJob -Force
+Check 'аудит GDID отработал' ($null -ne $ga -and -not $ga.error) $(if ($ga) { "$($ga.error)" } else { 'задание не уложилось во время' })
+if ($ga) {
+    Check 'аудит GDID: функции найдены в движке' (-not $ga.missingFns) $ga.missingFns
+    # службы: настоящая система (только чтение)
+    Check 'тип запуска службы читается словом' ($ga.realCdp -in @('Automatic', 'Manual', 'Disabled', 'Missing', 'Boot', 'System')) $ga.realCdp
+    Check 'службы нет — Missing, а не «не прочиталось»' ($ga.realMissing -eq 'Missing') $ga.realMissing
+    Check 'копии CDPUserSvc перечисляются' ([bool]$ga.realInst)
+    Check 'передача: состояние одно из четырёх, проверены три службы' ($ga.realTx -match '^(Off|Pending|On|Unknown)\|(True|False)\|3$') $ga.realTx
+    # 1-6 и копии CDPUserSvc
+    Check 'GDID 1: все три службы отключены — передача отключена' ($ga.tx1 -eq 'Off|True|True' -and $ga.tx1Inst -eq '1') "$($ga.tx1) копий $($ga.tx1Inst)"
+    Check 'GDID 2: CDPUserSvc включена — передача идёт' ($ga.tx2 -eq 'On|False|True') $ga.tx2
+    Check 'GDID 3: DoSvc включена — передача идёт' ($ga.tx3 -eq 'On|False|True') $ga.tx3
+    Check 'GDID 4: CDPSvc включена — передача идёт' ($ga.tx4 -eq 'On|False|True') $ga.tx4
+    Check 'GDID 5: службы нет — Missing, остальное отключено — передачи нет' ($ga.tx5 -eq 'Off|True|True' -and $ga.tx5State -eq 'Missing') "$($ga.tx5) $($ga.tx5State)"
+    Check 'GDID 6: тип запуска не читается — ReadError, «отключено» не сказано' ($ga.tx6 -eq 'Unknown|False|False' -and $ga.tx6State -eq 'ReadError|-2') "$($ga.tx6) $($ga.tx6State)"
+    Check 'копия CDPUserSvc, заведённая до отключения, — ещё не «отключено»' ($ga.txInst -eq 'Pending|False|True') $ga.txInst
+    Check 'диспетчер служб помнит прежний тип запуска — ещё не «отключено»' ($ga.txScm -eq 'Pending|False|True') $ga.txScm
+    Check 'отключённые, но работающие службы — ещё не «отключено»' ($ga.txRun -eq 'Pending|False|True') $ga.txRun
+    Check 'диспетчер служб не ответил — «не проверено»' ($ga.txScmFail -eq 'Unknown|False|False') $ga.txScmFail
+    # опись (6-8)
+    Check 'GDID 7: несколько профилей — копии найдены у всех, чужие личности не «свои»' ($ga.scanFound -eq 'Found|5' -and
+          $ga.scanWho -eq 'identity:other,identity:user,lid:other,lid:system,lid:user') "$($ga.scanFound) $($ga.scanWho)"
+    Check 'опись: место без доступа — «не проверено», а не «чисто»' ($ga.scanDenied -eq 'Unverified|0|1') $ga.scanDenied
+    Check 'GDID 8: профили не в Windows — «не проверено»' ($ga.scanUnloaded -eq 'Unverified|True') $ga.scanUnloaded
+    Check 'опись: список кустов не прочитался — записано как непроверенное' ($ga.scanHivesFail -eq 'Unverified|True') $ga.scanHivesFail
+    Check 'опись: проверено всё и копий нет — NotFound' ($ga.scanClean -eq 'NotFound') $ga.scanClean
+    Check 'проверка модуля: «не проверено» — не «номера нет»' ($ga.checkUnverified -eq 'False|True|True') $ga.checkUnverified
+    Check 'проверка модуля: проверено всё — «номера нет»' ($ga.checkClean -eq 'True|False|номера нет') $ga.checkClean
+    # стирание (12-16)
+    Check 'стирание: копии стёрты — Clean' ($ga.wipeClean -eq 'True|Clean') "$($ga.wipeClean) / $($ga.wipeStages)"
+    Check 'стирание идёт по шагам: журнал, службы, учётные данные, реестр, кэш, проверка, возврат' ([bool]$ga.wipeOrder) $ga.wipeCalls
+    Check 'повторное стирание: копий нет — NotFound, успех' ($ga.wipeAgain -eq 'True|NotFound') $ga.wipeAgain
+    Check 'GDID 12: учётные данные не убрались — Partial, службы возвращены' ($ga.wipeCredUser -eq 'False|Partial|Failed|True|1') $ga.wipeCredUser
+    Check 'стирание: учётные данные системы не убрались — Partial' ($ga.wipeCredSys -eq 'False|Partial|Failed') $ga.wipeCredSys
+    Check 'стирание: у другого вошедшего пользователя — своя задача, неудача видна' ($ga.wipeOtherUser -eq 'False|Partial|True|1') $ga.wipeOtherUser
+    Check 'GDID 13: Windows не дала убрать копию — AccessDenied' ($ga.wipeRegDenied -eq 'False|AccessDenied|AccessDenied|1') $ga.wipeRegDenied
+    Check 'GDID 14: кэш устройств не очистился — Partial' ($ga.wipeCdp -eq 'False|Partial|Partial') $ga.wipeCdp
+    Check 'GDID 15: сбой посреди стирания — не успех, службы возвращены' ($ga.wipeThrow -eq 'False|Partial|True|True|1') $ga.wipeThrow
+    Check 'служба не остановилась — не стёрто ничего, wlidsvc возвращена' ($ga.wipeStuck -eq 'False|Failed|True|True|True') $ga.wipeStuck
+    Check 'профили не в Windows — «не проверено», не успех' ($ga.wipeUnchecked -eq 'False|Unverified') $ga.wipeUnchecked
+    Check 'журнал отката не пишется — wlidsvc и номер не тронуты' ($ga.wipeNoJournal -eq 'False|Failed|True|True') $ga.wipeNoJournal
+    Check 'GDID 16: wlidsvc, оставленная прерванным стиранием, возвращается по журналу' ($ga.wipeResume -eq 'True|True|True|True') $ga.wipeResume
+    Check 'тип запуска wlidsvc не вернулся — не успех, запись в журнале остаётся' ($ga.wipeWlidBack -eq 'False|Partial|wlidsvc (тип запуска)|True') $ga.wipeWlidBack
+    Check 'пробное стирание ничего не меняет' ($ga.wipeDry -eq 'True|DryRun|True|True') $ga.wipeDry
+    Check 'пробные ключи аудита убраны' ([bool]$ga.keyGone)
+    # возврат (16-17)
+    Check 'GDID 16: возврат — что не вернулось, то «не вернулось», а не «не меняла»' ($ga.restore1 -eq 'CDPSvc=restored,CDPUserSvc=notChanged,DoSvc=failed,wlidsvc=notChanged') $ga.restore1
+    Check 'GDID 17: повторный возврат — ничего не меняет и не ошибается' ($ga.restore2 -eq 'CDPSvc=notChanged,CDPUserSvc=notChanged,DoSvc=notChanged,wlidsvc=notChanged') $ga.restore2
+    Check 'возврат при недоверенном журнале — ошибка, а не «не меняла»' ($ga.restoreUntrusted -eq 'failed') $ga.restoreUntrusted
+    Check 'после возврата: CDPSvc и копия CDPUserSvc запущены, DoSvc — после перезагрузки' ($ga.syncRunning -eq 'Running|Running|Stopped' -and $ga.syncPending -like 'DoSvc (*' -and $ga.syncFailed -eq 0) "$($ga.syncRunning) / $($ga.syncPending)"
+    Check 'служба не запустилась после возврата — ошибка' ($ga.syncStartFail -eq '1|0') $ga.syncStartFail
+    # учётные записи (9-11)
+    Check 'GDID 9: за компьютером — учётная запись Microsoft (движок под локальным админом)' ([bool]$ga.msaPerson)
+    Check 'GDID 10: локальные учётные записи — запрет доступен' (-not $ga.msaLocal)
+    Check 'не локальная учётная запись: по профилю (пусто — нет, есть — да)' ((-not $ga.msaNoLocalEmpty) -and $ga.msaNoLocalProfile)
+    Check 'другие учётные записи Microsoft на компьютере названы' ($ga.otherMsa -eq 'uS-1-5-21-9-9-9-1002') $ga.otherMsa
+    Check 'GDID 11: домен, Entra ID, рабочая учётная запись, MDM — компьютер организации' (
+          ($ga.mgHome -eq '') -and ($ga.mgDomain -like '*домене*') -and ($ga.mgEntra -like '*Entra ID*') -and ($ga.mgWork -like '*рабочая или учебная*') -and
+          ($ga.mgMdm -like '*MDM*') -and ($ga.mgMdmLocal -eq '')) ("$($ga.mgHome)|$($ga.mgDomain)|$($ga.mgEntra)|$($ga.mgWork)|$($ga.mgMdm)|$($ga.mgMdmLocal)")
+    Check 'не удалось проверить принадлежность организации — отказ, а не «домашний»' (($ga.mgWmiFail -like 'не удалось проверить*') -and ($ga.mgUnread -like 'не удалось проверить*')) "$($ga.mgWmiFail)|$($ga.mgUnread)"
+    Check 'отказ в запрете: msa, затем организация, иначе — доступен' ($ga.refuseMsa -eq 'msa' -and $ga.refuseManaged -eq 'managed' -and $ga.refuseNone -eq '[]') "$($ga.refuseMsa)|$($ga.refuseManaged)|$($ga.refuseNone)"
+}
+# 20: ответ и коды выхода
+$gdidCmdText = [regex]::Match($engineText, "(?s)if \(\`$GdidReissue\) \{.*?\nif \(\`$GdidRestore\) \{.*?\n\}").Value
+Check 'GDID 20: смена и возврат номера кончаются кодом 2, если не всё прошло' ([regex]::Matches($gdidCmdText, [regex]::Escape('exit $(if ($script:Failures -gt 0) { 2 } else { 0 })')).Count -eq 2)
+Check 'смена номера отдаёт итог стирания в ответе' ($gdidCmdText -match [regex]::Escape("`$gs['wipe'] = `$script:GdidWipeResult"))
+Check 'возврат номера не выводит «True» в журнал' (($gdidCmdText -match [regex]::Escape("`$null = Remove-HostsBlock -Kind 'gdid'")) -and ($gdidCmdText -match [regex]::Escape("`$null = Remove-HostsBlock -Kind 'lock'")))
+Check 'страж не считает «не проверено» сбитой настройкой' ($engineText -match [regex]::Escape('if ($r.unverified) { continue }'))
+if (-not $isAdmin) {
+    # без прав администратора команды отказывают сразу и ничего не трогают
+    foreach ($cmd in @('-GdidReissue', '-GdidRestore')) {
+        $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $engine $cmd 2>&1
+        Check ("{0} без прав администратора: код 1 и отказ" -f $cmd) ($LASTEXITCODE -eq 1 -and (@($out | Where-Object { "$_" -like '*Нужны права администратора*' }).Count -ge 1)) "код $LASTEXITCODE"
+    }
 }
 
 # --------------------------------------------------------------------------- #
@@ -3442,7 +4006,9 @@ Check 'каждая вызываемая функция описана в фай
 Check 'неудачи в изменениях не молчат: приложения, сети, рекламный ID, .reg, рентген, CDPSvc' (
     ($engineText -match 'для новых пользователей не убрано') -and ($engineText -match 'записей сетей, которые Windows не отдала') -and
     ($engineText -match "switch \(Remove-RegStatus \`$adKey 'Id'\)") -and ($engineText -match "Invoke-RegExe \('import ") -and ($engineText -match '\$res\.failed\+\+') -and
-    ($engineText -match "catch \{ \`$kept\.Add\(") -and ($engineText -match 'служба CDPSvc сейчас не запустилась'))
+    ($engineText -match "catch \{ \`$kept\.Add\(") -and
+    # возврат номера: служба, что не запустилась, — ошибка (раньше «[i]» и только про CDPSvc)
+    ($engineText -match [regex]::Escape("Write-Log (`"   [!] служба не запустилась: {0}`" -f `$f); `$script:Failures++")))
 Check 'ни одно «[+]» не прячет ошибку в пустом catch' ($silentOk.Count -eq 0) (($silentOk | ForEach-Object { $_.Trim().Substring(0, [Math]::Min(80, $_.Trim().Length)) }) -join ' | ')
 Check 'очистка буфера не меняет права системной папки' (([regex]::Match($engineText, "(?s)function Purge-Buffer \{.*?\n\}").Value -notmatch 'takeown|icacls'))
 Check 'задачи по маске ищутся только в своих папках' (($engineText -notmatch '\$_\.TaskName -like \$d\.P') -and ([regex]::Matches($engineText, 'Get-TaskGlobTasks \$d\.P').Count -eq 3))

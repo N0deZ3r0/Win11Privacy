@@ -112,6 +112,7 @@ namespace Win11Privacy
                 case 3: return L.T("запуск по требованию");
                 case 4: return L.T("отключена");
                 case -1: return L.T("нет на этой системе");
+                case -2: return L.T("не прочиталось");
                 default: return L.T("запуск при загрузке");
             }
         }
@@ -139,10 +140,22 @@ namespace Win11Privacy
             _gdidTiles.Controls.Add(Tile(L.T("Номер"), string.IsNullOrEmpty(gdid) ? L.T("нет") : ShortGdid(gdid),
                 string.IsNullOrEmpty(gdid) ? L.T("Windows его сейчас не хранит") : L.T("выдан серверами Microsoft"),
                 string.IsNullOrEmpty(gdid) ? Theme.Ok : Theme.Accent));
-            string sendVal = sendOff && dds ? L.T("закрыта") : (sendOff || dds ? L.T("частично") : L.T("идёт"));
-            _gdidTiles.Controls.Add(Tile(L.T("Передача"), sendVal, L.T("службы CDPSvc, DoSvc и их серверы"),
-                sendOff && dds ? Theme.Ok : (sendOff || dds ? Theme.Warn : Theme.Err)));
-            _gdidTiles.Controls.Add(Tile(L.T("Выдача нового"), locked ? L.T("закрыта") : L.T("открыта"),
+            // Передача — по одной проверке движка (transmitState): службы
+            // отключены, но ещё действует прежнее — «после перезагрузки»;
+            // что-то не прочиталось — «не проверено», а не «закрыта».
+            string tstate = Json.GetStr(d, "transmitState");
+            bool sendPending = tstate == "Pending";
+            bool sendUnknown = tstate == "Unknown";
+            string sendVal = sendOff && dds ? L.T("закрыта")
+                : (sendPending && dds ? L.T("после перезагрузки")
+                : (sendUnknown ? L.T("не проверено")
+                : (sendOff || sendPending || dds ? L.T("частично") : L.T("идёт"))));
+            _gdidTiles.Controls.Add(Tile(L.T("Передача"), sendVal, L.T("три службы и их серверы"),
+                sendOff && dds ? Theme.Ok : (sendOff || sendPending || sendUnknown || dds ? Theme.Warn : Theme.Err)));
+            // блок запрета задуман, но побит или устарел — выдача не закрыта
+            bool lockBroken = !locked && Json.GetBool(d, "lockPresent");
+            string lockVal = locked ? L.T("закрыта") : (lockBroken ? L.T("блок побит") : L.T("открыта"));
+            _gdidTiles.Controls.Add(Tile(L.T("Выдача нового"), lockVal,
                 L.T("сервер login.live.com"), locked ? Theme.Ok : Theme.Warn));
             _gdidTiles.Controls.Add(Tile(L.T("Копий на диске"), copies.ToString(), L.T("в реестре и учётных данных"), Theme.Accent));
 
@@ -155,8 +168,9 @@ namespace Win11Privacy
                 sendVal, GSync, false) { Font = this.Font });
             _gdidList.Controls.Add(new WipeRow("lock", L.T("Выдача нового номера"),
                 locked ? L.T("Сервер выдачи закрыт: стёртый номер Windows заменить нечем.")
-                       : L.T("Сервер выдачи открыт: стёртый номер Windows сразу заменит новым."),
-                locked ? L.T("закрыта") : L.T("открыта"), GShield, false) { Font = this.Font });
+                       : (lockBroken ? L.T("Блок сервера выдачи в hosts побит или устарел: стёртый номер Windows может сразу заменить новым. «Запретить выдачу» поставит его заново.")
+                       : L.T("Сервер выдачи открыт: стёртый номер Windows сразу заменит новым.")),
+                lockVal, GShield, false) { Font = this.Font });
             _gdidList.Controls.Add(new WipeRow("logon", L.T("Вход в Windows"),
                 !string.IsNullOrEmpty(managed) ? L.T(managed)
                 : (msa ? L.T("Через учётную запись Microsoft: запретить выдачу номера нельзя — без сервера выдачи она не работает.")
@@ -196,6 +210,20 @@ namespace Win11Privacy
                 Dictionary<string, object> s = Json.Obj(o);
                 int start = Json.GetInt(s, "start");
                 string val = StartName(start) + (Json.GetBool(s, "running") ? L.T(", работает") : "");
+                // CDPUserSvc — шаблон: у каждого пользователя своя копия, и
+                // заведённая до отключения работает по-старому до выхода из Windows
+                List<object> inst = Json.GetArr(s, "instances");
+                if (inst.Count > 0)
+                {
+                    int notOff = 0;
+                    foreach (object io in inst)
+                    {
+                        Dictionary<string, object> ii = Json.Obj(io);
+                        if (Json.GetInt(ii, "start") != 4 || Json.GetBool(ii, "running")) notOff++;
+                    }
+                    val += string.Format(L.T(", копий у пользователей: {0}"), inst.Count);
+                    if (notOff > 0) val += string.Format(L.T(", ещё не отключено: {0}"), notOff);
+                }
                 _gdidList.Controls.Add(new KvRow(Json.GetStr(s, "name"), val, false) { Font = this.Font });
             }
 

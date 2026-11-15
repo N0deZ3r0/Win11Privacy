@@ -70,6 +70,14 @@ foreach ($m in $script:ModuleOrder) {
         $script:Failures++
         continue
     }
+    # Сервер выдачи закрывается для всего компьютера: у других пользователей,
+    # которые входят через учётную запись Microsoft, она тоже перестанет работать
+    if ($m -eq 'gdidlock' -and -not $DryRun) {
+        $otherMsa = @(Get-OtherMsaAccounts)
+        if ($otherMsa.Count -gt 0) {
+            Write-Log ("   [!] на компьютере есть и другие учётные записи Microsoft: {0}. Пока стоит запрет, их вход в учётную запись Microsoft, Магазин, Xbox и OneDrive работать не будут." -f ($otherMsa -join ', '))
+        }
+    }
     $failBefore = $script:Failures + $script:Blocked
     foreach ($d in $modDefs) {
         if ($SkipItems -contains $d.Id) { Write-Log ("   [п] {0} -- пропущено по вашему выбору" -f $d.C); continue }

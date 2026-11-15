@@ -190,11 +190,18 @@ namespace Win11Privacy
             if (Environment.GetEnvironmentVariable("WIN11_TEST_ONLYFOOT") == "1") _lastSpy = null;
             RenderDossier();
 
+            // WIN11_TEST_GDIDSTATE=pending — службы отключены, но копия CDPUserSvc
+            // ещё прежняя, блок запрета побит: так проверяется вёрстка этих подписей
+            bool gdidPending = Environment.GetEnvironmentVariable("WIN11_TEST_GDIDSTATE") == "pending";
             _lastGdid = Json.ParseObject("{\"time\":\"2026-08-31 15:22\",\"gdid\":\"g:6755400000000000\",\"copies\":36,\"numbers\":3," +
-                "\"userCopies\":17,\"systemCopies\":19,\"transmitOff\":false,\"ddsBlocked\":false,\"locked\":false,\"wlidBlocked\":false," +
-                "\"msaLogon\":true,\"managed\":\"\",\"admin\":true,\"services\":[" +
-                "{\"name\":\"CDPSvc\",\"start\":2,\"running\":true},{\"name\":\"CDPUserSvc\",\"start\":2,\"running\":true}," +
-                "{\"name\":\"DoSvc\",\"start\":3,\"running\":false},{\"name\":\"wlidsvc\",\"start\":3,\"running\":false}]}");
+                "\"userCopies\":17,\"systemCopies\":19,\"transmitOff\":false,\"wlidBlocked\":false," +
+                (gdidPending ? "\"transmitState\":\"Pending\",\"ddsBlocked\":true,\"locked\":false,\"lockPresent\":true,\"msaLogon\":false,"
+                             : "\"transmitState\":\"On\",\"ddsBlocked\":false,\"locked\":false,\"lockPresent\":false,\"msaLogon\":true,") +
+                "\"managed\":\"\",\"admin\":true,\"services\":[" +
+                (gdidPending ? "{\"name\":\"CDPSvc\",\"start\":4,\"running\":false},{\"name\":\"CDPUserSvc\",\"start\":4,\"running\":true,\"instances\":[{\"name\":\"CDPUserSvc_4f1a2\",\"start\":2,\"running\":true}]}," +
+                               "{\"name\":\"DoSvc\",\"start\":4,\"running\":false},{\"name\":\"wlidsvc\",\"start\":-2,\"running\":false}]}"
+                             : "{\"name\":\"CDPSvc\",\"start\":2,\"running\":true},{\"name\":\"CDPUserSvc\",\"start\":2,\"running\":true,\"instances\":[{\"name\":\"CDPUserSvc_4f1a2\",\"start\":2,\"running\":true}]}," +
+                               "{\"name\":\"DoSvc\",\"start\":3,\"running\":false},{\"name\":\"wlidsvc\",\"start\":3,\"running\":false}]}"));
             RenderGdid();
 
             RefreshHome();

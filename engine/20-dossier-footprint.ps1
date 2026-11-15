@@ -37,7 +37,9 @@ function Get-Footprint {
     # шестнадцатеричным числом; Microsoft знает его в десятичном виде с «g:».
     # Простое стирание бесполезно — работа с ним на своей вкладке.
     $gdid = ConvertTo-Gdid "$(Get-RegValue 'HKCU:\SOFTWARE\Microsoft\IdentityCRL\ExtendedProperties' 'LID')"
-    $gdidOff = ((Get-SvcStart 'CDPSvc') -eq 4 -and (Get-SvcStart 'DoSvc') -eq 4)
+    # «не передаётся» — той же проверкой, что и на вкладке номера: все три
+    # службы, копии CDPUserSvc у пользователей, и только когда всё прочиталось
+    $gdidOff = [bool](Get-GdidTransmitState).off
     $gdidWarn = $(if ($gdid -and -not $gdidOff) { 'передаётся' } else { '' })
     & $add 'gdid' 'Номер устройства в учётной записи Microsoft (GDID)' 'По этому номеру Microsoft узнаёт компьютер даже через VPN и выдаёт его по запросу властей. Не передавать, сменить или запретить выдачу — на вкладке «Номер устройства».' $(if ($gdid) { $gdid } else { '—' }) 0 $(if ($gdid) { 1 } else { 0 }) $false $gdidWarn
 

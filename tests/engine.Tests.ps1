@@ -298,4 +298,51 @@ Describe 'Движок Win11Privacy: точечные проверки' {
             Assert-True ((Test-DataRootAllowed $Path) -eq $Want) ("получено: " + (Test-DataRootAllowed $Path))
         }
     }
+
+    Context '9. Номер устройства: передача, опись, блоки hosts' {
+        It 'передача: <Case>' -TestCases @(
+            @{ Case = 'все три отключены, копия CDPUserSvc отключена — Off'; Reg = @{ CDPSvc = 4; CDPUserSvc = 4; DoSvc = 4; CDPUserSvc_a1 = 4 }; Inst = @('CDPUserSvc_a1'); Want = 'Off' },
+            @{ Case = 'CDPUserSvc включена — On'; Reg = @{ CDPSvc = 4; CDPUserSvc = 2; DoSvc = 4 }; Inst = @(); Want = 'On' },
+            @{ Case = 'копия CDPUserSvc со старым типом запуска — Pending'; Reg = @{ CDPSvc = 4; CDPUserSvc = 4; DoSvc = 4; CDPUserSvc_a1 = 2 }; Inst = @('CDPUserSvc_a1'); Want = 'Pending' },
+            @{ Case = 'тип запуска не читается — Unknown'; Reg = @{ CDPSvc = 'denied'; CDPUserSvc = 4; DoSvc = 4 }; Inst = @(); Want = 'Unknown' },
+            @{ Case = 'службы DoSvc нет — Off'; Reg = @{ CDPSvc = 4; CDPUserSvc = 4 }; Inst = @(); Want = 'Off' }) {
+            param($Case, $Reg, $Inst, $Want)
+            $script:GdidSvcNames = @('CDPSvc', 'CDPUserSvc', 'DoSvc'); $script:PReg = $Reg; $script:PInst = $Inst
+            function Get-RegRaw { param($Path, $Name) $v = $script:PReg[(Split-Path $Path -Leaf)]
+                if ($null -eq $v) { return @{ ok = $true; exists = $false; kind = ''; value = $null } }
+                if ("$v" -eq 'denied') { return @{ ok = $false; exists = $false; denied = $true; error = 'нет доступа' } }
+                return @{ ok = $true; exists = $true; kind = 'DWord'; value = [int]$v } }
+            function Test-RegKeyExists { param($Path) $v = $script:PReg[(Split-Path $Path -Leaf)]; if ("$v" -eq 'denied') { return $null }; return ($null -ne $v) }
+            function Get-GdidUserSvcInstances { return @{ ok = $true; names = @($script:PInst); error = '' } }
+            function Get-Service { [CmdletBinding()] param([string]$Name)
+                if ($script:PReg.ContainsKey($Name)) {
+                    return [pscustomobject]@{ Name = $Name; Status = 'Stopped'; StartType = $(switch ("$($script:PReg[$Name])") { '2' { 'Automatic' } '3' { 'Manual' } default { 'Disabled' } }) } }
+                Write-Error -Message 'нет' -ErrorId 'NoServiceFoundForGivenName' }
+            $t = Get-GdidTransmitState
+            Assert-True ("$($t.state)" -eq $Want -and [bool]$t.off -eq ($Want -eq 'Off')) ("получено: $($t.state), off=$($t.off); " + (@($t.problems) -join '; '))
+        }
+        It 'опись: копий нет, но профиль не проверен — Unverified, а не «чисто»' {
+            $script:GdidUnreadable = New-Object System.Collections.Generic.List[string]
+            function Get-GdidCopies { $script:GdidUnreadable.Clear(); return @() }
+            function Get-UncheckedProfiles { return 1 }
+            Assert-True ((Get-GdidScan).state -eq 'Unverified') 'опись назвала непроверенное чистым'
+            function Get-UncheckedProfiles { return 0 }
+            Assert-True ((Get-GdidScan).state -eq 'NotFound') 'опись без пропусков названа не «чистой»'
+        }
+        It 'hosts: блок без закрывающей метки не уносит строку «0.0.0.0» человека' {
+            $script:GdidHosts = @('dds.example')
+            $r = Get-HostsLinesWithout @('# mine', '', $script:HostsMarkGdidStart, '0.0.0.0 dds.example', ':: dds.example', '0.0.0.0 ads.mine', '10.0.0.5 nas') 'gdid'
+            Assert-True ((@($r.keep) -join '|') -eq '# mine|0.0.0.0 ads.mine|10.0.0.5 nas' -and $r.found -eq 1) (@($r.keep) -join '|')
+        }
+        It 'hosts: закрывающая метка без начала убирается, строки после неё — нет' {
+            $r = Get-HostsLinesWithout @('# mine', $script:HostsMarkEnd, '0.0.0.0 ads.mine') 'all'
+            Assert-True ((@($r.keep) -join '|') -eq '# mine|0.0.0.0 ads.mine' -and $r.found -eq 1) (@($r.keep) -join '|')
+        }
+        It 'hosts: снятие блока номера не трогает блок запрета' {
+            $script:GdidHosts = @('dds.example'); $script:GdidLockHosts = @('login.example')
+            $lines = @('', $script:HostsMarkGdidStart, '0.0.0.0 dds.example', $script:HostsMarkGdidEnd, '', $script:HostsMarkLockStart, '0.0.0.0 login.example', $script:HostsMarkLockEnd)
+            $r = Get-HostsLinesWithout $lines 'gdid'
+            Assert-True ((@($r.keep) -join '|') -eq ('|' + $script:HostsMarkLockStart + '|0.0.0.0 login.example|' + $script:HostsMarkLockEnd)) (@($r.keep) -join '|')
+        }
+    }
 }

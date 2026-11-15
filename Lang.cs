@@ -59,7 +59,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(1548, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1558, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -1608,6 +1608,16 @@ namespace Win11Privacy
             _map["Чистка: корзина"] = "Cleanup: recycle bin";
             _map["Выключает облачную защиту (MAPS) и отправку образцов. Защита от новых, ещё неизвестных угроз заметно слабеет. На домашних ПК «Защита от подделки» может не дать это применить."] = "Turns off cloud protection (MAPS) and sample submission. Protection against new, not yet known threats gets noticeably weaker. On home PCs, Tamper Protection may refuse to apply this.";
             _map["папку выше папки данных может переименовать не администратор: "] = "the folder above the data folder can be renamed by a non-administrator: ";
+            _map["не прочиталось"] = "could not be read";
+            _map["после перезагрузки"] = "after a restart";
+            _map["не проверено"] = "not verified";
+            _map["три службы и их серверы"] = "three services and their servers";
+            _map["блок побит"] = "block damaged";
+            _map["Блок сервера выдачи в hosts побит или устарел: стёртый номер Windows может сразу заменить новым. «Запретить выдачу» поставит его заново."] = "The issuing server's block in hosts is damaged or out of date: Windows may replace an erased ID with a new one right away. \"Block issuing\" sets it again.";
+            _map[", копий у пользователей: {0}"] = ", per-user copies: {0}";
+            _map[", ещё не отключено: {0}"] = ", not yet disabled: {0}";
+            _map["не удалось проверить, принадлежит ли компьютер организации"] = "could not check whether the computer belongs to an organisation";
+            _map["не проверено: есть места без доступа или профили, которые сейчас не вошли в Windows"] = "not verified: some places cannot be read, or some users are not signed in to Windows right now";
         }
     }
 }

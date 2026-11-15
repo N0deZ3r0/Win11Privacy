@@ -228,7 +228,9 @@ function Apply-Def {
         'gdidwipe' {
             # Пока сервер выдачи открыт, стёртый номер сразу сменится новым —
             # это смена номера, а не запрет. Без закрытого сервера не стираем.
-            if (-not $DryRun -and -not (Test-HostsBlock -Kind 'lock')) {
+            # Закрыт — значит, блок цел и в нём нужный список: побитый блок
+            # с одной меткой раньше тоже считался закрытым сервером.
+            if (-not $DryRun -and -not (Test-HostsBlockCurrent -Kind 'lock')) {
                 Write-Log ("   [-] {0} -- пропущено: сервер выдачи номера не закрыт" -f $d.C); return
             }
             $null = Invoke-GdidWipe
@@ -265,7 +267,7 @@ function Test-DefApplicable {
 
 function Check-Def {
     param($d)
-    $ok = $false; $actual = ''
+    $ok = $false; $actual = ''; $unverified = $false
     if (-not (Test-DefApplicable $d)) {
         return @{ module=$d.M; name=$d.C; ok=$false; na=$true
                   expected="$($d.V)"; actual='нет на этой версии Windows' }
@@ -330,7 +332,14 @@ function Check-Def {
             $actual = if ($ok) { 'блок установлен' } elseif (Test-HostsBlock -Kind $hk) { 'блок устарел' } else { 'нет блока' }
         }
         'gdidwipe' {
-            $ok = (@(Get-GdidCopies).Count -eq 0); $actual = if ($ok) { 'номера нет' } else { 'номер на месте' }
+            # «Копий не нашлось» — ещё не «номера нет»: места без доступа и
+            # профили, которые сейчас не вошли в Windows, не проверены. Раньше
+            # проверка говорила «номера нет», не заглянув туда. Страж такой
+            # ответ сбитой настройкой не считает: стирание доступа не даст.
+            $sc = Get-GdidScan
+            $ok = ($sc.state -eq 'NotFound')
+            $actual = $(switch ($sc.state) { 'NotFound' { 'номера нет' } 'Found' { 'номер на месте' } default { 'не проверено: есть места без доступа или профили, которые сейчас не вошли в Windows' } })
+            if ($sc.state -eq 'Unverified') { $unverified = $true }
         }
         'fwips' {
             $ok = Test-FwIpRule -Fresh
@@ -339,7 +348,9 @@ function Check-Def {
         'fwsvc' { $ok = Test-FwRule -Kind 'svc' -Target $d.P; $actual = if ($ok) { 'правило есть' } else { 'нет правила' } }
         'fwapp' { $ok = Test-FwRule -Kind 'app' -Target $d.P; $actual = if ($ok) { 'правило есть' } else { 'нет правила' } }
     }
-    return @{ module=$d.M; name=$d.C; ok=[bool]$ok; expected="$($d.V)"; actual=$actual }
+    $res = @{ module=$d.M; name=$d.C; ok=[bool]$ok; expected="$($d.V)"; actual=$actual }
+    if ($unverified) { $res['unverified'] = $true }
+    return $res
 }
 
 # --- hosts ------------------------------------------------------------------ #
@@ -430,7 +441,8 @@ $script:HostsMarkLockStart = '# --- Win11Privacy: device id lock (begin) ---'
 $script:HostsMarkLockEnd   = '# --- Win11Privacy: device id lock (end) ---'
 
 # Блок телеметрии — любая метка программы, кроме меток номера устройства:
-# так узнаются и метки прежних версий, побитые в «?».
+# так узнаются и метки прежних версий, побитые в «?». Это «блок задуман»
+# (есть метка); стоит ли он целым и с нужным списком — Test-HostsBlockCurrent.
 function Test-HostsBlock {
     param([string]$Kind = 'telemetry')
     try { $lines = @(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop) } catch { return $false }
@@ -442,12 +454,45 @@ function Test-HostsBlock {
 # Принадлежит ли открывающая метка блоку этого вида
 function Test-HostsMarkKind {
     param([string]$Line, [string]$Kind)
+    $m = Get-HostsMarkInfo $Line
+    if ($null -eq $m) { return $false }
+    return (Test-HostsKindMatch $m.kind $Kind)
+}
+
+# Метка программы: вид блока (gdid, lock, telemetry; devid — побитая метка
+# номера устройства) и край (start, end; '' — метка прежней версии, побитая
+# в «?»: начало это или конец, решает порядок). Не метка — $null.
+function Get-HostsMarkInfo {
+    param([string]$Line)
+    if ("$Line" -notmatch $script:HostsMarkRegex) { return $null }
+    $t = "$Line".TrimEnd()
+    if ($t -eq $script:HostsMarkGdidStart) { return @{ kind = 'gdid'; edge = 'start' } }
+    if ($t -eq $script:HostsMarkGdidEnd) { return @{ kind = 'gdid'; edge = 'end' } }
+    if ($t -eq $script:HostsMarkLockStart) { return @{ kind = 'lock'; edge = 'start' } }
+    if ($t -eq $script:HostsMarkLockEnd) { return @{ kind = 'lock'; edge = 'end' } }
+    if ($t -like '*device id*') { return @{ kind = 'devid'; edge = '' } }
+    if ($t -eq $script:HostsMarkStart) { return @{ kind = 'telemetry'; edge = 'start' } }
+    if ($t -eq $script:HostsMarkEnd) { return @{ kind = 'telemetry'; edge = 'end' } }
+    return @{ kind = 'telemetry'; edge = '' }
+}
+
+# Блок вида $BlockKind попадает под снятие/проверку вида $Kind (all — все)
+function Test-HostsKindMatch {
+    param([string]$BlockKind, [string]$Kind)
+    if ($Kind -eq 'all') { return $true }
+    if ($Kind -in @('gdid', 'lock')) { return ($BlockKind -eq $Kind) }
+    return ($BlockKind -eq 'telemetry')
+}
+
+# Домены блока этого вида
+function Get-HostsKindDomains {
+    param([string]$Kind)
     switch ($Kind) {
-        'all'  { return $true }
-        'gdid' { return ($Line -eq $script:HostsMarkGdidStart) }
-        'lock' { return ($Line -eq $script:HostsMarkLockStart) }
-        default { return ($Line -notlike '*device id*') }
+        'gdid'  { return @($script:GdidHosts) }
+        'lock'  { return @($script:GdidLockHosts) }
+        'devid' { return @(@($script:GdidHosts) + @($script:GdidLockHosts)) }
     }
+    return @($script:HostsDomains)
 }
 
 # Строка «0.0.0.0» отвечает только на запрос IPv4. Если у сервера есть адрес
@@ -455,37 +500,94 @@ function Test-HostsMarkKind {
 # имя пишется и строка «::».
 function Get-HostsWanted {
     param([string]$Kind = 'telemetry')
-    $domains = $(switch ($Kind) { 'gdid' { $script:GdidHosts } 'lock' { $script:GdidLockHosts } default { $script:HostsDomains } })
     $out = New-Object System.Collections.Generic.List[string]
-    foreach ($d in @($domains)) { $out.Add('0.0.0.0 ' + $d); $out.Add(':: ' + $d) }
+    foreach ($d in @(Get-HostsKindDomains $Kind)) { $out.Add('0.0.0.0 ' + $d); $out.Add(':: ' + $d) }
     return $out.ToArray()
+}
+
+$script:HostsMarkLineRx = '^\s*(0\.0\.0\.0|::)\s+(\S+)\s*$'
+
+# Блоки программы в hosts. Блок — открывающая метка, его строки и
+# закрывающая метка ТОГО ЖЕ вида. Раньше любая следующая метка считалась
+# концом блока, а закрывающая метка, оставшаяся без пары, — началом нового:
+# стёртая метка одного блока уносила при снятии строки, которые человек
+# вписал сам, а порядок блоков ломался.
+#   closed — у блока есть своя закрывающая метка: всё между метками в виде
+#            «0.0.0.0 имя» / «:: имя» — его строки, чужие строки внутри
+#            остаются на месте;
+#   без неё — блоку принадлежат только идущие следом строки ЕГО доменов:
+#            первая другая строка — уже не его.
+# orphans — закрывающие метки без начала: их программа убирает.
+function Split-HostsBlocks {
+    param([string[]]$Lines)
+    $src = [string[]]@($Lines)
+    $blocks = New-Object System.Collections.Generic.List[object]
+    $orphans = New-Object System.Collections.Generic.List[object]
+    $cur = $null
+    for ($i = 0; $i -lt $src.Count; $i++) {
+        $m = Get-HostsMarkInfo $src[$i]
+        if ($null -eq $m) { continue }
+        if ($null -ne $cur) {
+            if ($m.kind -eq $cur.kind -and $m.edge -ne 'start') { $cur.end = $i; $cur.closed = $true; $blocks.Add($cur); $cur = $null; continue }
+            $blocks.Add($cur); $cur = $null
+        }
+        if ($m.edge -eq 'end') { $orphans.Add(@{ index = $i; kind = $m.kind }); continue }
+        $cur = @{ kind = $m.kind; start = $i; end = -1; closed = $false }
+    }
+    if ($null -ne $cur) { $blocks.Add($cur) }
+    foreach ($b in $blocks) {
+        $own = New-Object System.Collections.Generic.List[int]
+        if ($b.closed) {
+            for ($i = $b.start + 1; $i -lt $b.end; $i++) {
+                if ($src[$i] -match $script:HostsMarkLineRx -or $src[$i] -match '^\s*$') { $own.Add($i) }
+            }
+        } else {
+            $known = @{}
+            foreach ($d in @(Get-HostsKindDomains $b.kind)) { $known["$d".ToLowerInvariant()] = $true }
+            for ($i = $b.start + 1; $i -lt $src.Count; $i++) {
+                $l = $src[$i]
+                if ($l -match '^\s*$') { $own.Add($i); continue }
+                if ($l -match $script:HostsMarkLineRx -and $known.ContainsKey($Matches[2].ToLowerInvariant())) { $own.Add($i); continue }
+                break
+            }
+            # пустые строки в хвосте — уже разделитель перед чужим
+            while ($own.Count -gt 0 -and $src[$own[$own.Count - 1]] -match '^\s*$') { $own.RemoveAt($own.Count - 1) }
+        }
+        $b['own'] = $own.ToArray()
+    }
+    return @{ blocks = $blocks.ToArray(); orphans = $orphans.ToArray() }
 }
 
 function Get-HostsBlockLines {
     param([string]$Kind = 'telemetry')
     $out = New-Object System.Collections.Generic.List[string]
-    try { $lines = @(Get-Content -LiteralPath $script:HostsPath -ErrorAction Stop) } catch { return @() }
-    $inside = $false; $mine = $false
-    foreach ($l in $lines) {
-        if ($l -match $script:HostsMarkRegex) {
-            if (-not $inside) { $inside = $true; $mine = (Test-HostsMarkKind $l $Kind) } else { $inside = $false }
-            continue
-        }
-        if ($inside -and $mine -and $l -match '^\s*(0\.0\.0\.0|::)\s+(\S+)\s*$') { $out.Add($Matches[1] + ' ' + $Matches[2]) }
+    try { $lines = Read-HostsLines } catch { return @() }
+    $sp = Split-HostsBlocks $lines
+    foreach ($b in @($sp.blocks)) {
+        if (-not (Test-HostsKindMatch $b.kind $Kind)) { continue }
+        foreach ($i in @($b.own)) { if ($lines[$i] -match $script:HostsMarkLineRx) { $out.Add($Matches[1] + ' ' + $Matches[2]) } }
     }
     return $out.ToArray()
 }
 
-# Блок стоит и в нём ровно нужный список. Раньше хватало самой метки, и
-# домены, добавленные в новых версиях, до уже поставленного блока не доходили.
+# Блок стоит, цел и в нём ровно нужный список: один блок этого вида, со своей
+# закрывающей меткой, без повторов и лишних строк, без осиротевших меток.
+# Раньше хватало открывающей метки: блок с выкинутыми строками или без конца
+# считался работающим, а второй такой же блок — тем же самым первым.
 function Test-HostsBlockCurrent {
     param([string]$Kind = 'telemetry')
-    if (-not (Test-HostsBlock -Kind $Kind)) { return $false }
-    $have = @(Get-HostsBlockLines -Kind $Kind | Select-Object -Unique)
-    $want = @(Get-HostsWanted -Kind $Kind | Select-Object -Unique)
+    try { $lines = Read-HostsLines } catch { return $false }
+    $sp = Split-HostsBlocks $lines
+    $mine = @(@($sp.blocks) | Where-Object { Test-HostsKindMatch $_.kind $Kind })
+    if ($mine.Count -ne 1 -or -not $mine[0].closed) { return $false }
+    if (@(@($sp.orphans) | Where-Object { Test-HostsKindMatch $_.kind $Kind }).Count -gt 0) { return $false }
+    $have = New-Object System.Collections.Generic.List[string]
+    foreach ($i in @($mine[0].own)) { if ($lines[$i] -match $script:HostsMarkLineRx) { $have.Add(($Matches[1] + ' ' + $Matches[2]).ToLowerInvariant()) } }
+    $want = @(@(Get-HostsWanted -Kind $Kind) | ForEach-Object { $_.ToLowerInvariant() } | Select-Object -Unique)
     if ($have.Count -ne $want.Count) { return $false }
     $set = @{}
     foreach ($h in $have) { $set[$h] = $true }
+    if ($set.Count -ne $have.Count) { return $false }          # повторы
     foreach ($w in $want) { if (-not $set.ContainsKey($w)) { return $false } }
     return $true
 }
@@ -506,16 +608,23 @@ function Apply-Hosts {
             # копия нужна та, что была до программы, а не после первого блока
             if (-not (Test-Path -LiteralPath $copy)) { Copy-Item -LiteralPath $script:HostsPath -Destination $copy -Force -ErrorAction SilentlyContinue }
         }
-        # Весь файл — одной подменой: прежний блок этого вида убран, новый
-        # дописан, всё чужое на месте. Раньше прежний блок удалялся отдельной
-        # записью, а новый дописывался следом (Add-Content): между ними блока
-        # не было вовсе, а оборванная дозапись оставляла его половину.
+        # Весь файл — одной подменой: прежние блоки этого вида (и побитые,
+        # и повторные) убраны, новый дописан, всё чужое на месте. Раньше
+        # прежний блок удалялся отдельной записью, а новый дописывался следом
+        # (Add-Content): между ними блока не было вовсе, а оборванная
+        # дозапись оставляла его половину.
         $cut = Get-HostsLinesWithout (Read-HostsLines) $Kind
         $block = @('') + $(switch ($Kind) { 'gdid' { $script:HostsMarkGdidStart } 'lock' { $script:HostsMarkLockStart } default { $script:HostsMarkStart } })
         $block += $wanted
         $block += $(switch ($Kind) { 'gdid' { $script:HostsMarkGdidEnd } 'lock' { $script:HostsMarkLockEnd } default { $script:HostsMarkEnd } })
         Write-HostsFile (@($cut.keep) + $block)
         ipconfig /flushdns | Out-Null
+        # «Записалось» — ещё не «стоит»: hosts тут же может поправить
+        # антивирус (Защитник так поступает с блоками адресов Microsoft)
+        if (-not (Test-HostsBlockCurrent -Kind $Kind)) {
+            Write-Log '   [!] hosts записан, но блок читается не таким, как задуман -- возможно, файл сразу изменил антивирус'
+            $script:Failures++; return
+        }
         if ($present) { Write-Log ("   [+] список доменов обновлён, теперь их: {0}" -f $count) }
         else { Write-Log ("   [+] заблокировано доменов: {0}" -f $count) }
         $script:Changes++
@@ -535,6 +644,8 @@ function Remove-HostsBlock {
         if ($cut.found -eq 0) { if (-not $Quiet) { Write-Log '   [-] блока в hosts нет' }; return $true }
         Write-HostsFile $cut.keep
         ipconfig /flushdns | Out-Null
+        # переписан — ещё не «блока нет»: сверяем
+        if ((Get-HostsLinesWithout (Read-HostsLines) $Kind).found -gt 0) { throw 'после записи блок в hosts остался' }
         if (-not $Quiet) { Write-Log '   [+] блок блокировки доменов удалён' }
         return $true
     } catch {
@@ -559,26 +670,30 @@ function Get-HostsEncoding {
 
 function Read-HostsLines { return , ([string[]][IO.File]::ReadAllLines($script:HostsPath, (Get-HostsEncoding))) }
 
-# Строки hosts без блоков программы этого вида. Внутри блока убираются только
-# свои строки: чужая строка значит, что закрывающую метку кто-то стёр, и
-# дальше идёт уже не наше. Пустую строку перед блоком ставила сама программа.
+# Строки hosts без блоков программы этого вида (см. Split-HostsBlocks): метки,
+# свои строки блоков и закрывающие метки без пары. Пустую строку перед блоком
+# ставила сама программа. found — сколько блоков и осиротевших меток убрано.
 function Get-HostsLinesWithout {
     param([string[]]$Lines, [string]$Kind)
-    $keep = New-Object System.Collections.Generic.List[string]
-    $inside = $false; $found = 0
-    foreach ($l in @($Lines)) {
-        if ($l -match $script:HostsMarkRegex) {
-            if (-not $inside) {
-                if (-not (Test-HostsMarkKind $l $Kind)) { $keep.Add($l); continue }
-                $found++
-                if ($keep.Count -gt 0 -and $keep[$keep.Count - 1] -eq '') { $keep.RemoveAt($keep.Count - 1) }
-                $inside = $true
-            } else { $inside = $false }
-            continue
-        }
-        if ($inside -and $l -notmatch '^\s*((0\.0\.0\.0|::)\s+\S+)?\s*$') { $inside = $false }
-        if (-not $inside) { $keep.Add($l) }
+    $src = [string[]]@($Lines)
+    $sp = Split-HostsBlocks $src
+    $drop = @{}
+    $found = 0
+    foreach ($b in @($sp.blocks)) {
+        if (-not (Test-HostsKindMatch $b.kind $Kind)) { continue }
+        $found++
+        $drop[[int]$b.start] = $true
+        if ($b.closed) { $drop[[int]$b.end] = $true }
+        foreach ($i in @($b.own)) { $drop[[int]$i] = $true }
+        if ($b.start -gt 0 -and $src[$b.start - 1] -eq '') { $drop[[int]($b.start - 1)] = $true }
     }
+    foreach ($o in @($sp.orphans)) {
+        if (-not (Test-HostsKindMatch $o.kind $Kind)) { continue }
+        $found++
+        $drop[[int]$o.index] = $true
+    }
+    $keep = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $src.Count; $i++) { if (-not $drop.ContainsKey($i)) { $keep.Add($src[$i]) } }
     return @{ keep = $keep.ToArray(); found = $found }
 }
 
