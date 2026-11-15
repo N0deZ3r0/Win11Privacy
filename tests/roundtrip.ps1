@@ -116,6 +116,10 @@ Write-Host ("  применено до: {0} из {1}" -f $auditBefore.ok, $audit
 # --------------------------------------------------------------------------- #
 Write-Host ''
 Write-Host 'Применение'
+# Копии реестра программа кладёт только в своё хранилище (W11P-005):
+# запоминаем, что там было до применения, чтобы найти новую копию
+$storeDir = Join-Path $env:ProgramData 'Win11Privacy\backups'
+$storeBefore = @(Get-ChildItem -LiteralPath $storeDir -Directory -Filter 'Win11Privacy-Backup-*' -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
 $applyOut = Run-Engine @('-Modules', $Modules, '-NoRestorePoint')
 Check 'движок доработал до конца' ($applyOut -match '###DONE###')
 Check 'в журнале работы есть изменения' ($applyOut -match '\[\+\]')
@@ -143,8 +147,11 @@ if (Test-Path -LiteralPath $changes) {
     $cj = Get-Content -LiteralPath $changes -Raw -Encoding UTF8 | ConvertFrom-Json
     Check 'в журнале есть записи' (@($cj.items).Count -gt 0) ("записей: " + @($cj.items).Count)
 }
-$regFiles = @(Get-ChildItem -LiteralPath $bakDir -Recurse -Filter '*.reg' -ErrorAction SilentlyContinue)
-Check 'резервная копия реестра создана' ($regFiles.Count -gt 0) ("файлов: " + $regFiles.Count)
+$newBackups = @(Get-ChildItem -LiteralPath $storeDir -Directory -Filter 'Win11Privacy-Backup-*' -ErrorAction SilentlyContinue | Where-Object { $storeBefore -notcontains $_.Name })
+$regFiles = @($newBackups | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -File -Filter '*.reg' -ErrorAction SilentlyContinue })
+Check 'резервная копия реестра создана в хранилище программы' ($newBackups.Count -eq 1 -and $regFiles.Count -gt 0) ("новых копий: {0}, файлов: {1}" -f $newBackups.Count, $regFiles.Count)
+Check 'копия подписана (backup-sig.json рядом)' ($newBackups.Count -eq 1 -and (Test-Path -LiteralPath (Join-Path $newBackups[0].FullName 'backup-sig.json')))
+Check 'в -BackupRoot (рабочий стол) ничего не записано' (@(Get-ChildItem -LiteralPath $bakDir -Force -ErrorAction SilentlyContinue).Count -eq 0)
 
 # --------------------------------------------------------------------------- #
 Write-Host ''
@@ -253,6 +260,8 @@ if ($live.Count -ge 2 -and $null -ne $svcStart0) {
 
 # --------------------------------------------------------------------------- #
 try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+# копия, сделанная тестом, — из хранилища тоже (папка своя, ссылок в ней нет)
+foreach ($nb in @($newBackups)) { & cmd.exe /c ('rmdir /s /q "' + $nb.FullName + '"') 2>$null }
 
 Write-Host ''
 Write-Host ("Пройдено: {0}, провалено: {1}" -f $script:Passed, $script:Failed)
