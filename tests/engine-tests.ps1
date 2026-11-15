@@ -3047,19 +3047,30 @@ $crJob = Start-Job -ArgumentList $engine, $crashChild -ScriptBlock {
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $childFile + '"'), '-EnginePath', ('"' + $EnginePath + '"'),
         '-DataDir', ('"' + $data + '"'), '-KeyB64', [Convert]::ToBase64String($key), '-Probe', 'x', '-Mode', 'writer', '-AuditFile', ('"' + $script:AuditFile + '"'))
     $cycles = 0; $cycleErr = 0; $badReads = 0
+    # чем было каждое плохое чтение — чтобы плавающий сбой на сборке можно было разобрать
+    $badWhy = New-Object System.Collections.Generic.List[string]
+    $script:Log = New-Object System.Collections.Generic.List[string]
+    function Write-Log { param($m) $script:Log.Add("$m") }
     $t0 = Get-Date
     while (-not $w.HasExited -and ((Get-Date) - $t0).TotalSeconds -lt 60) {
         # чтение — как в начале отката: журнал обязан читаться целым, а не
         # «пустым» или «недоверенным», пока писатель его подменяет
+        $script:Log.Clear()
         $snap = Read-JournalFile
-        if (-not $snap.trusted -or @(@($snap.items) | Where-Object { "$($_.name)" -eq 'W11PKeep' }).Count -ne 1) { $badReads++ }
+        if (-not $snap.trusted -or @(@($snap.items) | Where-Object { "$($_.name)" -eq 'W11PKeep' }).Count -ne 1) {
+            $badReads++
+            if ($badWhy.Count -lt 5) {
+                $badWhy.Add(("{0:N1}s state={1} exists={2} trusted={3} items={4} log={5}" -f ((Get-Date) - $t0).TotalSeconds, $snap.state, $snap.exists,
+                             $snap.trusted, @($snap.items).Count, (($script:Log | Select-Object -Last 2) -join ' / ')))
+            }
+        }
         $h = New-Object 'System.Collections.Generic.HashSet[string]'
         foreach ($e in @(@($snap.items) | Where-Object { "$($_.name)" -like 'W11PPre*' })) { $null = $h.Add((Get-JournalEntryId $e)) }
         try { Remove-JournalEntries $h; $cycles++ } catch { $cycleErr++ }
     }
     $null = $w.WaitForExit(30000)
     $fin = Read-JournalFile
-    $r.conc = @{ writerCode = $w.ExitCode; cycles = $cycles; cycleErr = $cycleErr; trusted = [bool]$fin.trusted; badReads = $badReads
+    $r.conc = @{ writerCode = $w.ExitCode; cycles = $cycles; cycleErr = $cycleErr; trusted = [bool]$fin.trusted; badReads = $badReads; badWhy = ($badWhy -join ' | ')
                  aside = @(Get-ChildItem $data -Filter 'changes.*-*.json').Count; keep = @(@($fin.items) | Where-Object { "$($_.name)" -eq 'W11PKeep' }).Count
                  conc = @(@($fin.items) | Where-Object { "$($_.name)" -like 'W11PConc*' }).Count
                  pre = @(@($fin.items) | Where-Object { "$($_.name)" -like 'W11PPre*' }).Count }
@@ -3090,7 +3101,7 @@ if ($cr) {
     Check 'hosts: следующий запуск доводит до конца — один блок с новым списком, чужие строки как были, копии нет' ($hh.fails -eq 0 -and $hh.marks -eq 2 -and $hh.both -and $hh.user -eq '# my hosts|127.0.0.1 localhost|10.0.0.5 nas.local' -and -not $hh.tmp) ("меток $($hh.marks), чужие: $($hh.user), копия: $($hh.tmp)")
     $c = $cr.conc
     Check 'два процесса пишут журнал одновременно: записи писателя все на месте, своё убрано' ($c.writerCode -eq 0 -and $c.trusted -and $c.conc -eq 100 -and $c.pre -eq 0 -and $c.keep -eq 1 -and $c.cycles -ge 3 -and $c.cycleErr -eq 0) ("писатель: код $($c.writerCode), его записей $($c.conc)/100, старых $($c.pre), якорь $($c.keep), циклов уборки $($c.cycles), сбоев $($c.cycleErr)")
-    Check 'пока журнал подменяют, он ни разу не читается пустым или недоверенным и не откладывается' ($c.badReads -eq 0 -and $c.aside -eq 0) ("плохих чтений $($c.badReads) из $($c.cycles), отложено $($c.aside)")
+    Check 'пока журнал подменяют, он ни разу не читается пустым или недоверенным и не откладывается' ($c.badReads -eq 0 -and $c.aside -eq 0) ("плохих чтений $($c.badReads) из $($c.cycles), отложено $($c.aside); $($c.badWhy)")
 }
 
 # --------------------------------------------------------------------------- #
@@ -3701,6 +3712,9 @@ if ($bkFound.Count -eq $bkFns.Count) {
     Check 'копия: хранилище и рабочая папка — в одном защищённом корне (перенос — переименование)' (
           [IO.Path]::GetPathRoot($b1.dir) -eq [IO.Path]::GetPathRoot($script:SafeRoot) -and $b1.dir.StartsWith($script:SafeRoot, [StringComparison]::OrdinalIgnoreCase))
     function Export-RegKey { param([string]$Key, [string]$File) $script:ExportedTo.Add($File); if ($script:ExportedTo.Count % 2 -eq 0) { throw 'обрыв выгрузки' } [IO.File]::WriteAllBytes($File, (New-TestRegBytes $Key)); return '' }
+    # хранилище этого блока (переменная $store выше указывала на хранилище уже
+    # удалённой папки первого блока — проверка ниже проходила впустую)
+    $store = Join-Path $script:SafeRoot 'backups'
     $before = @(Get-ChildItem -LiteralPath $store -Directory).Count
     $b3 = New-RegBackup $bkKeys
     Check 'копия: оборванная выгрузка — в хранилище ничего нового, рабочая папка убрана' ($b3.error -and -not $b3.dir -and @(Get-ChildItem -LiteralPath $store -Directory).Count -eq $before -and (Get-WorkDirs).Count -eq 0 -and @(Get-ChildItem -LiteralPath $desk -Force).Count -eq 0) ($b3.error)
