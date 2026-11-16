@@ -115,8 +115,15 @@ namespace Win11Privacy
                 int at = page == null ? -1 : page.GetRow(card);     // пока карточку добавляют, строки у неё ещё нет
                 if (at < 0 || at >= page.RowStyles.Count || hint == null || w <= 120) return;
                 int u = Font.Height;
-                int text = TextRenderer.MeasureText(hint.Text, hint.Font, new Size(w, 0), TextFormatFlags.WordBreak).Height;
-                int need = text + WrappedHeight(row, w) + row.Margin.Vertical +
+                // Текст меряется так, как его раскладывает сама подпись: по её
+                // ширине (без её отступов) и с теми же флагами. Раньше мерилось
+                // по ширине карточки и без TextBoxControl — на границе переноса
+                // выходило на строку меньше, и последняя строка обрезалась
+                // (Досье на экране 1024 × 768 при крупном шрифте, CI).
+                int lw = Math.Max(1, w - hint.Margin.Horizontal - hint.Padding.Horizontal);
+                int text = TextRenderer.MeasureText(hint.Text, hint.Font, new Size(lw, 0),
+                                                    TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height;
+                int need = text + hint.Margin.Vertical + hint.Padding.Vertical + WrappedHeight(row, w) + row.Margin.Vertical +
                            card.Padding.Vertical + card.Margin.Vertical + (int)(u * 0.3F);
                 RowStyle style = page.RowStyles[at];
                 int h = Math.Max((int)(u * 7.6F), need);
