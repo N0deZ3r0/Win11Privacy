@@ -48,6 +48,7 @@ namespace Win11Privacy
             Profiles();
             Verdict();
             Answers();
+            LogGlyphs();
             Language();
             DataRootChain();
             AppMutex();
@@ -55,6 +56,44 @@ namespace Win11Privacy
             Console.WriteLine();
             Console.WriteLine("Пройдено: " + _passed + ", провалено: " + _failed);
             return _failed > 0 ? 1 : 0;
+        }
+
+        // --- журнал: знаки, которых нет в его шрифте --------------------------- //
+        // «Команда движка: ?PurgeData»: окно меняло дефисы команды на
+        // неразрывные (U+2011), а в Consolas такого знака нет, и RichTextBox
+        // рисовал вместо него непонятный значок.
+        private static void LogGlyphs()
+        {
+            Console.WriteLine();
+            Console.WriteLine("Журнал: знаки, которых нет в шрифте");
+            using (System.Drawing.Font consolas = new System.Drawing.Font("Consolas", 10F))
+            {
+                // без Consolas GDI+ подставит другой шрифт — тогда проверка не о нём
+                if (consolas.Name == "Consolas")
+                {
+                    Check("в Consolas обычный дефис есть", Theme.HasGlyph(consolas, '-'));
+                    Check("в Consolas неразрывного дефиса нет — проверка умеет сказать «нет»", !Theme.HasGlyph(consolas, '\u2011'));
+                    Check("журнал в Consolas: «-PurgeData» остаётся с обычным дефисом", MainForm.LogNoBreakFor("-PurgeData", consolas) == "-PurgeData");
+                }
+            }
+            using (System.Drawing.Font segoe = new System.Drawing.Font("Segoe UI", 10F))
+            {
+                if (segoe.Name == "Segoe UI")
+                {
+                    Check("в Segoe UI неразрывный дефис есть — проверка умеет сказать «да»", Theme.HasGlyph(segoe, '\u2011'));
+                    Check("шрифт с этим знаком: дефисы ключей неразрывные", MainForm.LogNoBreakFor("-Apply -Modules a", segoe) == "\u2011Apply \u2011Modules a");
+                }
+            }
+            Check("шрифт не задан: дефисы не трогаются", MainForm.LogNoBreakFor("-Audit", null) == "-Audit");
+            // главное: всё, что журнал покажет в строке команды, есть в его шрифте
+            using (System.Drawing.Font mono = Theme.PickFont(Theme.MonoFonts, 10F, System.Drawing.FontStyle.Regular))
+            {
+                string shown = MainForm.LogNoBreakFor("-Apply -Modules telemetry, ads -NoBackup", mono);
+                string missing = "";
+                foreach (char ch in shown) if (!Theme.HasGlyph(mono, ch) && missing.IndexOf(ch) < 0) missing += ch;
+                Check("строка команды рисуется шрифтом журнала (" + mono.Name + ") без пропусков", missing.Length == 0,
+                      "нет знаков: " + missing);
+            }
         }
 
         // --- путь до папки данных (W11P-006) --------------------------------- //

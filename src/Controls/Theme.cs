@@ -120,6 +120,43 @@ namespace Win11Privacy
             return new Font(FontFamily.GenericSansSerif, size, style, GraphicsUnit.Point);
         }
 
+        // Есть ли знак в самом шрифте. RichTextBox журнала не подставляет
+        // недостающий знак из другого шрифта и рисует вместо него квадратик:
+        // так неразрывный дефис (U+2011), которого нет в Consolas и Courier New,
+        // выглядел в «Команда движка: -PurgeData» непонятным знаком.
+        [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
+        private static extern uint GetGlyphIndicesW(IntPtr hdc, string text, int count, [Out] ushort[] glyphs, uint flags);
+        [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+        [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr obj);
+        private const uint GGI_MARK_NONEXISTING_GLYPHS = 1;
+
+        public static bool HasGlyph(Font font, char ch)
+        {
+            if (font == null) return false;
+            try
+            {
+                using (Graphics g = Graphics.FromHwnd(IntPtr.Zero))
+                {
+                    IntPtr hdc = g.GetHdc();
+                    IntPtr hfont = font.ToHfont();
+                    IntPtr old = SelectObject(hdc, hfont);
+                    try
+                    {
+                        ushort[] gi = new ushort[1];
+                        uint n = GetGlyphIndicesW(hdc, ch.ToString(), 1, gi, GGI_MARK_NONEXISTING_GLYPHS);
+                        return n == 1 && gi[0] != 0xFFFF;
+                    }
+                    finally
+                    {
+                        SelectObject(hdc, old);
+                        DeleteObject(hfont);
+                        g.ReleaseHdc(hdc);
+                    }
+                }
+            }
+            catch { return false; }   // не узнали — считаем, что знака нет: обычный дефис виден всегда
+        }
+
         public static readonly string[] UiFonts   = { "Segoe UI Variable Text", "Segoe UI", "Tahoma" };
         public static readonly string[] MonoFonts = { "Cascadia Mono", "Cascadia Code", "Consolas", "Courier New" };
         public static readonly string[] IconFonts = { "Segoe Fluent Icons", "Segoe MDL2 Assets" };

@@ -177,8 +177,15 @@ namespace Win11Privacy
         }
 
         // Ключи команды не рвутся на переносе («-NoBackup -» / «NoRestorePoint»):
-        // дефис в них — неразрывный.
-        private static string LogNoBreak(string s) { return s.Replace('-', '\u2011'); }
+        // дефис в них — неразрывный, но только если этот знак есть в шрифте
+        // журнала. В Consolas и Courier New его нет, а RichTextBox не берёт
+        // знак из другого шрифта — вместо дефиса был квадратик или «?».
+        // Тогда остаётся обычный дефис: перенос на нём лучше непонятного знака.
+        private string LogNoBreak(string s) { return LogNoBreakFor(s, _log != null ? _log.Font : null); }
+        internal static string LogNoBreakFor(string s, Font logFont)
+        {
+            return Theme.HasGlyph(logFont, '\u2011') ? s.Replace('-', '\u2011') : s;
+        }
 
         // Пустая строка между частями журнала — одна, без двойных.
         private bool LogEndsWithGap()
