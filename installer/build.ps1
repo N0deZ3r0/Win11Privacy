@@ -24,6 +24,10 @@ $root = Split-Path $here -Parent
 if (-not $SourceDir) { $SourceDir = $root }
 if (-not $OutDir) { $OutDir = Join-Path $root 'dist' }
 $SourceDir = (Resolve-Path $SourceDir).Path
+# ISCC resolves a relative OutputDir against the folder of the .iss file, not
+# the current one: CI passed "-OutDir ." and the setup landed in installer\
+# while this script looked for it in the repository root. Absolute from here on.
+$OutDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutDir)
 
 # --- version ------------------------------------------------------------------
 $info = Get-Content -LiteralPath (Join-Path $root 'AppInfo.cs') -Raw -Encoding UTF8
@@ -131,8 +135,18 @@ if ($ImagesOnly) { Write-Host "wizard pictures: $obj"; exit 0 }
 # --- compile ------------------------------------------------------------------
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $iss = Join-Path $here 'Win11Privacy.iss'
-& $Iscc '/Qp' "/DAppVersion=$version" "/DSourceDir=$SourceDir" "/DImgDir=$obj" "/DOutDir=$OutDir" $iss
-if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+# ISCC prints warnings to stderr. Windows PowerShell 5.1 with a redirected
+# stderr (CI) turns every such line into an error record, and with
+# ErrorActionPreference 'Stop' the first warning ended this script before the
+# exit code was looked at. The exit code decides; the output is shown as text.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    $isccOut = @(& $Iscc '/Qp' "/DAppVersion=$version" "/DSourceDir=$SourceDir" "/DImgDir=$obj" "/DOutDir=$OutDir" $iss 2>&1 | ForEach-Object { "$_" })
+    $isccCode = $LASTEXITCODE
+} finally { $ErrorActionPreference = $prevEap }
+foreach ($l in $isccOut) { Write-Host $l }
+if ($isccCode -ne 0) { throw "ISCC failed with exit code $isccCode" }
 $setup = Join-Path $OutDir 'Win11Privacy-Setup.exe'
 if (-not (Test-Path -LiteralPath $setup)) { throw "ISCC finished but $setup is missing" }
 $hash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLower()

@@ -302,9 +302,20 @@ jobs:
           if ($got -ne $want) { throw "Inno Setup download does not match the pinned SHA-256: $got" }
           $dir = Join-Path $env:RUNNER_TEMP 'InnoSetup'
           $p = Start-Process -FilePath $dl -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER', ('/DIR="' + $dir + '"')) -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Inno Setup did not install (exit code $($p.ExitCode))" }
-          .\installer\build.ps1 -Iscc (Join-Path $dir 'ISCC.exe') -OutDir .
-          if ($LASTEXITCODE -ne 0) { throw 'installer build failed' }
+          if ($p.ExitCode -ne 0) { Write-Host "::error::Inno Setup did not install (exit code $($p.ExitCode))"; throw 'Inno Setup did not install' }
+          if (-not (Test-Path (Join-Path $dir 'ISCC.exe'))) { Write-Host "::error::ISCC.exe is missing in $dir"; throw 'ISCC.exe missing' }
+          # The build runs in its own process with its output in a file: on a
+          # failure the reason and the last lines become annotations, which can
+          # be read without access to the job log.
+          $log = Join-Path $env:RUNNER_TEMP 'installer-build.txt'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\installer\build.ps1 -Iscc (Join-Path $dir 'ISCC.exe') -OutDir . *> $log
+          $code = $LASTEXITCODE
+          if (Test-Path $log) { Get-Content $log }
+          if ($code -ne 0 -or -not (Test-Path .\Win11Privacy-Setup.exe)) {
+              Write-Host "::error::installer build failed (exit code $code)"
+              if (Test-Path $log) { Get-Content $log -Tail 25 | Where-Object { "$_".Trim() } | ForEach-Object { Write-Host "::error::  $_" } }
+              throw 'installer build failed'
+          }
 
       # Установщик проверяется по-настоящему: ставит, ставит поверх, удаляет
       # (с данными и без), распаковывает переносимую версию. Машина одноразовая.
