@@ -987,11 +987,14 @@ function Set-TaskEnabled {
     return 'fail'
 }
 
-# Часть команды: код 1, если хоть одна из записей ещё в хранилище, иначе 0
+# Часть команды: код 2, если список хранилища не прочитался (cmdkey /list не
+# с кодом 0), 1 — если хоть одна из записей ещё в хранилище, иначе 0. Раньше
+# сбой самого cmdkey давал пустой вывод, findstr ничего не находил, и это
+# читалось как «записей не осталось» — ошибка доступа выглядела отсутствием.
 function Get-CredCheckCmd {
     param([string[]]$Targets)
     $finds = @($Targets | ForEach-Object { '/c:"' + ($_ -replace '^.*target=', '') + '"' }) -join ' '
-    return '(cmdkey /list | findstr /i ' + $finds + ' >nul && exit 1 || exit 0)'
+    return '(cmdkey /list >nul 2>&1 || exit 2) & (cmdkey /list | findstr /i ' + $finds + ' >nul && exit 1 || exit 0)'
 }
 
 # Учётные данные «личности» устройства — у кого их чистить задачей от его
@@ -1008,10 +1011,16 @@ function Get-GdidCredUsers {
     if ($o) { $out.Add(@{ name = "$($o.name)"; sid = "$($o.sid)"; session = $true }); $seen["$($o.sid)"] = $true }
     else { $out.Add(@{ name = "$($script:RunAccount)"; sid = "$($script:UserSid)"; session = $true }) }
     $seen["$($script:UserSid)"] = $true
+    # Список подключённых кустов не прочитался — кто ещё вошёл в Windows,
+    # неизвестно; стирание тогда не начинается вовсе (Get-GdidPreflight:
+    # опись помечает HKEY_USERS как место без доступа). Люди — как в описи
+    # ($script:GdidUserSidRx): локальные, доменные и Entra ID (S-1-12-1-…).
+    # Раньше вторых здесь не было: их учётные данные устройства не чистились
+    # и не назывались непроверенными.
     $names = @()
     try { $names = @(Get-GdidHiveNames) } catch { }
     foreach ($sid in $names) {
-        if ($sid -notmatch '^S-1-5-21-[\d-]+$' -or $seen.ContainsKey($sid)) { continue }
+        if ($sid -notmatch $script:GdidUserSidRx -or $seen.ContainsKey($sid)) { continue }
         $seen[$sid] = $true
         $nm = ''
         try { $nm = (New-Object Security.Principal.SecurityIdentifier($sid)).Translate([Security.Principal.NTAccount]).Value } catch { }
@@ -1031,11 +1040,16 @@ function Clear-GdidUserCreds {
     foreach ($t in $script:GdidCredUser) { $null = & cmdkey.exe "/delete:$t" 2>&1 }
     if (Get-OtherSessionUser) {
         # движок — не тот, кто сидит за компьютером: его хранилище задача ниже
-        # не проверит, поэтому сверка здесь же
+        # не проверит, поэтому сверка здесь же. Список не прочитался (cmdkey
+        # не с кодом 0) — это «не проверено», а не «записей нет»: раньше пустой
+        # ответ ошибки читался как «убрано».
         $targets = @($script:GdidCredUser | ForEach-Object { $_ -replace '^.*target=', '' })
-        $left = @(@(& cmdkey.exe /list 2>&1) | ForEach-Object { "$_" } | Where-Object {
+        $listing = @(& cmdkey.exe /list 2>&1)
+        $listCode = $LASTEXITCODE
+        $left = @($listing | ForEach-Object { "$_" } | Where-Object {
                       $line = $_; @($targets | Where-Object { $line.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count -gt 0 })
-        if ($left.Count -gt 0) { Write-Log ("   [!] учётные данные устройства у {0} убрать не удалось" -f $script:RunAccount); $fails++ }
+        if ($listCode -ne 0) { Write-Log ("   [!] учётные данные устройства у {0} не проверены: список хранилища не прочитался (cmdkey, код {1})" -f $script:RunAccount, $listCode); $fails++ }
+        elseif ($left.Count -gt 0) { Write-Log ("   [!] учётные данные устройства у {0} убрать не удалось" -f $script:RunAccount); $fails++ }
     }
     foreach ($u in @(Get-GdidCredUsers)) {
         if (-not $u.name) {
@@ -1275,8 +1289,108 @@ function Get-GdidPreflight {
     $snap = Get-GdidServiceSnapshot
     $p.snapshot = $snap
     if (-not $snap.complete) { foreach ($x in @($snap.problems)) { $p.blockers.Add(("службы: {0}" -f $x)) } }
+    # Кто сидит за компьютером: от этого зависит, чьи учётные данные и чей
+    # кэш стираются. Windows не ответила — это «неизвестно», а не «сам движок».
+    $null = Get-SessionUser
+    if ($script:SessionUserError) { $p.blockers.Add(("кто сидит за компьютером, определить не удалось ({0}) -- чьи учётные данные и кэш стирать, неизвестно" -f $script:SessionUserError)) }
     $p.ok = ($p.blockers.Count -eq 0)
     return $p
+}
+
+# --------------------------------------------------------------------------- #
+#  Запись о ходе стирания (Write-OpRecord 'gdid-wipe'): какие службы работали
+#  до него. Стирание останавливает их и запускает только в конце; раньше этот
+#  список жил только в памяти, и после обрыва (закрыли окно, выключили
+#  питание) службы стояли до перезагрузки, а повторное стирание снимало их
+#  уже остановленными — и в конце не запускало. Теперь:
+#    * пока идёт стирание, держится замок операции (второе стирание сразу —
+#      отказ), а запись лежит на диске с самого начала, до первого изменения;
+#    * закончилось и службы вернулись — запись убирается; не вернулись —
+#      остаётся с тем, что не вернулось;
+#    * следующая смена номера берёт службы из оставшейся записи в свой
+#      список «запустить в конце», «Вернуть как было» запускает их сам.
+#  Сам по себе ничего не перезапускается: только по действию человека.
+# --------------------------------------------------------------------------- #
+$script:GdidWipeOp = 'gdid-wipe'
+
+# Оборванное стирание глазами окна. state: none; InProgress (идёт сейчас);
+# RecoveryRequired (оборвалось или службы не вернулись, и что-то из того,
+# что работало до него, стоит: stopped); Settled (запись осталась, но всё,
+# что работало, снова работает — например, после перезагрузки); Untrusted /
+# Unreadable. wlidsvc в stopped не считается: она запускается по требованию,
+# и «стоит» для неё — обычное дело (запустит её «Вернуть как было»).
+function Get-GdidWipeRecovery {
+    $r = Read-OpRecord $script:GdidWipeOp
+    $o = [ordered]@{ state = 'none'; recoveryRequired = $false; running = @(); stopped = @(); notBack = @(); started = ''; error = "$($r.error)" }
+    if ($r.state -eq 'none') { return $o }
+    if ($r.state -eq 'unreadable') { $o.state = 'Unreadable'; $o.recoveryRequired = $true; return $o }
+    if ($r.state -eq 'untrusted') { $o.state = 'Untrusted'; $o.recoveryRequired = $true; return $o }
+    $o.running = @(@($r.data.running) | ForEach-Object { "$_" } | Where-Object { Test-GdidWipeSvcName $_ })
+    $o.notBack = @(@($r.data.notBack) | ForEach-Object { "$_" } | Where-Object { $_ })
+    $o.started = "$($r.data.started)"
+    if ((Test-OpRunning $script:GdidWipeOp) -eq $true) { $o.state = 'InProgress'; return $o }
+    $o.stopped = @($o.running | Where-Object { $_ -ne 'wlidsvc' } | Where-Object { $v = Get-SvcScmView $_; -not $v.ok -or ($v.found -and -not $v.running) })
+    $o.recoveryRequired = (@($o.stopped).Count -gt 0)
+    $o.state = $(if ($o.recoveryRequired) { 'RecoveryRequired' } else { 'Settled' })
+    return $o
+}
+
+# Имена служб из записи — только того вида, какой пишет само стирание
+function Test-GdidWipeSvcName {
+    param([string]$Name)
+    return ($Name -cmatch '^(wlidsvc|CDPSvc|CDPUserSvc|DoSvc|CDPUserSvc_[0-9A-Fa-f]{1,16})$')
+}
+
+# «Вернуть как было» после оборванного стирания: запустить службы, которые
+# работали до него и сейчас стоят (если Windows даёт: отключённую не
+# запускаем — её тип запуска возвращает журнал отката, и это его решение).
+# Ответ: state — NotModified (записи не было), Restored (запущено и сверено,
+# запись убрана), RestoreFailed (что-то не запустилось — запись остаётся),
+# InProgress (стирание идёт сейчас); started, failed, skipped, warnings.
+function Restore-GdidInterruptedWipe {
+    $o = @{ state = 'NotModified'; started = @(); failed = @(); skipped = @(); error = '' }
+    $lock = $null
+    try {
+        $lock = Enter-OpLock $script:GdidWipeOp
+        if ($null -eq $lock) { $o.state = 'InProgress'; $o.error = 'стирание номера идёт сейчас'; return $o }
+        $r = Read-OpRecord $script:GdidWipeOp
+        if ($r.state -eq 'none') { return $o }
+        if ($r.state -eq 'unreadable') { $o.state = 'RestoreFailed'; $o.error = ("запись о прошлом стирании не читается: {0}" -f $r.error); return $o }
+        if ($r.state -eq 'untrusted') {
+            $aside = Set-OpRecordAside $script:GdidWipeOp
+            $o.error = ("запись о прошлом стирании недоверенная ({0}) -- по ней ничего не запускается, она отложена как {1}" -f $r.error, $aside)
+            $o.state = 'RestoreFailed'; return $o
+        }
+        $started = New-Object System.Collections.Generic.List[string]
+        $failed = New-Object System.Collections.Generic.List[string]
+        $skipped = New-Object System.Collections.Generic.List[string]
+        foreach ($n in @(@($r.data.running) | ForEach-Object { "$_" })) {
+            if (-not (Test-GdidWipeSvcName $n)) { $skipped.Add($n); continue }
+            $v = Get-SvcScmView $n
+            if (-not $v.ok) { $failed.Add(("{0} (диспетчер служб не ответил)" -f $n)); continue }
+            # копия CDPUserSvc ушла вместе с выходом пользователя — запускать нечего
+            if (-not $v.found) { $skipped.Add($n); continue }
+            if ($v.running) { continue }
+            if ((Get-SvcStartInfo $n).state -eq 'Disabled') { $skipped.Add(("{0} (отключена)" -f $n)); continue }
+            try {
+                Start-Service -Name $n -ErrorAction Stop -WarningAction SilentlyContinue
+                (Get-Service -Name $n -ErrorAction Stop).WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
+            } catch { }
+            $after = Get-SvcScmView $n
+            if ($after.ok -and $after.found -and "$($after.status)" -eq 'Running') { $started.Add($n) } else { $failed.Add($n) }
+        }
+        $o.started = $started.ToArray(); $o.failed = $failed.ToArray(); $o.skipped = $skipped.ToArray()
+        if ($failed.Count -gt 0) {
+            $d = [ordered]@{ state = 'RestoreFailed'; started = "$($r.data.started)"; running = @($r.data.running | ForEach-Object { "$_" }); notBack = $failed.ToArray() }
+            try { Write-OpRecord $script:GdidWipeOp $d } catch { }
+            $o.state = 'RestoreFailed'
+        } else {
+            if (-not (Remove-OpRecord $script:GdidWipeOp)) { $o.error = 'запись о прошлом стирании не убралась' }
+            $o.state = 'Restored'
+        }
+        return $o
+    } catch { $o.state = 'RestoreFailed'; $o.error = "$($_.Exception.Message)"; return $o }
+    finally { if ($null -ne $lock) { $lock.Dispose() } }
 }
 
 function Invoke-GdidWipe {
@@ -1332,6 +1446,46 @@ function Invoke-GdidWipe {
     # запускает снова; стоявшие до стирания не запускаются.
     $snap = $pre.snapshot
     $runningBefore = @(@($snap.services) | Where-Object { $_.running -and $_.scmFound } | ForEach-Object { "$($_.name)" })
+
+    # Замок и запись о ходе стирания — до первого изменения (см.
+    # Get-GdidWipeRecovery). Не вышло — не стираем: обрыв потом оставил бы
+    # службы стоять, и никто бы о них не знал.
+    $opLock = $null
+    $opWhy = ''
+    try { $opLock = Enter-OpLock $script:GdidWipeOp; if ($null -eq $opLock) { $opWhy = 'другое стирание номера идёт сейчас' } }
+    catch { $opWhy = ("замок стирания не открылся: {0}" -f $_.Exception.Message) }
+    if (-not $opWhy) {
+        $prevOp = Read-OpRecord $script:GdidWipeOp
+        if ($prevOp.state -eq 'unreadable') { $opWhy = ("запись о прошлом стирании не читается ({0})" -f $prevOp.error) }
+        elseif ($prevOp.state -eq 'untrusted') {
+            try { $aside = Set-OpRecordAside $script:GdidWipeOp; Write-Log ("   [!] запись о прошлом стирании недоверенная ({0}) -- по ней ничего не запускается, она отложена как {1}" -f $prevOp.error, $aside) }
+            catch { $opWhy = ("недоверенная запись о прошлом стирании не откладывается: {0}" -f $_.Exception.Message) }
+        } elseif ($prevOp.state -eq 'valid') {
+            # Прошлое стирание оборвалось (или службы после него не вернулись):
+            # службы, что работали до него, сейчас могут стоять — в конце их
+            # запускаем и мы, иначе они так и стояли бы до перезагрузки.
+            $carried = @(@($prevOp.data.running) | ForEach-Object { "$_" } | Where-Object { (Test-GdidWipeSvcName $_) -and $runningBefore -notcontains $_ })
+            if ($carried.Count -gt 0) {
+                Write-Log ("   [i] прошлое стирание номера не закончилось; службы, что работали до него, будут запущены в конце: {0}" -f ($carried -join ', '))
+                $res.warnings.Add(("прошлое стирание не закончилось: {0}" -f ($carried -join ', ')))
+                foreach ($e in @($snap.services)) {
+                    if ($carried -contains "$($e.name)" -and $e.scmFound) { $e['running'] = $true; $runningBefore += "$($e.name)" }
+                }
+            }
+        }
+    }
+    if (-not $opWhy) {
+        try { Write-OpRecord $script:GdidWipeOp ([ordered]@{ state = 'InProgress'; started = (Get-Date).ToString('s'); running = @($runningBefore); notBack = @() }) }
+        catch { $opWhy = ("запись о ходе стирания не записалась: {0}" -f $_.Exception.Message) }
+    }
+    if ($opWhy) {
+        if ($null -ne $opLock) { $opLock.Dispose() }
+        Write-Log ("   [!] номер устройства не тронут: {0} -- ничего не изменено" -f $opWhy)
+        $res.stages['services'] = 'refused'; $res.errors.Add($opWhy); $res.failed = 1
+        Set-GdidResultState $res 'Failed'
+        $script:Failures++; return $false
+    }
+
     # что стирание пыталось остановить — возвращается всё это (из тех, что работали)
     $touched = New-Object System.Collections.Generic.List[string]
     $notBackMsg = '   [!] службы не вернулись в прежнее состояние: {0}. Перезагрузка компьютера вернёт их.'
@@ -1405,6 +1559,16 @@ function Invoke-GdidWipe {
         if (@($restore.states).Count -gt 0) { $res.serviceStates = @($restore.states) }
         $res.stages['restore'] = $(if (@($restore.notBack).Count -gt 0) { 'Failed' } else { 'ok' })
         if (@($restore.notBack).Count -gt 0) { Write-Log ($notBackMsg -f (@($restore.notBack) -join ', ')) }
+        # Запись о ходе: службы вернулись — убираем; не вернулись — остаётся с
+        # тем, что не вернулось («Вернуть как было» запустит их снова)
+        try {
+            if (@($restore.notBack).Count -eq 0) {
+                if (-not (Remove-OpRecord $script:GdidWipeOp)) { Write-Log '   [i] запись о ходе стирания не убралась' }
+            } else {
+                Write-OpRecord $script:GdidWipeOp ([ordered]@{ state = 'RestoreFailed'; started = "$($res.timestamp)"; running = @($runningBefore); notBack = @($restore.notBack | ForEach-Object { "$_" }) })
+            }
+        } catch { Write-Log ("   [!] запись о ходе стирания не обновилась: {0}" -f $_.Exception.Message) }
+        $opLock.Dispose()
     }
     $res.removed = [int]$reg.removed; $res.denied = [int]$reg.denied
     if (@($res.notBack).Count -gt 0) { $fails++ }
@@ -1629,6 +1793,8 @@ function Get-GdidStatus {
         workAccount = [bool](Get-GdidManagement).workAccount
         accounts = @(Get-GdidAccounts)
         profiles = $scan.profiles
+        # оборванное стирание: службы, что работали до него, могут стоять
+        interruptedWipe = $(try { Get-GdidWipeRecovery } catch { [ordered]@{ state = 'Unreadable'; recoveryRequired = $true; running = @(); notBack = @(); error = "$($_.Exception.Message)" } })
         unknownIdentities = @($scan.unknown).Count
         admin = (Test-Admin)
         services = $svcs.ToArray()
@@ -1647,29 +1813,48 @@ function Get-GdidStatus {
 function Get-AuditSetting {
     param([string]$Guid = $script:AuditGuid)
     # auditpol пишет копию политики в файл, а читаем мы её с правами
-    # администратора. Пишем в защищённый корень, если он уже есть (его завело
-    # окно или применение), а не во временную папку пользователя: туда он мог
-    # бы подложить на наш путь ссылку. Корня ещё нет — случайное имя во
-    # временной папке (чтение политики не должно заводить корень само).
-    $dir = $(if ($script:SafeRoot -and (Test-Path -LiteralPath $script:SafeRoot -PathType Container)) { $script:SafeRoot } else { [IO.Path]::GetTempPath() })
-    $tmp = Join-Path $dir ('w11p-audit-' + [guid]::NewGuid().ToString('N') + '.csv')
+    # администратора (T-2). Файл — только в личной рабочей папке, куда
+    # обычной программе не дотянуться (New-PrivateWorkDir): защищённый корень,
+    # если он уже есть, иначе своя папка в Windows\Temp. Раньше, пока корня
+    # не было, файл ложился во временную папку пользователя: там его могли
+    # подменить между записью и чтением, а саму папку — заменить ссылкой.
+    # Места нет — политика «не прочиталась» (-1), а не прочитана откуда попало.
+    $work = New-PrivateWorkDir 'w11p-audit-'
+    if (-not $work) { return -1 }
+    $tmp = Join-Path $work 'audit.csv'
     try {
-        if ((Test-Path -LiteralPath $tmp) -and ((Get-Item -LiteralPath $tmp -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { return -1 }
+        $since = (Get-Date).AddSeconds(-5)
         $null = & auditpol.exe /backup /file:$tmp 2>&1
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $tmp)) { return -1 }
+        if ($LASTEXITCODE -ne 0) { return -1 }
+        # В папке — ровно этот файл, обычный, свежий, свой владелец; читается
+        # один раз, без права записи для других (Read-PrivateWorkFile)
+        $bytes = Read-PrivateWorkFile $work 'audit.csv' $since
+        if ($null -eq $bytes -or $bytes.Length -eq 0) { return -1 }
+        $enc = [Text.Encoding]::Default; $skip = 0
+        if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) { $enc = [Text.Encoding]::Unicode; $skip = 2 }
+        elseif ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { $enc = [Text.Encoding]::UTF8; $skip = 3 }
+        $text = $enc.GetString($bytes, $skip, $bytes.Length - $skip)
         # Заголовки столбцов в копии тоже бывают переведены («GUID подкатегории»,
         # «значение параметра» — проверено на русской Windows), поэтому читаем
         # по положению: порядок столбцов у /backup постоянный. Первая строка —
         # заголовок, её пропускаем.
-        $rows = @(Import-Csv -LiteralPath $tmp -Header 'pc', 'target', 'sub', 'guid', 'inc', 'exc', 'val' | Select-Object -Skip 1)
+        $lines = @($text -split "`r?`n" | Where-Object { $_ })
+        $rows = @($lines | ConvertFrom-Csv -Header 'pc', 'target', 'sub', 'guid', 'inc', 'exc', 'val' | Select-Object -Skip 1)
         # ни одного GUID на своём месте — формат не тот, не гадаем
         if (@($rows | Where-Object { "$($_.guid)" -match '^\{[0-9A-Fa-f-]{36}\}$' }).Count -eq 0) { return -1 }
         foreach ($row in $rows) {
-            if ("$($row.guid)" -eq $Guid) { return [int]("0" + "$($row.val)".Trim()) }
+            if ("$($row.guid)" -eq $Guid) {
+                # значение подкатегории — 0…3 (пусто — 0, как и раньше); другое
+                # — копия не та, не гадаем
+                $v = "$($row.val)".Trim()
+                if ($v -eq '') { return 0 }
+                if ($v -notmatch '^[0-3]$') { return -1 }
+                return [int]$v
+            }
         }
         return 0      # строки нет — подкатегория не настроена, а это «нет аудита»
     } catch { return -1 }
-    finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    finally { Remove-PrivateWorkDir $work }
 }
 
 function Get-MonitorEnabled {

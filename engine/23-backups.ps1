@@ -139,10 +139,172 @@ function Test-RegImportContent {
     return ''
 }
 
+# --------------------------------------------------------------------------- #
+#  Сверка после импорта (T-3). reg.exe import неделим только на словах: он
+#  пишет значения по одному, и код 0 ещё не значит, что в реестре теперь то,
+#  что в копии (значение мог тут же переписать кто-то другой, часть могла не
+#  записаться). Поэтому после импорта ветка выгружается заново тем же
+#  reg.exe и сравнивается с файлом копии: каждый раздел копии есть, каждое
+#  значение — с теми же данными и того же вида (текст значения у reg.exe
+#  включает вид: dword:, hex(2): …). Значения, которых в копии не было,
+#  остаются — reg.exe import ничего не удаляет, и это не ошибка сверки.
+# --------------------------------------------------------------------------- #
+# Выгрузка reg.exe (текст) → @{ раздел (строчными) → @{ имя значения
+# (строчными) → данные } }. Строки, продолженные «\», склеиваются; имя
+# значения — в кавычках с «\"» и «\\» внутри, «@» — значение по умолчанию.
+# Строка, которая не начинается ни с «[», ни с «"», ни с «@», — продолжение
+# прежнего значения (перевод строки внутри строкового значения): так её
+# прочитают обе стороны сверки одинаково.
+function ConvertFrom-RegExportText {
+    param([string]$Text)
+    $map = @{}
+    $cur = $null; $name = $null; $data = $null; $cont = $false
+    $flush = { if ($null -ne $cur -and $null -ne $name) { $map[$cur][$name] = $data } }
+    foreach ($line in $Text.Split([string[]]@("`r`n"), [StringSplitOptions]::None)) {
+        if ($cont) {
+            $piece = $line.TrimStart()
+            if ($piece.EndsWith('\')) { $data += $piece.Substring(0, $piece.Length - 1) } else { $data += $piece; $cont = $false }
+            continue
+        }
+        if ($line.StartsWith('[') -and $line.EndsWith(']')) {
+            & $flush; $name = $null
+            $cur = $line.Substring(1, $line.Length - 2).ToLowerInvariant()
+            if (-not $map.ContainsKey($cur)) { $map[$cur] = @{} }
+            continue
+        }
+        if ($null -eq $cur -or $line -eq '') { continue }
+        $rest = $null
+        if ($line.StartsWith('@=')) { & $flush; $name = '@'; $rest = $line.Substring(2) }
+        elseif ($line.StartsWith('"')) {
+            $sb = New-Object System.Text.StringBuilder
+            $i = 1; $closed = $false
+            while ($i -lt $line.Length) {
+                $c = $line[$i]
+                if ($c -eq '\' -and $i + 1 -lt $line.Length) { $null = $sb.Append($line[$i + 1]); $i += 2; continue }
+                if ($c -eq '"') { $closed = $true; break }
+                $null = $sb.Append($c); $i++
+            }
+            if ($closed -and $i + 1 -lt $line.Length -and $line[$i + 1] -eq '=') {
+                & $flush; $name = $sb.ToString().ToLowerInvariant(); $rest = $line.Substring($i + 2)
+            }
+        }
+        if ($null -eq $rest) {
+            # продолжение строкового значения с переводом строки внутри
+            if ($null -ne $name) { $data += "`n" + $line }
+            continue
+        }
+        if ($rest.EndsWith('\')) { $data = $rest.Substring(0, $rest.Length - 1); $cont = $true } else { $data = $rest }
+    }
+    & $flush
+    return $map
+}
+
+# Первый раздел файла копии — сама ветка, как её записал reg.exe
+function Get-RegFileBranch {
+    param([byte[]]$Bytes)
+    $t = [Text.Encoding]::Unicode.GetString($Bytes, 2, $Bytes.Length - 2)
+    foreach ($line in $t.Split([string[]]@("`r`n"), [StringSplitOptions]::None)) {
+        if ($line.StartsWith('[') -and $line.EndsWith(']')) { return $line.Substring(1, $line.Length - 2) }
+    }
+    return ''
+}
+
+# Ветка копии (HKEY_LOCAL_MACHINE\…) → путь PowerShell (HKLM:\…) для New-RegBackup
+function ConvertTo-PsRegPath {
+    param([string]$Branch)
+    if ($Branch -match '^HKEY_LOCAL_MACHINE\\(.+)$') { return ('HKLM:\' + $Matches[1]) }
+    if ($Branch -match '^HKEY_CURRENT_USER\\(.+)$') { return ('HKCU:\' + $Matches[1]) }
+    return ''
+}
+
+# После импорта: ветка выгружается заново (в ту же защищённую рабочую
+# папку) и сравнивается с копией. state: restored — всё из копии на месте;
+# differs — чего-то нет или данные другие (missing — сколько); unverified —
+# выгрузить ветку заново не вышло, сверить не с чем.
+function Test-RegImported {
+    param([byte[]]$Bytes, [string]$Work, [string]$Name)
+    $out = @{ state = 'unverified'; missing = 0; error = '' }
+    try {
+        $branch = Get-RegFileBranch $Bytes
+        if (-not $branch) { $out.error = 'в копии нет раздела'; return $out }
+        $native = ($branch -replace '^HKEY_LOCAL_MACHINE\\', 'HKLM\' -replace '^HKEY_CURRENT_USER\\', 'HKCU\')
+        $file = Join-Path $Work ('verify-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '-' + $Name)
+        $why = Export-RegKey $native $file
+        if ($why) { $out.error = ("ветка не выгрузилась для сверки: {0}" -f $why); return $out }
+        $after = [IO.File]::ReadAllBytes($file)
+        try { [IO.File]::Delete($file) } catch { }
+        $want = ConvertFrom-RegExportText ([Text.Encoding]::Unicode.GetString($Bytes, 2, $Bytes.Length - 2))
+        $now = ConvertFrom-RegExportText ([Text.Encoding]::Unicode.GetString($after, 2, $after.Length - 2))
+        $miss = 0
+        foreach ($k in @($want.Keys)) {
+            if (-not $now.ContainsKey($k)) { $miss += [Math]::Max(1, $want[$k].Count); continue }
+            foreach ($v in @($want[$k].Keys)) {
+                if (-not $now[$k].ContainsKey($v) -or [string]$now[$k][$v] -cne [string]$want[$k][$v]) { $miss++ }
+            }
+        }
+        $out.missing = $miss
+        $out.state = $(if ($miss -eq 0) { 'restored' } else { 'differs' })
+        return $out
+    } catch { $out.state = 'unverified'; $out.error = "$($_.Exception.Message)"; return $out }
+}
+
+# --------------------------------------------------------------------------- #
+#  Восстановление из копии по шагам (T-3). Сделать импорт неделимым нельзя
+#  (у reg.exe import нет транзакции, и изображать её программа не будет),
+#  поэтому восстановление ведёт подписанную запись о своём ходе
+#  (Write-OpRecord 'restore') и держит замок операции (Enter-OpLock):
+#    Prepared          — копия проверена, состояние до восстановления
+#                        сохранено (снимок — обычная подписанная копия в
+#                        хранилище), запись на диске; реестр ещё не тронут;
+#    InProgress        — идёт импорт: у каждого файла своя стадия (pending,
+#                        importing — запись легла ДО запуска reg.exe,
+#                        restored — импортирован и сверен, failed, unverified);
+#    Restored          — все файлы импортированы и сверены: запись убирается;
+#    PartiallyRestored — запуск дожил до конца, но вернулось не всё: запись
+#                        остаётся, следующий запуск о ней скажет;
+#    Failed            — не импортировано ничего, реестр не тронут: записи нет;
+#    RecoveryRequired  — так её видит следующий запуск, если она осталась в
+#                        InProgress, а замок свободен (процесс умер посередине),
+#                        или в PartiallyRestored (Get-RestoreRecovery).
+#  Сам по себе ничего не повторяется: ни следующий запуск, ни страж не
+#  доделывают импорт без человека. Довести — снова выбрать ту же копию (её
+#  импорт можно повторять: те же значения запишутся так же) или вернуть
+#  снимок «до восстановления». Повтор после обрыва снимок не переснимает:
+#  остаётся самый первый — состояние до первого незаконченного восстановления.
+# --------------------------------------------------------------------------- #
+$script:RestoreOp = 'restore'
+
+# Незаконченное восстановление глазами окна и следующего запуска. state:
+# none; InProgress — идёт сейчас (замок занят); RecoveryRequired — оборвалось
+# посередине или вернулось не всё (recoveryRequired = $true); Interrupted —
+# оборвалось до первого импорта (реестр не тронут); Untrusted / Unreadable —
+# запись есть, но верить ей нельзя или она не читается.
+function Get-RestoreRecovery {
+    $r = Read-OpRecord $script:RestoreOp
+    $o = [ordered]@{ state = 'none'; recoveryRequired = $false; folder = ''; path = ''; snapshot = ''; stage = ''; restored = 0; files = 0; started = ''; error = "$($r.error)" }
+    if ($r.state -eq 'none') { return $o }
+    if ($r.state -eq 'unreadable') { $o.state = 'Unreadable'; $o.recoveryRequired = $true; return $o }
+    if ($r.state -eq 'untrusted') { $o.state = 'Untrusted'; $o.recoveryRequired = $true; return $o }
+    $d = $r.data
+    $o.folder = "$($d.folder)"; $o.path = "$($d.path)"; $o.snapshot = "$($d.snapshot)"; $o.stage = "$($d.state)"; $o.started = "$($d.started)"
+    $o.files = @($d.files).Count
+    $o.restored = @(@($d.files) | Where-Object { "$($_.state)" -eq 'restored' }).Count
+    # закончено и сверено, только запись не убралась — незаконченного нет
+    if ("$($d.state)" -eq 'Restored') { $o.state = 'none'; return $o }
+    $running = Test-OpRunning $script:RestoreOp
+    if ($running -eq $true) { $o.state = 'InProgress'; return $o }
+    if ("$($d.state)" -eq 'Prepared') { $o.state = 'Interrupted'; return $o }
+    $o.state = 'RecoveryRequired'; $o.recoveryRequired = $true
+    return $o
+}
+
 function Restore-BackupFolder {
     param([string]$Path)
-    $res = @{ restored = 0; failed = 0; refused = 0; error = '' }
+    $res = @{ restored = 0; failed = 0; refused = 0; error = ''; state = 'Failed'; snapshot = ''; unverified = 0; imported = 0; resumed = $false; files = @() }
     $work = $null
+    $lock = $null
+    $rec = $null
+    $recWritten = $false
     try {
         $dirItem = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
         if (-not $dirItem.PSIsContainer -or ($dirItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'папка копии -- ссылка или не папка' }
@@ -181,38 +343,128 @@ function Restore-BackupFolder {
             $dst = Join-Path $work $n
             $fs = [IO.File]::Open($dst, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
             try { $fs.Write($bytes, 0, $bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
-            $staged.Add(@{ name = $n; path = $dst; sig = $man.files[$n] })
+            $staged.Add(@{ name = $n; path = $dst; sig = $man.files[$n]; branch = (Get-RegFileBranch $bytes) })
         }
         if ($res.refused -gt 0) { throw 'в копии есть изменённые или чужие файлы -- не импортируется ничего' }
 
+        # --- Отсюда меняется реестр (T-3): сначала замок и запись о ходе ---
+        $lock = Enter-OpLock $script:RestoreOp
+        if ($null -eq $lock) { throw 'идёт другое восстановление из копии -- дождитесь его конца; ничего не импортировано' }
+        $prev = Read-OpRecord $script:RestoreOp
+        if ($prev.state -eq 'unreadable') { throw ("запись о прошлом восстановлении сейчас не читается ({0}) -- ничего не импортировано, повторите позже" -f $prev.error) }
+        if ($prev.state -eq 'untrusted') {
+            $aside = Set-OpRecordAside $script:RestoreOp
+            Write-Log ("   [!] запись о прошлом восстановлении недоверенная ({0}) -- по ней ничего не делается, она отложена как {1}" -f $prev.error, $aside)
+        }
+        $open = $null
+        if ($prev.state -eq 'valid' -and "$($prev.data.state)" -in @('InProgress', 'PartiallyRestored')) { $open = $prev.data }
+        if ($open) {
+            $res.resumed = $true
+            $res.snapshot = "$($open.snapshot)"
+            Write-Log ("   [!] прошлое восстановление из копии не закончено ({0}: {1}, вернулось файлов {2} из {3}) -- реестр мог остаться восстановленным частично" -f "$($open.folder)", "$($open.state)",
+                       @(@($open.files) | Where-Object { "$($_.state)" -eq 'restored' }).Count, @($open.files).Count)
+            if ($res.snapshot) { Write-Log ("   [i] снимок «до восстановления» остаётся прежним (состояние до первой попытки): {0}" -f $res.snapshot) }
+        } else {
+            # Состояние до восстановления — обычной подписанной копией тех же
+            # веток в хранилище (New-RegBackup). Не сохранилось — не
+            # импортируем ничего: вернуться потом было бы не к чему.
+            $keys = @($staged | ForEach-Object { ConvertTo-PsRegPath "$($_.branch)" } | Where-Object { $_ } | Select-Object -Unique)
+            $existing = @($keys | Where-Object { Test-Path -LiteralPath $_ })
+            if ($existing.Count -gt 0) {
+                $sn = New-RegBackup $existing
+                if ($sn.error -or -not $sn.dir -or [int]$sn.saved -lt $existing.Count) {
+                    $why = $(if ($sn.error) { $sn.error } elseif (@($sn.missed).Count -gt 0) { @($sn.missed)[0] } else { 'выгрузилось не всё' })
+                    throw ("состояние реестра до восстановления не сохранилось ({0}) -- ничего не импортировано: вернуться потом было бы не к чему" -f $why)
+                }
+                $res.snapshot = $sn.dir
+                Write-Log ("   [+] состояние до восстановления сохранено: {0}" -f $sn.dir)
+            } else { Write-Log '   [i] веток этой копии сейчас в реестре нет -- сохранять до восстановления нечего' }
+        }
+        $rec = [ordered]@{
+            state = 'Prepared'; folder = $folder; path = $dirItem.FullName; snapshot = $res.snapshot
+            started = (Get-Date).ToString('s'); attempt = $(if ($open) { [int]"0$($open.attempt)" + 1 } else { 1 })
+            previous = $(if ($open -and "$($open.path)" -ine $dirItem.FullName) { "$($open.path)" } else { '' })
+            files = @(foreach ($s in $staged) { [ordered]@{ name = "$($s.name)"; branch = "$($s.branch)"; state = 'pending' } })
+        }
+        Write-OpRecord $script:RestoreOp $rec
+        $recWritten = $true
+
+        $i = -1
         foreach ($s in $staged) {
+            $i++
+            # стадия файла — на диск ДО запуска reg.exe: оборвись импорт, запись
+            # скажет, какой файл мог остаться записанным наполовину
+            $rec.files[$i].state = 'importing'; $rec.state = 'InProgress'
+            Write-OpRecord $script:RestoreOp $rec
             # Файл открыт без права записи для других, пока reg.exe его читает:
             # подпись, сверенная здесь, — подпись импортируемых байтов
             $fs = [IO.File]::Open($s.path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
             try {
                 $ms = New-Object System.IO.MemoryStream
                 $fs.CopyTo($ms)
-                if ((Get-BackupBytesSig $ms.ToArray() $folder $s.name) -cne $s.sig) {
-                    Write-Log ("   [!] {0} -- копия в рабочей папке не сходится с подписью" -f $s.name); $res.refused++; continue
+                $b = $ms.ToArray()
+                if ((Get-BackupBytesSig $b $folder $s.name) -cne $s.sig) {
+                    Write-Log ("   [!] {0} -- копия в рабочей папке не сходится с подписью" -f $s.name); $res.refused++
+                    $rec.files[$i].state = 'refused'
+                } else {
+                    $r = Invoke-RegExe ('import "{0}"' -f $s.path)
+                    $res.imported++
+                    # «reg.exe закончил с кодом 0» — ещё не «в реестре то, что в копии»
+                    $v = Test-RegImported $b $work $s.name
+                    if ($r.code -eq 0 -and $v.state -eq 'restored') { Write-Log ("   [+] вернули и сверили: {0}" -f $s.name); $res.restored++; $rec.files[$i].state = 'restored' }
+                    elseif ($r.code -ne 0) { Write-Log ("   [!] не удалось: {0} (код {1}: {2})" -f $s.name, $r.code, $r.error); $res.failed++; $rec.files[$i].state = 'failed' }
+                    elseif ($v.state -eq 'unverified') { Write-Log ("   [!] {0} импортирован, но сверить его не удалось: {1}" -f $s.name, $v.error); $res.failed++; $res.unverified++; $rec.files[$i].state = 'unverified' }
+                    else { Write-Log ("   [!] {0} импортирован, но в реестре не то, что в копии: значений не на месте {1}" -f $s.name, $v.missing); $res.failed++; $rec.files[$i].state = 'failed' }
                 }
-                $r = Invoke-RegExe ('import "{0}"' -f $s.path)
-                if ($r.code -eq 0) { Write-Log ("   [+] вернули: {0}" -f $s.name); $res.restored++ }
-                else { Write-Log ("   [!] не удалось: {0} (код {1}: {2})" -f $s.name, $r.code, $r.error); $res.failed++ }
             } finally { $fs.Dispose() }
+            Write-OpRecord $script:RestoreOp $rec
         }
-    } catch { $res.error = $_.Exception.Message }
+        if ($res.restored -eq $staged.Count -and $res.failed -eq 0 -and $res.refused -eq 0) {
+            $rec.state = 'Restored'
+            Write-OpRecord $script:RestoreOp $rec
+            if (-not (Remove-OpRecord $script:RestoreOp)) { Write-Log '   [i] запись о ходе восстановления не убралась (в ней итог «восстановлено»)' }
+            $res.state = 'Restored'
+        } elseif ($res.imported -eq 0 -and -not $res.resumed) {
+            # не импортировано ничего, реестр не тронут: незаконченного нет
+            $null = Remove-OpRecord $script:RestoreOp
+            $res.state = 'Failed'
+        } else {
+            $rec.state = 'PartiallyRestored'
+            Write-OpRecord $script:RestoreOp $rec
+            $res.state = 'PartiallyRestored'
+        }
+        $recWritten = $false
+    } catch {
+        $res.error = $_.Exception.Message
+        # Запуск жив, но оборвался посередине: итог — по тому, что успело
+        # случиться. Не записалось — на диске остаётся InProgress, и следующий
+        # запуск увидит RecoveryRequired.
+        $partial = ($res.imported -gt 0 -or $res.resumed)
+        $res.state = $(if ($partial) { 'PartiallyRestored' } else { 'Failed' })
+        if ($recWritten -and $null -ne $rec) {
+            try {
+                if ($partial) { $rec.state = 'PartiallyRestored'; Write-OpRecord $script:RestoreOp $rec }
+                else { $null = Remove-OpRecord $script:RestoreOp }
+            } catch { }
+        }
+    }
     finally {
         if ($work -and (Test-Path -LiteralPath $work)) {
             $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
             Remove-TreeNoFollow $work $st
         }
+        if ($null -ne $lock) { $lock.Dispose() }
     }
+    if ($null -ne $rec) { $res.files = @(@($rec.files) | ForEach-Object { @{ name = "$($_.name)"; state = "$($_.state)" } }) }
     return $res
 }
 
 if ($ListBackups) {
     $bkList = @(Get-BackupList)
-    Emit-Json @{ items = $bkList; count = $bkList.Count }
+    # незаконченное восстановление — окно скажет о нём над списком копий
+    $rcv = $null
+    try { $rcv = Get-RestoreRecovery } catch { $rcv = [ordered]@{ state = 'Unreadable'; recoveryRequired = $true; error = "$($_.Exception.Message)" } }
+    Emit-Json @{ items = $bkList; count = $bkList.Count; recovery = $rcv }
     exit 0
 }
 
@@ -233,16 +485,27 @@ if ($RestoreBackup) {
     $rb = Restore-BackupFolder $BackupPath
     if ($rb.error) { Write-Log ("   [!] {0}" -f $rb.error); $script:Failures++ }
     $script:Changes += $rb.restored; $script:Failures += $rb.failed + $rb.refused
-    Write-Log ("   возвращено веток: {0}" -f $rb.restored)
+    Write-Log ("   возвращено и сверено веток: {0}" -f $rb.restored)
     if ($rb.failed -gt 0) { Write-Log ("   не удалось вернуть: {0}" -f $rb.failed) }
     if ($rb.refused -gt 0) { Write-Log ("   не импортировано из-за подписи: {0}" -f $rb.refused) }
-    if ($rb.restored -gt 0) { Write-Log '   Значения вернулись к состоянию на момент копии. Перезагрузите компьютер.' }
-    Emit-Json @{ restored = $rb.restored; failed = $rb.failed; refused = $rb.refused; error = $rb.error; path = $BackupPath }
+    switch ($rb.state) {
+        'Restored' { Write-Log '   Значения вернулись к состоянию на момент копии (сверено). Перезагрузите компьютер.' }
+        'PartiallyRestored' {
+            Write-Log '   [!] Восстановление не закончено: реестр восстановлен частично.'
+            Write-Log '       Довести его -- снова выбрать эту же копию (повторный импорт пишет те же значения).'
+            if ($rb.snapshot) { Write-Log ("       Вернуть как было до восстановления -- выбрать копию {0}" -f (Split-Path $rb.snapshot -Leaf)) }
+        }
+        default { Write-Log '   Реестр не изменён.' }
+    }
+    Emit-Json @{ restored = $rb.restored; failed = $rb.failed; refused = $rb.refused; error = $rb.error; path = $BackupPath
+                 state = $rb.state; snapshot = $rb.snapshot; unverified = $rb.unverified; imported = $rb.imported; resumed = $rb.resumed; files = @($rb.files) }
     Write-Log '###DONE###'
-    # 1 — ничего не вернулось (отказ или ошибка); 2 — вернулось не всё
-    # (reg.exe не принял часть файлов). Раньше второе давало 0, и окно
-    # писало «Готово».
-    exit $(if ($rb.error -or ($rb.restored -eq 0 -and ($rb.failed + $rb.refused) -gt 0)) { 1 } elseif (($rb.failed + $rb.refused) -gt 0) { 2 } else { 0 })
+    # 0 — всё импортировано и сверено (Restored); 2 — реестр восстановлен
+    # частично (PartiallyRestored: что-то импортировано, но не всё вернулось
+    # или не сверилось); 1 — не импортировано ничего, реестр не тронут
+    # (отказ или ошибка до импорта). Раньше «вернулось не всё» давало 0, а
+    # «reg.exe закончил с кодом 0» считалось «вернулось», без сверки.
+    exit $(if ($rb.state -eq 'Restored') { 0 } elseif ($rb.state -eq 'PartiallyRestored') { 2 } else { 1 })
 }
 
 if ($ListStartup) {

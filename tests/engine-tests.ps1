@@ -262,7 +262,7 @@ Write-Host 'Карантин папки данных, отказ Firefox, Защ
 # Стабы (Get-RegValue, Get-FirefoxPoliciesPath, Write-Log) объявляются внутри
 # & { } — в области скрипта они затёрли бы настоящие и сломали бы следующие
 # тесты. Проверяемые функции движка грузятся в область скрипта и видны внутри.
-foreach ($fn in $envAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('New-QuarantineDir', 'Write-FirefoxKey', 'Test-TamperProtection', 'Update-FirefoxPoliciesFile', 'Read-Utf8Strict', 'Write-JsonFileAtomic', 'Replace-FileAtomic', 'Open-FirefoxMutex', 'Test-MutexOwnerTrusted') }, $true)) { Invoke-Expression $fn.Extent.Text }
+foreach ($fn in $envAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('New-QuarantineDir', 'Write-FirefoxKey', 'Test-TamperProtection', 'Update-FirefoxPoliciesFile', 'Read-Utf8Strict', 'Write-JsonFileAtomic', 'Replace-FileAtomic', 'Open-FirefoxMutex', 'Test-MutexOwnerTrusted', 'Open-ProgramMutex', 'New-ProgramMutexSecurity', 'Get-MutexSecurityProblem', 'Get-MutexTrustedSids', 'Test-Admin') }, $true)) { Invoke-Expression $fn.Extent.Text }
 & {
     function Write-Log { param([string]$Message = '') }
     $qRoot = Join-Path $env:TEMP ('w11p-q-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -1604,7 +1604,7 @@ Write-Host 'Стирание номера устройства (на своём 
 $wipeFns = @('Get-RegValue', 'Get-GdidCopies', 'Invoke-GdidWipe', 'Remove-RegStatus', 'Get-CredCheckCmd', 'Get-UncheckedProfiles', 'Restore-GdidServices',
               'Get-GdidScan', 'Remove-GdidRegistryCopies', 'Clear-GdidCdpCache', 'Clear-GdidUserCreds', 'Disable-GdidWlid', 'Restore-GdidWlid', 'Get-GdidWlidJournalEntry',
               'Read-GdidKey', 'Open-GdidKeyWrite', 'Remove-GdidRegValue', 'Remove-GdidRegKey', 'Open-RegKeyRead', 'Get-GdidPreflight', 'Get-GdidServiceSnapshot',
-              'New-GdidResult', 'Set-GdidResultState', 'Get-GdidDirLeft', 'Get-StartName')
+              'New-GdidResult', 'Set-GdidResultState', 'Get-GdidDirLeft', 'Get-StartName', 'Test-GdidWipeSvcName')
 $wipeFound = @()
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($wipeFns -contains $fn.Name -and $wipeFound -notcontains $fn.Name) { Invoke-Expression $fn.Extent.Text; $wipeFound += $fn.Name }
@@ -1674,7 +1674,8 @@ if ($wipeFound.Count -eq $wipeFns.Count) {
     # возвращаются такими, какими были.
     $wipeSaved = @{}
     foreach ($nm in @('Get-UncheckedProfiles', 'Get-GdidCredUsers', 'Get-OtherSessionUser', 'Convert-ToSessionPath', 'Read-JournalFile', 'Get-SvcJournalState',
-                      'Write-AheadEntry', 'Undo-AheadEntry', 'Restore-JournalEntry', 'Remove-JournalKey', 'Get-SvcScmView', 'Get-GdidSvcEntry', 'Get-GdidUserSvcInstances')) {
+                      'Write-AheadEntry', 'Undo-AheadEntry', 'Restore-JournalEntry', 'Remove-JournalKey', 'Get-SvcScmView', 'Get-GdidSvcEntry', 'Get-GdidUserSvcInstances',
+                      'Get-SessionUser', 'Enter-OpLock', 'Read-OpRecord', 'Write-OpRecord', 'Remove-OpRecord', 'Set-OpRecordAside')) {
         $fi = Get-Item -Path ("Function:\" + $nm) -ErrorAction SilentlyContinue
         if ($fi) { $wipeSaved[$nm] = $fi.ScriptBlock }
     }
@@ -1688,6 +1689,15 @@ if ($wipeFound.Count -eq $wipeFns.Count) {
     function Undo-AheadEntry { param($Entry) $script:wipeCalls.Add('journal-undo') }
     function Restore-JournalEntry { param($e) $script:wipeCalls.Add(("restore-svc {0}={1}" -f $e.name, $e.old)); return @{ ok = $true } }
     function Remove-JournalKey { param([string]$Key) $script:wipeCalls.Add("journal-remove $Key") }
+    # за компьютером — сам движок; замок и запись о ходе стирания (их
+    # проверяет tests\engine-remediation.ps1) — заглушки без диска
+    function Get-SessionUser { $script:SessionUserError = ''; return $null }
+    function Enter-OpLock { param([string]$Name) return (New-Object System.IO.MemoryStream) }
+    function Read-OpRecord { param([string]$Name) return @{ state = 'none'; data = $null; error = '' } }
+    function Write-OpRecord { param([string]$Name, $Data) }
+    function Remove-OpRecord { param([string]$Name) return $true }
+    function Set-OpRecordAside { param([string]$Name) return '' }
+    $script:SessionUserError = ''
     $DryRun = $false; $script:Changes = 0; $script:Failures = 0
     $dev = '0018ABCDEF012345'; $usr = '0003AAAAAAAAAAAA'
     try {
@@ -1795,7 +1805,8 @@ if ($wipeFound.Count -eq $wipeFns.Count) {
         Remove-Item -LiteralPath $script:CdpCache -Recurse -Force -ErrorAction SilentlyContinue
         foreach ($f in @('Get-ManagedReason', 'Stop-ServiceWait', 'Get-Service', 'Set-Service', 'Start-Service', 'Invoke-OneShotTask', 'cmdkey.exe', 'Clear-Folder', 'Get-IdCrlRoots', 'Set-TestKeyLock',
                          'Get-UncheckedProfiles', 'Get-GdidCredUsers', 'Get-OtherSessionUser', 'Convert-ToSessionPath', 'Read-JournalFile', 'Get-SvcJournalState',
-                         'Write-AheadEntry', 'Undo-AheadEntry', 'Restore-JournalEntry', 'Remove-JournalKey', 'Get-SvcScmView', 'Get-GdidSvcEntry', 'Get-GdidUserSvcInstances', 'New-FakeSvc')) {
+                         'Write-AheadEntry', 'Undo-AheadEntry', 'Restore-JournalEntry', 'Remove-JournalKey', 'Get-SvcScmView', 'Get-GdidSvcEntry', 'Get-GdidUserSvcInstances', 'New-FakeSvc',
+                         'Get-SessionUser', 'Enter-OpLock', 'Read-OpRecord', 'Write-OpRecord', 'Remove-OpRecord', 'Set-OpRecordAside')) {
             Remove-Item -Path ("Function:\" + $f) -ErrorAction SilentlyContinue
         }
         foreach ($nm in @($wipeSaved.Keys)) { Set-Item -Path ("Function:\" + $nm) -Value $wipeSaved[$nm] }
@@ -1821,7 +1832,8 @@ $gaJob = Start-Job -ArgumentList $engine -ScriptBlock {
               'Remove-GdidRegistryCopies', 'Clear-GdidCdpCache', 'Invoke-GdidWipe', 'Get-CredCheckCmd', 'Restore-GdidServiceStarts', 'Sync-GdidRestoredServices',
               'ConvertTo-Fields', 'Get-JournalKey', 'Test-JournalEntryShape', 'Test-RegKind', 'Check-Def', 'Test-DefApplicable', 'ConvertTo-Gdid',
               'Get-GdidSvcEntry', 'Get-GdidServiceSnapshot', 'Read-GdidKey', 'Open-GdidKeyWrite', 'Remove-GdidRegValue', 'Remove-GdidRegKey', 'Get-GdidPreflight',
-              'New-GdidResult', 'Set-GdidResultState', 'Get-GdidDirLeft', 'Get-GdidManagement', 'Get-GdidManagementNow', 'Get-GdidAccountKind', 'Get-GdidAccounts', 'Get-StartName')
+              'New-GdidResult', 'Set-GdidResultState', 'Get-GdidDirLeft', 'Get-GdidManagement', 'Get-GdidManagementNow', 'Get-GdidAccountKind', 'Get-GdidAccounts', 'Get-StartName',
+              'Test-GdidWipeSvcName')
     $got = @()
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
         if ($want -contains $fn.Name -and $got -notcontains $fn.Name) { Invoke-Expression $fn.Extent.Text; $got += $fn.Name }
@@ -1837,6 +1849,15 @@ $gaJob = Start-Job -ArgumentList $engine -ScriptBlock {
     $DryRun = $false; $script:Changes = 0; $script:Failures = 0
     $script:UserSid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
     $script:RunAccount = ([Security.Principal.WindowsIdentity]::GetCurrent()).Name
+    # за компьютером — сам движок; замок и запись о ходе стирания (их
+    # проверяет tests\engine-remediation.ps1) — заглушки без диска
+    function Get-SessionUser { $script:SessionUserError = ''; return $null }
+    function Enter-OpLock { param([string]$Name) return (New-Object System.IO.MemoryStream) }
+    function Read-OpRecord { param([string]$Name) return @{ state = 'none'; data = $null; error = '' } }
+    function Write-OpRecord { param([string]$Name, $Data) }
+    function Remove-OpRecord { param([string]$Name) return $true }
+    function Set-OpRecordAside { param([string]$Name) return '' }
+    $script:SessionUserError = ''
 
     # ===== службы: настоящий реестр — только чтение =====
     $r.realCdp = (Get-SvcStartInfo 'CDPSvc').state
@@ -2529,6 +2550,9 @@ $cmdJob = Start-Job -ArgumentList $engine -ScriptBlock {
         if ($script:FwMode -eq 'denied') { throw 'Access is denied.' }
         if ($script:FwMode -ne 'stays') { $script:FwRule = $false } }
     function Sync-GdidRestoredServices { param($Names) return @{ pending = @(); failed = @() } }
+    # оборванное стирание (T-3 / GDID): по умолчанию его не было
+    $script:Iw = @{ state = 'NotModified'; started = @(); failed = @(); skipped = @(); error = '' }
+    function Restore-GdidInterruptedWipe { return $script:Iw }
     $svcAll = { param([string]$Res) @(@('CDPSvc', 'CDPUserSvc', 'DoSvc', 'wlidsvc') | ForEach-Object { @{ name = $_; result = $Res; error = $(if ($Res -ne 'restored' -and $Res -ne 'notChanged') { 'x' } else { '' }) } }) }
     $restore = {
         $script:Failures = 0; $script:Changes = 0; $script:Emitted = $null; $script:Log.Clear()
@@ -2564,6 +2588,16 @@ $cmdJob = Start-Job -ArgumentList $engine -ScriptBlock {
     $script:Data['profile.json'] = (@{ version = 1; modules = @('gdid'); skip = @(); created = 'x' } | ConvertTo-Json); $script:SaveIgnored = $true
     $r.rsGuard = & $restore
     $script:SaveIgnored = $false
+    # оборванное стирание номера: службы, что работали до него, запущены — стадия
+    # Restored, код 0; не запустились — RestoreFailed этой стадии, код 2
+    $script:Data = @{}; $script:Hosts = @{}; $script:FwRule = $false; $script:SvcResults = & $svcAll 'notChanged'
+    $script:Iw = @{ state = 'Restored'; started = @('CDPSvc'); failed = @(); skipped = @(); error = '' }
+    $r.rsIwOk = & $restore
+    $script:Iw = @{ state = 'RestoreFailed'; started = @(); failed = @('CDPSvc'); skipped = @(); error = '' }
+    $r.rsIwFail = & $restore
+    $script:Iw = @{ state = 'InProgress'; started = @(); failed = @(); skipped = @(); error = 'стирание номера идёт сейчас' }
+    $r.rsIwBusy = & $restore
+    $script:Iw = @{ state = 'NotModified'; started = @(); failed = @(); skipped = @(); error = '' }
     $r
 }
 $cmdDone = Wait-Job $cmdJob -Timeout 120
@@ -2583,6 +2617,9 @@ if ($cg) {
     Check 'GDID3 16: службы не вернулись (журнал) — RestoreFailed, код 2' ($cg.rsJournal -eq '2|2|RestoreFailed|service:CDPSvc=RestoreFailed,service:CDPUserSvc=RestoreFailed,service:DoSvc=RestoreFailed,service:wlidsvc=RestoreFailed') $cg.rsJournal
     Check 'GDID3 16: службы нет — NotFound без ошибки; отказ — AccessDenied' ($cg.rsKinds -eq '2|2|RestoreFailed|service:CDPSvc=NotFound,service:DoSvc=AccessDenied') $cg.rsKinds
     Check 'GDID3: профиль стража не сверился — RestoreFailed' ($cg.rsGuard -eq '2|2|RestoreFailed|guard=RestoreFailed') $cg.rsGuard
+    Check 'GDID: возврат после оборванного стирания — службы запущены, стадия Restored, код 0' ($cg.rsIwOk -eq '0|0|Restored|interruptedWipe=Restored') $cg.rsIwOk
+    Check 'GDID: возврат после оборванного стирания — служба не запустилась: RestoreFailed, код 2' ($cg.rsIwFail -eq '2|2|RestoreFailed|interruptedWipe=RestoreFailed') $cg.rsIwFail
+    Check 'GDID: стирание идёт сейчас — его службы не трогаются, это не успех (код 2)' ($cg.rsIwBusy -eq '2|2|RestoreFailed|interruptedWipe=RestoreFailed') $cg.rsIwBusy
 }
 
 # 20: кэш платформы подключённых устройств — пробная папка во временной:
@@ -3760,7 +3797,9 @@ $auJob = Start-Job -ArgumentList $engine -ScriptBlock {
     param($EnginePath)
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$null, [ref]$null)
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-        if ($fn.Name -in @('Get-AuditSetting', 'Get-MonitorEnabled', 'Set-AuditSetting', 'Set-MonitorEnabled', 'Get-AuditName', 'Get-JournalKey', 'ConvertTo-Fields', 'Read-SecurityEvents', 'Invoke-NetGuard', 'Test-JournalEntryShape', 'Test-RegKind')) { Invoke-Expression $fn.Extent.Text }
+        if ($fn.Name -in @('Get-AuditSetting', 'Get-MonitorEnabled', 'Set-AuditSetting', 'Set-MonitorEnabled', 'Get-AuditName', 'Get-JournalKey', 'ConvertTo-Fields', 'Read-SecurityEvents', 'Invoke-NetGuard', 'Test-JournalEntryShape', 'Test-RegKind',
+                           'New-PrivateWorkDir', 'Remove-StalePrivateDirs', 'Read-PrivateWorkFile', 'Remove-PrivateWorkDir', 'Test-Admin', 'Remove-TreeNoFollow', 'Test-PathTrusted',
+                           'Test-ItemTrusted', 'Get-UntrustedRights', 'Test-DirChainSecure', 'Get-OwnerSid', 'Test-TrustedOwner')) { Invoke-Expression $fn.Extent.Text }
     }
     foreach ($a in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
         $lt = $a.Left -as [System.Management.Automation.Language.VariableExpressionAst]
@@ -3768,6 +3807,9 @@ $auJob = Start-Job -ArgumentList $engine -ScriptBlock {
     }
     $script:Log = New-Object System.Collections.Generic.List[string]
     function Write-Log { param($m) $script:Log.Add("$m") }
+    # копия политики — в личной рабочей папке (T-2): владельцы и права проверяются
+    $script:TrustedSids = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+    $script:ClearOwners = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-19', 'S-1-5-20', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
     $script:Failures = 0
     $script:Seen = New-Object System.Collections.Generic.List[object]
     # журнал заранее: запись «как было» обязана лечь до вызова auditpol /set
@@ -4154,7 +4196,10 @@ $bkJob = Start-Job -ArgumentList $engine -ScriptBlock {
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Restore-BackupFolder',
             'Get-BackupBytesSig', 'Get-BackupManifestSig', 'Read-BackupManifest', 'Get-BackupAllowedBranches', 'Test-RegImportContent', 'New-SafeWorkDir',
             'Remove-StaleWorkDirs', 'Remove-TreeNoFollow', 'ConvertFrom-EngineRequest', 'Read-RqValue', 'Read-RqString', 'Read-RqChar', 'Step-RqSpace',
-            'Test-BackupV1Allowed', 'Get-BackupStoreDir') }, $true)) { Invoke-Expression $fn.Extent.Text }
+            'Test-BackupV1Allowed', 'Get-BackupStoreDir',
+            'Get-RegFileBranch', 'ConvertTo-PsRegPath', 'ConvertFrom-RegExportText', 'Test-RegImported', 'Get-RestoreRecovery', 'Write-OpRecord', 'Read-OpRecord',
+            'Remove-OpRecord', 'Set-OpRecordAside', 'Enter-OpLock', 'Test-OpRunning', 'Get-OpRecordSig', 'Get-OpRecordPath', 'Open-JournalLockFile', 'Get-JournalLockPath',
+            'Use-JournalLock', 'Save-Json', 'Replace-FileAtomic', 'Read-TextShared', 'Ensure-DataDir', 'Test-DataTrusted', 'Test-Admin', 'Test-KeyFileSecure', 'New-RegBackup', 'Limit-BackupStore') }, $true)) { Invoke-Expression $fn.Extent.Text }
     $script:BackupManifestName = 'backup-sig.json'
     $script:BackupFileRx = [regex]::Match((Get-Content -LiteralPath $EnginePath -Raw -Encoding UTF8), "\`$script:BackupFileRx = '([^']+)'").Groups[1].Value
     $script:BackupV2Since = [regex]::Match((Get-Content -LiteralPath $EnginePath -Raw -Encoding UTF8), "\`$script:BackupV2Since = '(\d{8})'").Groups[1].Value
@@ -4163,13 +4208,21 @@ $bkJob = Start-Job -ArgumentList $engine -ScriptBlock {
     $root = Join-Path $env:TEMP ('w11p-bk-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     $script:SafeRoot = Join-Path $root 'safe'; New-Item -ItemType Directory -Force $script:SafeRoot | Out-Null
     function Assert-SafeRoot { $true }
+    # восстановление ведёт запись о ходе (T-3) в папке данных под замком журнала
+    $script:DataDir = Join-Path $root 'data'; $script:TaskRun = $false; $script:RestoreOp = 'restore'
+    $script:JournalLockDepth = 0; $script:JournalLockTries = 50; $script:JournalLockWaitMs = 200
+    $script:TrustedSids = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+    # после импорта ветка выгружается заново и сверяется с копией: «реестр»
+    # этой заглушки — то, что импортировано последним
+    $script:LastImported = $null
+    function Export-RegKey { param([string]$Key, [string]$File) if ($null -eq $script:LastImported) { return 'нечего выгружать' }; [IO.File]::WriteAllBytes($File, $script:LastImported); '' }
     $testKey = New-Object byte[] 32; (New-Object Random 11).NextBytes($testKey)
     function Get-SignKey { param([switch]$Create) $testKey }
     $script:Log = New-Object System.Collections.Generic.List[string]
     function Write-Log { param($m) $script:Log.Add("$m") }
     $script:Imported = New-Object System.Collections.Generic.List[string]
     function Invoke-RegExe { param([string]$Arguments, [int]$TimeoutMs = 300000)
-        if ($Arguments -match '^import "(.+)"$') { $script:Imported.Add($Matches[1]) }; @{ code = 0; error = '' } }
+        if ($Arguments -match '^import "(.+)"$') { $script:Imported.Add($Matches[1]); $script:LastImported = [IO.File]::ReadAllBytes($Matches[1]) }; @{ code = 0; error = '' } }
     $bk = Join-Path $root 'Win11Privacy-Backup-20260101-000000'
     New-Item -ItemType Directory -Force $bk | Out-Null
     $a = Join-Path $bk 'HKLM_SOFTWARE_X.reg'
@@ -4424,7 +4477,7 @@ if ($gd) {
     Check 'неотключившийся куст профиля назван и посчитан ошибкой' ($gd.hiveFails -eq 1 -and $gd.hiveLogged)
     Check 'в имени подключения куста — номер процесса движка' ($gd.mountName -match '^HKU\\W11P_\d+_[0-9a-f]{6}$') $gd.mountName
     Check 'куст от оборванного запуска отключается, живой и чужие — нет' ($gd.staleUnloaded -eq 'W11P_9999999_abcdef') ("отключены: " + $gd.staleUnloaded)
-    Check 'после cmdkey проверяется, что учётных данных не осталось' ($gd.check -eq '(cmdkey /list | findstr /i /c:"virtualapp/didlogical" /c:"SSO_POP_Device" >nul && exit 1 || exit 0)') $gd.check
+    Check 'после cmdkey проверяется, что учётных данных не осталось (а сбой списка — ошибка, не «нет»)' ($gd.check -eq '(cmdkey /list >nul 2>&1 || exit 2) & (cmdkey /list | findstr /i /c:"virtualapp/didlogical" /c:"SSO_POP_Device" >nul && exit 1 || exit 0)') $gd.check
     Check 'у удаления свой статус: убрано / не было' ("$($gd.st1)|$($gd.st2)|$($gd.st3)|$($gd.st4)" -eq 'removed|absent|removed|absent') "$($gd.st1)|$($gd.st2)|$($gd.st3)|$($gd.st4)"
 }
 $wipeText = [regex]::Match($engineText, "(?s)function Invoke-GdidWipe \{.*?\n\}").Value
@@ -4531,7 +4584,10 @@ Write-Host 'Резервная копия (W11P-001): выгрузка, подп
 $bkFns = @('Get-BackupBytesSig', 'Get-BackupManifestSig', 'ConvertTo-BackupManifestText', 'Remove-StaleWorkDirs',
            'New-SafeWorkDir', 'New-RegBackup', 'Read-BackupManifest', 'Get-BackupAllowedBranches', 'Test-RegImportContent',
            'Restore-BackupFolder', 'Remove-TreeNoFollow', 'ConvertFrom-EngineRequest', 'Read-RqValue', 'Read-RqString', 'Read-RqChar', 'Step-RqSpace',
-           'Get-BackupStoreDir', 'Limit-BackupStore', 'Test-BackupV1Allowed', 'Get-BackupList')
+           'Get-BackupStoreDir', 'Limit-BackupStore', 'Test-BackupV1Allowed', 'Get-BackupList',
+           'Get-RegFileBranch', 'ConvertTo-PsRegPath', 'ConvertFrom-RegExportText', 'Test-RegImported', 'Get-RestoreRecovery', 'Write-OpRecord', 'Read-OpRecord',
+           'Remove-OpRecord', 'Set-OpRecordAside', 'Enter-OpLock', 'Test-OpRunning', 'Get-OpRecordSig', 'Get-OpRecordPath', 'Open-JournalLockFile', 'Get-JournalLockPath',
+           'Use-JournalLock', 'Save-Json', 'Replace-FileAtomic', 'Read-TextShared', 'Ensure-DataDir', 'Test-DataTrusted', 'Test-Admin', 'Test-KeyFileSecure')
 $bkFound = @()
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($bkFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $bkFound += $fn.Name }
@@ -4580,6 +4636,10 @@ if ($bkFound.Count -eq $bkFns.Count) {
     }
     $script:RegTypes = @('reg', 'regif', 'regpol', 'regsvc')
     $script:Defs = @(@{ T = 'reg'; P = $bkKeys[0]; M = 't' }, @{ T = 'reg'; P = $bkKeys[1]; M = 't' })
+    # запись о ходе восстановления (T-3) — в своей пробной папке данных
+    $savedDataDir = $script:DataDir
+    $script:DataDir = Join-Path $env:TEMP ('w11p-bkdata-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $script:TaskRun = $false; $script:RestoreOp = 'restore'; $script:JournalLockDepth = 0; $script:JournalLockTries = 50; $script:JournalLockWaitMs = 200
     $savedSafe = $script:SafeRoot
     # рабочие папки — всё в защищённом корне, кроме хранилища копий
     function Get-WorkDirs { return @(Get-ChildItem -LiteralPath $script:SafeRoot -Directory -Force | Where-Object { $_.Name -ne 'backups' }) }
@@ -4861,13 +4921,16 @@ exit $bad
     $rb = Restore-BackupFolder $bk.dir
     $script:FailImportAt = 0
     Check 'возврат: сбой импорта посередине — посчитан как неудача, рабочая папка убрана' ($rb.restored -eq 1 -and $rb.failed -eq 1 -and (Get-WorkDirs).Count -eq 0) ("restored {0} failed {1}" -f $rb.restored, $rb.failed)
+    Check 'возврат: сбой импорта посередине — итог PartiallyRestored, не успех' ($rb.state -eq 'PartiallyRestored') $rb.state
     Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
 
+    Remove-Item -LiteralPath $script:DataDir -Recurse -Force -ErrorAction SilentlyContinue
+    $script:DataDir = $savedDataDir
     $script:SafeRoot = $savedSafe
 }
 }
 $restoreBlock = [regex]::Match($bkText, "(?s)if \(\`$RestoreBackup\) \{.*?\n\}").Value
-Check 'возврат: «вернулось не всё» — код 2, а не 0' ($restoreBlock -match 'elseif \(\(\$rb\.failed \+ \$rb\.refused\) -gt 0\) \{ 2 \}')
+Check 'возврат: «вернулось не всё» — код 2, а не 0 (по итогу: PartiallyRestored)' ($restoreBlock -match "elseif \(\`$rb\.state -eq 'PartiallyRestored'\) \{ 2 \}")
 $ensureBlock = [regex]::Match($bkText, "(?s)function Ensure-Backup \{.*?\n\}").Value
 Check 'копия: Ensure-Backup выгружает только через New-RegBackup (без reg.exe на рабочий стол)' (($ensureBlock -match 'New-RegBackup \$keys') -and ($ensureBlock -notmatch 'Export-RegKey'))
 $newBkBlock = [regex]::Match($bkText, "(?s)function New-RegBackup \{.*?\n\}").Value
@@ -4879,7 +4942,7 @@ Check 'копия (W11P-005): ни New-RegBackup, ни Ensure-Backup не пиш
 # --------------------------------------------------------------------------- #
 Write-Host ''
 Write-Host 'Firefox policies.json (W11P-002): запись одним действием'
-$ffFns = @('Read-Utf8Strict', 'Write-JsonFileAtomic', 'Update-FirefoxPoliciesFile', 'Replace-FileAtomic', 'Write-FirefoxKey', 'Open-FirefoxMutex', 'Test-MutexOwnerTrusted')
+$ffFns = @('Read-Utf8Strict', 'Write-JsonFileAtomic', 'Update-FirefoxPoliciesFile', 'Replace-FileAtomic', 'Write-FirefoxKey', 'Open-FirefoxMutex', 'Test-MutexOwnerTrusted', 'Open-ProgramMutex', 'New-ProgramMutexSecurity', 'Get-MutexSecurityProblem', 'Get-MutexTrustedSids', 'Test-Admin')
 $ffFound = @()
 foreach ($fn in $engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($ffFns -contains $fn.Name) { Invoke-Expression $fn.Extent.Text; $ffFound += $fn.Name }
@@ -4993,15 +5056,17 @@ if ($ffFound.Count -eq $ffFns.Count) {
     Remove-Item -LiteralPath $d -Recurse -Force
 
     # --- замок (W11P-006 / Firefox): только Global\, чужой замок — отказ ---
-    Check 'замок Firefox: владелец — система, администраторы или мы сами; чужие — нет' (
+    # T-1: сама учётная запись — «своя» только без повышения (у повышенного
+    # движка тот же SID есть у любой обычной программы этого пользователя)
+    Check 'замок Firefox: владелец — система или администраторы (сама учётная запись — только без повышения); чужие — нет' (
           (Test-MutexOwnerTrusted 'S-1-5-18') -and (Test-MutexOwnerTrusted 'S-1-5-32-544') -and
-          (Test-MutexOwnerTrusted ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) -and
+          ((Test-MutexOwnerTrusted ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) -eq (-not (Test-Admin))) -and
           -not (Test-MutexOwnerTrusted 'S-1-5-32-545') -and -not (Test-MutexOwnerTrusted 'S-1-1-0') -and -not (Test-MutexOwnerTrusted 'S-1-5-11') -and -not (Test-MutexOwnerTrusted ''))
     $m = Open-FirefoxMutex
     $mAcl = $m.GetAccessControl()
     $mSids = @($mAcl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | ForEach-Object { $_.IdentityReference.Value } | Sort-Object -Unique)
-    $mWant = @('S-1-5-18', 'S-1-5-32-544', [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) | Sort-Object -Unique
-    Check 'замок Firefox: права только у системы, администраторов и создателя' ($mAcl.AreAccessRulesProtected -and (($mSids -join ',') -eq ($mWant -join ','))) ($mSids -join ',')
+    $mWant = @(@('S-1-5-18', 'S-1-5-32-544') + $(if (Test-Admin) { @() } else { @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) })) | Sort-Object -Unique
+    Check 'замок Firefox: права только у системы и администраторов (и самой учётной записи — только без повышения)' ($mAcl.AreAccessRulesProtected -and (($mSids -join ',') -eq ($mWant -join ','))) ($mSids -join ',')
     $m.Dispose()
     # Замок, заранее заведённый так, что нам его не открыть (у DACL нет ни
     # одного разрешения): раньше движок молча брал Local\ и писал без общего
@@ -5028,7 +5093,7 @@ if ($ffFound.Count -eq $ffFns.Count) {
     $ffd = Join-Path $env:TEMP ('w11p-ffc-' + [guid]::NewGuid().ToString('N').Substring(0, 8)); $null = New-Item -ItemType Directory -Force (Join-Path $ffd 'distribution')
     $fff = Join-Path $ffd 'distribution\policies.json'
     [IO.File]::WriteAllText($fff, '{"policies":{"Keep":true}}', (New-Object System.Text.UTF8Encoding($false)))
-    $fnText = (@($engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Read-Utf8Strict', 'Write-JsonFileAtomic', 'Update-FirefoxPoliciesFile', 'Replace-FileAtomic', 'Open-FirefoxMutex', 'Test-MutexOwnerTrusted') }, $true)) | ForEach-Object { $_.Extent.Text }) -join "`r`n"
+    $fnText = (@($engineAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Read-Utf8Strict', 'Write-JsonFileAtomic', 'Update-FirefoxPoliciesFile', 'Replace-FileAtomic', 'Open-FirefoxMutex', 'Test-MutexOwnerTrusted', 'Open-ProgramMutex', 'New-ProgramMutexSecurity', 'Get-MutexSecurityProblem', 'Get-MutexTrustedSids', 'Test-Admin') }, $true)) | ForEach-Object { $_.Extent.Text }) -join "`r`n"
     $worker = Join-Path $ffd 'worker.ps1'
     Set-Content -LiteralPath $worker -Encoding UTF8 -Value ('param($F, $K)' + "`r`n" + $fnText + "`r`n" + '$r = Update-FirefoxPoliciesFile $F $K 1; if ($r.ok) { exit 0 } else { [Console]::Error.WriteLine($r.why); exit 1 }')
     $procs = @()
@@ -5246,6 +5311,11 @@ foreach ($op in @('XrayWipe', 'RemoveApps', 'StartupSet', 'RestoreItems', 'Purge
 Check 'действия с ошибками (XrayWipe, RemoveApps, StartupSet, RestoreItems, PurgeData) не завершаются кодом 0' ($failExit.Count -eq 0) ($failExit -join ' | ')
 $rq = Invoke-EngineRequestText '{"v":1,"op":"SensorSet","args":{"SensorKey":"webcam\\..\\x","SensorValue":"Deny"}}'
 Check 'SensorSet через запрос: негодный ключ — код 1 и ok:false в ответе' ($rq.code -eq 1 -and $null -ne $rq.json -and -not $rq.json.ok) ("код " + $rq.code)
+
+# --------------------------------------------------------------------------- #
+#  Исправления T-1, T-2, T-3 и GDID (2026-11-16) — отдельным файлом рядом
+# --------------------------------------------------------------------------- #
+. (Join-Path $PSScriptRoot 'engine-remediation.ps1')
 
 # --------------------------------------------------------------------------- #
 Write-Host ''

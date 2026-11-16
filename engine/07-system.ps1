@@ -32,23 +32,38 @@ function Test-TamperProtection {
 #  тот же HKCU и показывала «применено».
 #  Владелец explorer.exe в этом сеансе — тот, кто вошёл в Windows.
 #  @{ sid; name; profile; isMe } или $null, если определить не удалось.
+#
+#  Только explorer.exe ЭТОГО сеанса (того, где работает движок). Раньше брался
+#  любой explorer.exe на компьютере: когда в Windows вошли двое (быстрая смена
+#  пользователей), «за компьютером» мог оказаться второй — и задача от имени
+#  пользователя (Invoke-AsUser), его кэш платформы устройств и его настройки
+#  HKCU шли не тому человеку. У задачи от имени SYSTEM (сеанс 0) explorer нет —
+#  «другого пользователя» у неё нет.
+#  Не удалось спросить Windows (WMI не ответил) — $script:SessionUserError: это
+#  не «за компьютером сам движок», а «неизвестно»; стирание номера тогда не
+#  начинается (Get-GdidPreflight), прочее ведёт себя как раньше.
 # --------------------------------------------------------------------------- #
 $script:SessionUserCache = $null
+$script:SessionUserError = ''
 function Get-SessionUser {
     if ($null -ne $script:SessionUserCache) { return $script:SessionUserCache.v }
     $found = $null
+    $script:SessionUserError = ''
     try {
-        foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop)) {
-            $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue
+        $mySession = [int][Diagnostics.Process]::GetCurrentProcess().SessionId
+        foreach ($p in @(Get-CimInstance Win32_Process -Filter ("Name='explorer.exe' AND SessionId={0}" -f $mySession) -ErrorAction Stop)) {
+            $o = $null
+            try { $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop } catch { }
             $sid = $(if ($o) { "$($o.Sid)" } else { '' })
-            if ($sid -notlike 'S-1-5-21-*') { continue }
+            # люди: локальные и доменные (S-1-5-21-…) и Entra ID (S-1-12-1-…)
+            if ($sid -notmatch '^S-1-(5-21|12-1)-[\d-]+$') { continue }
             $name = ''
             try { $name = (New-Object Security.Principal.SecurityIdentifier($sid)).Translate([Security.Principal.NTAccount]).Value } catch { }
             $prof = Get-MachinePath ('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $sid) 'ProfileImagePath' $null
             $found = @{ sid = $sid; name = $name; profile = $prof; isMe = ($sid -eq $script:UserSid) }
             if ($found.isMe) { break }     # свой сеанс важнее чужого
         }
-    } catch { }
+    } catch { $found = $null; $script:SessionUserError = "$($_.Exception.Message)" }
     $script:SessionUserCache = @{ v = $found }
     return $found
 }

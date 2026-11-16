@@ -164,4 +164,23 @@ Run 1 (`clean,copy,tests,pester,A,B,reboot,C,fetch`), then run 2 after the G3-17
 * A CDP cache that contains real junctions created by Windows, and a CDP folder with restricted
   ACLs on a live profile.
 * An interrupted wipe (the engine killed between disabling wlidsvc and the restore), checked live:
-  the journal path is covered by the second pass and its tests.
+  the journal path is covered by the second pass and its tests. **Done on 2026-11-16, see section 8.**
+
+## 8. Follow-up pass (2026-11-16): user context, credentials, interrupted wipe
+
+Base `700d84e`. Details and test numbers: `SECURITY_REMEDIATION_REPORT.md`, pass of
+2026-11-16 (GDID-A, GDID-B, GDID-C), and `FINAL_SECURITY_AUDIT.md`.
+
+| ID | Defect | Fix | Tests |
+|---|---|---|---|
+| G4-01 (GDID-A) | `Get-SessionUser` took the owner of any `explorer.exe` on the machine. With two signed-in users (fast user switching) "the person at the computer" could be the other one: `Invoke-AsUser` tasks, the CDP cache cleanup and HKCU writes went to them. A WMI failure was read as "the engine's own account is at the computer". Entra ID owners were ignored. | Only `explorer.exe` of the engine's own session (`SessionId`); `S-1-12-1-…` accepted; a WMI failure sets `$script:SessionUserError`, and `Get-GdidPreflight` refuses the wipe ("кто сидит за компьютером, определить не удалось"). | "GDID: «кто за компьютером» — только explorer этого же сеанса", "…Entra ID…", "WMI не ответил…", "неизвестно, кто за компьютером, — стирание не начинается" |
+| G4-02 (GDID-B) | A failed `cmdkey /list` (no output) was read as "no credentials left", both in the task check command (`findstr` found nothing → exit 0) and for the engine's own store. `Get-GdidCredUsers` listed only `S-1-5-21` hives. | Check command: `(cmdkey /list >nul 2>&1 \|\| exit 2) & (… findstr … && exit 1 \|\| exit 0)`; own store: listing must exit 0; hives by `$script:GdidUserSidRx`. | "проверка в задаче — сбой списка … код 2" (real `cmd.exe` with a fake `cmdkey`), "хранилище движка не прочиталось — не «убрано»", "учётные данные — … Entra ID …" |
+| G4-03 (GDID-C) | The wipe kept the list of services it had stopped only in memory. A wipe killed after stopping them left CDPSvc/DoSvc/CDPUserSvc stopped until a reboot; the next wipe saw them stopped and did not start them; nothing reported it. | Lock `gdid-wipe.lock` and signed record `op-gdid-wipe.json` (services running before) written before the first change; removed when the services are back, kept (`RestoreFailed`) when not; the next wipe carries the recorded services into its restart list and its verification; `-GdidRestore` stage `interruptedWipe` starts them (only valid service names, never a disabled or vanished one); `-GdidStatus` field `interruptedWipe` (`RecoveryRequired`, `Settled`, `InProgress`); window row "Стирание оборвалось". | GDID block of `tests/engine-remediation.ps1` (record order, carry-over, failure, busy lock, process killed at 8 stages); `-GdidRestore` command-block cases; VM: real wipe killed after CDPSvc stopped |
+
+Checked and unchanged (no defect): IdentityCRL inventory and exact deletion (DeviceId, ValidDeviceId,
+unknown keys kept, idempotent re-run, `Partial` on incomplete deletion); unloaded profiles stay
+`Unverified` and are never mounted; `Clear-GdidUserCreds` deletes only the constant targets;
+one-shot tasks are verified by SID before they start.
+
+Still not verified live: a machine with two signed-in users (fast user switching) and real
+over-the-shoulder elevation — the session filter is covered with stubs; Entra/hybrid/MDM machines.

@@ -310,33 +310,108 @@ function Write-FirefoxKey {
 #    самого создателя — замок, заведённый задачей от имени системы, откроет и
 #    движок окна (с правами по умолчанию системный замок администраторам
 #    недоступен, и раньше это и уводило в Local\).
-#  * Уже существующий замок годится, только если его владелец — система,
-#    администраторы или мы сами. Замок, заранее заведённый обычной программой,
-#    не используется: она могла бы держать его или отпускать, когда ей нужно.
+#  * Уже существующий замок годится, только если его владелец — система или
+#    администраторы, а ждать его (то есть взять и держать), менять его права,
+#    владельца или удалить могут только они же (Get-MutexSecurityProblem).
+#    Замок, заранее заведённый обычной программой, не используется: она могла
+#    бы держать его или отпускать, когда ей нужно.
+#
+#  Сама учётная запись движка «своей» считается, только когда он работает без
+#  повышения (тесты, ручной запуск): тогда границы прав нет. У повышенного
+#  движка тот же SID пользователя есть и у любой его обычной программы — она
+#  заводила замок «своим» и проходила проверку владельца, а право
+#  «полный доступ» для этого SID в новом замке давало ей взять и держать
+#  настоящий замок или переписать его права (T-1). Повышенный движок ставит
+#  новому замку владельцем «Администраторов»: обычная программа такого
+#  владельца назначить не может (Windows отвечает «этот SID нельзя назначить
+#  владельцем»).
+function Get-MutexTrustedSids {
+    $sids = @('S-1-5-18', 'S-1-5-32-544')
+    if (-not (Test-Admin)) { try { $sids += [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { } }
+    return $sids
+}
+
 function Test-MutexOwnerTrusted {
     param([string]$Sid)
     if (-not $Sid) { return $false }
-    if (@('S-1-5-18', 'S-1-5-32-544') -contains $Sid) { return $true }
-    try { return ($Sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) } catch { return $false }
+    return (@(Get-MutexTrustedSids) -contains $Sid)
+}
+
+# Права уже заведённого замка. Пустая строка — замок свой, иначе — почему нет:
+# права не читаются (дескриптор открыт без READ_CONTROL — так .NET открывает
+# чужой замок, к которому нет полного доступа), владелец чужой, или кто-то,
+# кроме своих, может его ждать (взять и держать), менять права и владельца,
+# удалить. Читать права и состояние замка — не опасно. Пустой список прав
+# (NULL DACL) .NET показывает как «Все: полный доступ» — тоже отказ.
+function Get-MutexSecurityProblem {
+    param($Security, [string[]]$Trusted = @(Get-MutexTrustedSids))
+    if ($null -eq $Security) { return 'права замка не читаются' }
+    $owner = ''
+    try { $owner = "$($Security.GetOwner([Security.Principal.SecurityIdentifier]).Value)" } catch { }
+    if (-not $owner) { return 'владелец замка не читается' }
+    if (@($Trusted) -notcontains $owner) { return ('замок заведён чужой учётной записью ({0})' -f $owner) }
+    $harmless = [int64](0x20000 -bor 0x1)   # READ_CONTROL, MUTANT_QUERY_STATE
+    try { $rules = @($Security.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) }
+    catch { return 'права замка не читаются' }
+    foreach ($r in $rules) {
+        if ("$($r.AccessControlType)" -ne 'Allow') { continue }
+        $sid = "$($r.IdentityReference.Value)"
+        if (@($Trusted) -contains $sid) { continue }
+        if (([int64][int]$r.MutexRights -band (-bnot $harmless)) -ne 0) { return ('замок открыт не только системе и администраторам ({0})' -f $sid) }
+    }
+    return ''
+}
+
+# Права нового замка программы: полный доступ — системе и администраторам (и
+# самой учётной записи, только если движок без повышения), наследования нет.
+# -Owner — владелец «Администраторы» (повышенный движок и SYSTEM).
+function New-ProgramMutexSecurity {
+    param([switch]$Owner)
+    $sec = New-Object System.Security.AccessControl.MutexSecurity
+    $sec.SetAccessRuleProtection($true, $false)
+    foreach ($s in @(Get-MutexTrustedSids)) {
+        $sid = New-Object Security.Principal.SecurityIdentifier($s)
+        $sec.AddAccessRule((New-Object System.Security.AccessControl.MutexAccessRule($sid, [System.Security.AccessControl.MutexRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)))
+    }
+    if ($Owner) { $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544'))) }
+    return $sec
+}
+
+# Замок программы по имени: свой новый или проверенный существующий — тот же
+# дескриптор, что проверен, и ждётся (повторного открытия по имени нет: между
+# проверкой и вторым открытием объект под этим именем могли бы подменить).
+# Не годится — исключение, защищаемое действие не выполняется.
+function Open-ProgramMutex {
+    param([string]$Name)
+    $created = $false
+    $m = $null
+    $elevated = Test-Admin
+    try { $m = [System.Threading.Mutex]::new($false, $Name, [ref]$created, (New-ProgramMutexSecurity -Owner:$elevated)) }
+    catch {
+        # вид ошибки — по самому исключению .NET, а не по фильтру catch [тип] (T-4)
+        $ex = $_.Exception.GetBaseException()
+        if ($ex -is [System.UnauthorizedAccessException]) { throw ('замок {0} не открылся: нет доступа -- его заранее занял кто-то чужой' -f $Name) }
+        if ($ex -is [System.Threading.WaitHandleCannotBeOpenedException]) { throw ('имя замка {0} занято объектом другого вида -- его заранее занял кто-то чужой' -f $Name) }
+        # «этот SID нельзя назначить владельцем»: у учётной записи нет права
+        # назначить «Администраторов» — тогда владелец остаётся по умолчанию
+        # (у SYSTEM — она сама). Чужой замок под этим именем всё равно
+        # проверяется ниже.
+        if (-not $elevated) { throw ('замок {0} не открылся: {1}' -f $Name, $_.Exception.Message) }
+        try { $m = [System.Threading.Mutex]::new($false, $Name, [ref]$created, (New-ProgramMutexSecurity)) }
+        catch { throw ('замок {0} не открылся ({1}) -- его мог заранее занять кто-то чужой' -f $Name, $_.Exception.Message) }
+    }
+    if (-not $created) {
+        $cur = $null
+        try { $cur = $m.GetAccessControl() } catch { $cur = $null }
+        $why = Get-MutexSecurityProblem $cur
+        if ($why) { $m.Dispose(); throw ('замок {0} не годится: {1}' -f $Name, $why) }
+    }
+    return $m
 }
 
 function Open-FirefoxMutex {
-    $name = 'Global\Win11Privacy-FirefoxPolicies'
-    $sec = New-Object System.Security.AccessControl.MutexSecurity
-    $sec.SetAccessRuleProtection($true, $false)
-    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
-    foreach ($sid in @((New-Object Security.Principal.SecurityIdentifier('S-1-5-18')), (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')), $me)) {
-        $sec.AddAccessRule((New-Object System.Security.AccessControl.MutexAccessRule($sid, [System.Security.AccessControl.MutexRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)))
-    }
-    $created = $false
-    try { $m = [System.Threading.Mutex]::new($false, $name, [ref]$created, $sec) }
-    catch { throw ('замок policies.json не открылся ({0}) -- его мог заранее занять кто-то чужой' -f $_.Exception.Message) }
-    if (-not $created) {
-        $owner = ''
-        try { $owner = $m.GetAccessControl().GetOwner([Security.Principal.SecurityIdentifier]).Value } catch { }
-        if (-not (Test-MutexOwnerTrusted $owner)) { $m.Dispose(); throw 'замок policies.json заведён чужой программой -- не пишем' }
-    }
-    return $m
+    try { return (Open-ProgramMutex 'Global\Win11Privacy-FirefoxPolicies') }
+    catch { throw ('{0} -- policies.json не пишем' -f $_.Exception.Message) }
 }
 
 # Сам ключ в файле по явному пути (его же проверяют тесты на временной папке).
@@ -347,7 +422,10 @@ function Update-FirefoxPoliciesFile {
     $mtx = $null; $got = $false
     try {
         $mtx = Open-FirefoxMutex
-        try { $got = $mtx.WaitOne(30000) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+        # «брошен» (прежний держатель умер) — замок наш; любая другая ошибка —
+        # не наш. Вид — по самому исключению .NET (T-4, см. Test-IoBusy).
+        try { $got = $mtx.WaitOne(30000) }
+        catch { if ($_.Exception.GetBaseException() -is [System.Threading.AbandonedMutexException]) { $got = $true } else { throw } }
         if (-not $got) { return @{ ok = $false; why = 'policies.json сейчас меняет другой запуск программы' } }
         $dir = Split-Path $Path -Parent
         foreach ($d in @($dir, $Path)) {

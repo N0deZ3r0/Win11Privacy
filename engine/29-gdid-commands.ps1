@@ -128,6 +128,26 @@ if ($GdidRestore) {
     foreach ($p in @($sync.pending)) { Write-Log ("   [i] служба {0}: тип запуска возвращён, но Windows применит его позже -- до тех пор она не работает" -f $p); $rr.warnings.Add(("отложено: {0}" -f $p)) }
     foreach ($f in @($sync.failed)) { Write-Log ("   [!] служба не запустилась: {0}" -f $f); $script:Failures++; $rr['failed'] = [int]$rr['failed'] + 1; $rr.errors.Add(("не запустилась: {0}" -f $f)) }
     $rr.stages['start'] = $(if (@($sync.failed).Count -gt 0) { 'RestoreFailed' } elseif (@($sync.pending).Count -gt 0) { 'Pending' } else { 'ok' })
+    # Оборванное стирание номера: службы, что работали до него и стоят
+    # сейчас, — запустить и сверить (Restore-GdidInterruptedWipe). Раньше о
+    # них не знал никто: список жил только в памяти оборвавшегося запуска.
+    $iw = Restore-GdidInterruptedWipe
+    switch ($iw.state) {
+        'NotModified' { & $stage 'interruptedWipe' 'NotModified' }
+        'Restored' {
+            foreach ($n in @($iw.started)) { Write-Log ("   [+] служба {0} снова работает (её остановило оборванное стирание номера)" -f $n) }
+            foreach ($n in @($iw.skipped)) { Write-Log ("   [i] служба {0} после оборванного стирания не запускается: её нет или она отключена" -f $n) }
+            if ($iw.error) { Write-Log ("   [i] {0}" -f $iw.error) }
+            if (@($iw.started).Count -gt 0) { $script:Changes++ }
+            & $stage 'interruptedWipe' 'Restored'
+        }
+        default {
+            foreach ($n in @($iw.failed)) { Write-Log ("   [!] служба {0} после оборванного стирания не запустилась" -f $n) }
+            if ($iw.error) { Write-Log ("   [!] {0}" -f $iw.error) }
+            $script:Failures++
+            & $stage 'interruptedWipe' 'RestoreFailed' ((@($iw.failed) + @($iw.error | Where-Object { $_ })) -join '; ')
+        }
+    }
     if ((Get-SvcStart 'wlidsvc') -eq 4 -and $restored -notcontains 'wlidsvc') {
         Write-Log '   [i] служба учётных записей Microsoft (wlidsvc) отключена, но не программой (в журнале отката её нет) -- она её не трогает'
     }

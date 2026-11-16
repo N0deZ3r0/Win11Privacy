@@ -21,7 +21,9 @@ $script:JournalLockDepth = 0
 function Get-JournalLockPath { return (Join-Path $script:SafeRoot 'journal.lock') }
 
 function Open-JournalLockFile {
-    $p = Get-JournalLockPath
+    # -Path — другой замок того же устройства (замок операции, см. Enter-OpLock)
+    param([string]$Path = '')
+    $p = $(if ($Path) { $Path } else { Get-JournalLockPath })
     $dir = Split-Path $p -Parent
     if (Test-Admin) {
         # Корень заводится и проверяется до замка: корень, который успел
@@ -74,14 +76,22 @@ function Use-JournalLock {
     $fs = $null
     $until = (Get-Date).AddMilliseconds([double]$script:JournalLockTries * [double]$script:JournalLockWaitMs)
     while ($null -eq $fs) {
+        $busy = $false
         try { $fs = Open-JournalLockFile }
-        catch [System.UnauthorizedAccessException] {
-            throw (New-Object System.UnauthorizedAccessException 'замок журнала отката открывается только с правами администратора')
-        } catch [System.IO.IOException] {
+        catch {
+            # Вид ошибки — по самому исключению .NET, а не по фильтру catch
+            # [тип]: в этом цикле Windows PowerShell 5.1 отдавал ошибки не той
+            # ветке (T-4, см. Test-IoBusy)
+            $ex = $_.Exception.GetBaseException()
+            if ($ex -is [System.UnauthorizedAccessException]) {
+                throw (New-Object System.UnauthorizedAccessException 'замок журнала отката открывается только с правами администратора')
+            }
+            if (-not ($ex -is [System.IO.IOException])) { throw }
             # занят другим запуском (или антивирус проверяет файл) — ждём
             if ((Get-Date) -ge $until) { throw 'журнал отката занят другим запуском программы' }
-            Start-Sleep -Milliseconds 200
+            $busy = $true
         }
+        if ($busy) { Start-Sleep -Milliseconds 200 }
     }
     $script:JournalLockDepth = 1
     try { & $Body }
@@ -477,6 +487,124 @@ function Remove-JournalEntries {
         Write-JournalFile $rest $jf.legacy
     }
 }
+# --------------------------------------------------------------------------- #
+#  Записи о незаконченных операциях (T-3: восстановление из резервной копии;
+#  стирание номера устройства). Обе идут по шагам, и сделать их неделимыми
+#  нельзя: reg.exe import пишет значения по одному и, оборвавшись, оставляет
+#  уже записанное; стирание номера останавливает службы и запускает их
+#  только в конце. Поэтому, как и журнал отката, такая операция сначала
+#  пишет на диск, что собирается делать и на каком она шаге, и только потом
+#  делает. Оборвалась — запись остаётся, и следующий запуск знает, что
+#  операция не закончена (RecoveryRequired), а не считает, что всё в порядке.
+#  Запись — теми же средствами, что журнал: в папке данных (Save-Json: файл
+#  пишется рядом и подменяет прежний одним действием), под замком журнала,
+#  подписана тем же ключом (HMAC-SHA256 со своей приставкой: подпись записи
+#  за подпись журнала не сойдёт). Отдельным файлом op-<имя>.json, а не в
+#  changes.json: это не «как было» для отката, а состояние операции — в
+#  журнале его исполнял бы полный откат, а прежние версии программы
+#  отложили бы журнал с незнакомой записью как недоверенный.
+#  Пока операция идёт, её замок (файл <имя>.lock в защищённом корне — как
+#  замок журнала: только система и администраторы, без совместного доступа)
+#  держится открытым. Запись есть, а замок свободен — процесс, который её
+#  писал, умер посередине (Windows закрывает файл сама).
+# --------------------------------------------------------------------------- #
+function Get-OpRecordPath { param([string]$Name) return (Join-Path $script:DataDir ('op-{0}.json' -f $Name)) }
+
+function Get-OpRecordSig {
+    param([string]$Name, $Data, [switch]$ForWrite)
+    $canon = ('w11p-op|{0}|' -f $Name.ToLowerInvariant()) + (ConvertTo-Json -InputObject $Data -Depth 8 -Compress)
+    $h = [System.Security.Cryptography.HMACSHA256]::new([byte[]](Get-SignKey -Create:$ForWrite))
+    try { return (($h.ComputeHash([Text.Encoding]::UTF8.GetBytes($canon)) | ForEach-Object { $_.ToString('x2') }) -join '') }
+    finally { $h.Dispose() }
+}
+
+# Записать состояние операции. Не записалось — исключение: тогда операция
+# не начинается (или не идёт дальше) — без записи её обрыв никто бы не заметил.
+function Write-OpRecord {
+    param([string]$Name, $Data)
+    if (-not (Test-DataTrusted)) { throw 'папка данных программы не защищена от подмены' }
+    # подпись — по тексту, который даст разбор самого файла (как у журнала)
+    $parsed = ConvertFrom-Json (ConvertTo-Json -InputObject $Data -Depth 8 -Compress)
+    $sig = Get-OpRecordSig $Name $parsed -ForWrite
+    Use-JournalLock { Save-Json ('op-{0}.json' -f $Name) ([ordered]@{ schema = 1; op = $Name; updated = (Get-Date).ToString('s'); data = $parsed; sig = $sig }) }
+}
+
+# Прочитать запись операции. state: none — записи нет; valid — подпись
+# сошлась (data); untrusted — повреждена, подпись не сошлась или проверить
+# нечем (такой записи не верят и по ней ничего не делают); unreadable —
+# сейчас не читается (это не «записи нет»).
+function Read-OpRecord {
+    param([string]$Name)
+    $p = Get-OpRecordPath $Name
+    $res = @{ state = 'none'; data = $null; error = ''; path = $p }
+    # Файла нет — записи нет (обычный случай; замок и проверку папки ради
+    # этого не берём). «Не прочиталось» сюда не попадает: Test-Path на
+    # закрытом файле отвечает «есть».
+    if (-not (Test-Path -LiteralPath $p)) { return $res }
+    if (-not (Test-DataTrusted)) { $res.state = 'unreadable'; $res.error = 'папка данных программы не защищена от подмены'; return $res }
+    $box = @{ txt = $null }
+    try { Use-JournalLock { $box.txt = Read-TextShared $p } }
+    catch {
+        # без прав администратора замок журнала не взять — только посмотреть;
+        # любая другая ошибка — «не читается» (вид — по исключению, T-4)
+        if (-not ($_.Exception.GetBaseException() -is [System.UnauthorizedAccessException])) { $res.state = 'unreadable'; $res.error = "$($_.Exception.Message)"; return $res }
+        try { $box.txt = Read-TextShared $p } catch { $res.state = 'unreadable'; $res.error = "$($_.Exception.Message)"; return $res }
+    }
+    if ($null -eq $box.txt) { return $res }
+    $j = $null
+    try { $j = $box.txt | ConvertFrom-Json -ErrorAction Stop } catch { $j = $null }
+    if ($null -eq $j -or "$($j.schema)" -ne '1' -or "$($j.op)" -cne $Name -or -not "$($j.sig)" -or $null -eq $j.data) {
+        $res.state = 'untrusted'; $res.error = 'запись повреждена'; return $res
+    }
+    $want = $null
+    try { $want = Get-OpRecordSig $Name $j.data } catch { $want = $null }
+    if ($null -eq $want) { $res.state = 'untrusted'; $res.error = 'подпись записи проверить нечем'; return $res }
+    if ($want -cne "$($j.sig)") { $res.state = 'untrusted'; $res.error = 'подпись записи не сошлась'; return $res }
+    $res.state = 'valid'; $res.data = $j.data
+    return $res
+}
+
+# Убрать запись операции и проверить, что её нет. Ответ: $true — нет.
+function Remove-OpRecord {
+    param([string]$Name)
+    $p = Get-OpRecordPath $Name
+    Use-JournalLock { if (Test-Path -LiteralPath $p) { [IO.File]::Delete($p) } }
+    return (-not (Test-Path -LiteralPath $p))
+}
+
+# Недоверенная запись откладывается рядом под своим именем (как журнал) —
+# по ней ничего не делается, но и молча она не пропадает.
+function Set-OpRecordAside {
+    param([string]$Name)
+    $p = Get-OpRecordPath $Name
+    $bad = Join-Path $script:DataDir ('op-{0}.untrusted-{1}.json' -f $Name, (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    Use-JournalLock { if (Test-Path -LiteralPath $p) { Move-Item -LiteralPath $p -Destination $bad -Force -ErrorAction Stop } }
+    return (Split-Path $bad -Leaf)
+}
+
+# Замок операции: открытый файл <имя>.lock в защищённом корне. $null —
+# занят другим запуском; исключение — замка нет вовсе (корень не защищён,
+# нет прав). Закрывается Dispose() — или самой Windows, если процесс умер.
+function Enter-OpLock {
+    param([string]$Name)
+    try { return (Open-JournalLockFile -Path (Join-Path $script:SafeRoot ('{0}.lock' -f $Name))) }
+    catch {
+        # вид ошибки — по самому исключению .NET (T-4, см. Test-IoBusy)
+        if (Test-IoBusy $_.Exception) { return $null }
+        throw
+    }
+}
+
+# Идёт ли операция сейчас: её замок занят. $null — не проверить.
+function Test-OpRunning {
+    param([string]$Name)
+    try {
+        $l = Enter-OpLock $Name
+        if ($null -eq $l) { return $true }
+        $l.Dispose(); return $false
+    } catch { return $null }
+}
+
 # Файлы данных читаются только из папки, которой можно верить, — так же, как
 # пишутся (Save-Json). Раньше чтение не проверяло папку: подложенный файл
 # (например, profile.json — какие модули страж держит включёнными) прочитался

@@ -50,6 +50,7 @@ namespace Win11Privacy
             Answers();
             Language();
             DataRootChain();
+            AppMutex();
 
             Console.WriteLine();
             Console.WriteLine("Пройдено: " + _passed + ", провалено: " + _failed);
@@ -65,6 +66,70 @@ namespace Win11Privacy
             Check("путь до ProgramData подменить нельзя", EngineFile.ChainSecure(EngineFile.ProgramDataDir()));
             Check("временная папка пользователя — путь не защищён", !EngineFile.ChainSecure(Path.GetTempPath()));
             Check("несуществующая папка — не защищена", !EngineFile.ChainSecure(Path.Combine(Path.GetTempPath(), "w11p-no-such-" + Guid.NewGuid().ToString("N"))));
+        }
+
+        // --- замок окна Global\Win11Privacy-App (T-1) ----------------------- //
+        //  Имя может заранее занять любая программа. «Уже запущено» — только
+        //  если под именем замок самой программы; чужой объект — окно всё
+        //  равно открывается (Squatted), а не закрывается молча.
+        private static System.Security.AccessControl.MutexSecurity Sddl(string s)
+        {
+            System.Security.AccessControl.MutexSecurity x = new System.Security.AccessControl.MutexSecurity();
+            x.SetSecurityDescriptorSddlForm(s);
+            return x;
+        }
+
+        private static void AppMutex()
+        {
+            Console.WriteLine();
+            Console.WriteLine("Замок окна (T-1)");
+            string me = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value;
+            string[] elev = SingleInstance.TrustedSids(true, me);
+            string[] plain = SingleInstance.TrustedSids(false, me);
+            Check("свои у повышенного окна — только система и администраторы", elev.Length == 2 && Array.IndexOf(elev, me) < 0);
+            Check("без повышения своя учётная запись тоже своя", Array.IndexOf(plain, me) >= 0);
+            Check("замок программы (BA, права SY+BA) — свой",
+                  SingleInstance.Problem(Sddl("O:BAD:P(A;;0x1F0001;;;SY)(A;;0x1F0001;;;BA)"), elev).Length == 0);
+            Check("владелец — сам пользователь (так заводит обычная программа) — чужой у повышенного",
+                  SingleInstance.Problem(Sddl("O:" + me + "D:P(A;;0x1F0001;;;BA)"), elev).Length > 0);
+            Check("владелец — Пользователи — чужой", SingleInstance.Problem(Sddl("O:BUD:P(A;;0x1F0001;;;BA)"), elev).Length > 0);
+            Check("Все могут ждать (взять и держать) — чужой", SingleInstance.Problem(Sddl("O:BAD:P(A;;0x100000;;;WD)(A;;0x1F0001;;;BA)"), elev).Length > 0);
+            Check("смена прав для Прошедших проверку — чужой", SingleInstance.Problem(Sddl("O:BAD:P(A;;0x40000;;;AU)(A;;0x1F0001;;;BA)"), elev).Length > 0);
+            Check("пустой список прав (NULL DACL) — чужой", SingleInstance.Problem(Sddl("O:BAD:NO_ACCESS_CONTROL"), elev).Length > 0);
+            Check("чтение прав и состояния для Всех — не опасно", SingleInstance.Problem(Sddl("O:BAD:P(A;;0x20001;;;WD)(A;;0x1F0001;;;BA)"), elev).Length == 0);
+            Check("права не читаются — чужой", SingleInstance.Problem(null, elev).Length > 0);
+
+            // живые замки под проверочным именем (не мешают открытому окну)
+            string name = "Global\\W11P-selftest-" + Guid.NewGuid().ToString("N");
+            bool first = SingleInstance.Take(name);
+            Check("имени нет — замок свой, окно открывается", first && SingleInstance.Squatted.Length == 0);
+            bool second = SingleInstance.Take(name);
+            Check("второй запуск видит свой замок — «уже запущено»", !second && SingleInstance.Squatted.Length == 0);
+            SingleInstance.Release();
+
+            string sqName = "Global\\W11P-selftest-" + Guid.NewGuid().ToString("N");
+            bool sqCreated;
+            using (System.Threading.Mutex squat = new System.Threading.Mutex(false, sqName, out sqCreated, Sddl("D:P(A;;0x1F0001;;;WD)")))
+            {
+                bool r = SingleInstance.Take(sqName);
+                Check("имя занято чужим замком (Все: полный доступ) — окно открывается, это не «уже запущено»", sqCreated && r && SingleInstance.Squatted.Length > 0, SingleInstance.Squatted);
+                SingleInstance.Release();
+            }
+            string evName = "Global\\W11P-selftest-" + Guid.NewGuid().ToString("N");
+            using (System.Threading.EventWaitHandle ev = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.ManualReset, evName))
+            {
+                bool r = SingleInstance.Take(evName);
+                Check("имя занято объектом другого вида — окно открывается", r && SingleInstance.Squatted.Length > 0, SingleInstance.Squatted);
+                SingleInstance.Release();
+            }
+            string dnName = "Global\\W11P-selftest-" + Guid.NewGuid().ToString("N");
+            bool dnCreated;
+            using (System.Threading.Mutex deny = new System.Threading.Mutex(false, dnName, out dnCreated, Sddl("D:P")))
+            {
+                bool r = SingleInstance.Take(dnName);
+                Check("чужой замок без доступа — окно открывается", dnCreated && r && SingleInstance.Squatted.Length > 0, SingleInstance.Squatted);
+                SingleInstance.Release();
+            }
         }
 
         // --- язык интерфейса ------------------------------------------------- //

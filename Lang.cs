@@ -59,7 +59,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(1558, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1566, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -1618,6 +1618,14 @@ namespace Win11Privacy
             _map[", ещё не отключено: {0}"] = ", not yet disabled: {0}";
             _map["не удалось проверить, принадлежит ли компьютер организации"] = "could not check whether the computer belongs to an organisation";
             _map["не проверено: есть места без доступа или профили, которые сейчас не вошли в Windows"] = "not verified: some places cannot be read, or some users are not signed in to Windows right now";
+            _map["Прошлое восстановление из копии не закончилось — реестр мог остаться восстановленным частично.\n\n"] = "The previous restore from a backup did not finish: the registry may be only partly restored.\n\n";
+            _map["Копия: "] = "Backup: ";
+            _map["Вернулось и сверено файлов: {0} из {1}."] = "Files restored and verified: {0} of {1}.";
+            _map["Довести его — выберите ту же копию ещё раз."] = "To finish it, choose the same backup again.";
+            _map["Вернуть как было до него — выберите копию "] = "To go back to how it was before it, choose the backup ";
+            _map["Прошлое стирание номера не закончилось. «Вернуть как было» или новая смена номера снова запустят службы, что работали до него."] = "The previous ID wipe did not finish. \"Restore\" or a new \"Change the ID\" will start again the services that were running before it.";
+            _map["Сейчас стоят: {0}."] = "Stopped now: {0}.";
+            _map["Стирание оборвалось"] = "Wipe interrupted";
         }
     }
 }

@@ -1669,6 +1669,114 @@ function Test-DirChainSecure {
     } catch { return $false }
 }
 
+# --------------------------------------------------------------------------- #
+#  Личная рабочая папка для файла, который пишет системная утилита, а читает
+#  движок с правами администратора (T-2: копия политики аудита, auditpol
+#  /backup). Раньше, пока защищённого корня ещё не было, файл ложился во
+#  временную папку пользователя: её может менять любая его программа, и
+#  подменённая или недописанная копия читалась бы с правами администратора
+#  (по ней — состояние монитора и «как было» в журнале отката), а сама
+#  временная папка могла оказаться ссылкой (junction) — auditpol писал бы по ней.
+#  Повышенный движок берёт только место, куда обычной программе не дотянуться:
+#    * защищённый корень ProgramData\Win11Privacy, если он уже есть и проверен
+#      вместе с путём (Test-PathTrusted). Без побочных действий: чтение
+#      политики корень не заводит и не чинит (Assert-SafeRoot здесь не зовётся);
+#    * иначе — системная временная папка Windows\Temp, если ни одну папку на
+#      пути к ней чужой не может удалить, переименовать или перенастроить
+#      (Test-DirChainSecure). Создавать в ней пользователи могут, а читать
+#      её список и чужие файлы, удалять чужое — нет.
+#  Там заводится новая папка со случайным именем и с правами с самого
+#  создания: только система и администраторы, без наследования, владелец —
+#  «Администраторы». Имя уже занято или папка после создания не прошла
+#  проверку (ссылка, чужой владелец, чужие права, не пуста) — она не наша.
+#  Без повышения границы прав нет (движок может то же, что любая программа
+#  пользователя) — годится и обычная временная папка.
+#  Ответ: путь новой пустой папки или '' — тогда файла не будет вовсе (отказ).
+# --------------------------------------------------------------------------- #
+function New-PrivateWorkDir {
+    param([string]$Prefix)
+    $leaf = $Prefix + [guid]::NewGuid().ToString('N')
+    if (-not (Test-Admin)) {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) $leaf
+        if (Test-Path -LiteralPath $dir) { return '' }
+        try { $null = [IO.Directory]::CreateDirectory($dir) } catch { return '' }
+        return $dir
+    }
+    $bases = New-Object System.Collections.Generic.List[string]
+    if ($script:SafeRoot -and (Test-Path -LiteralPath $script:SafeRoot -PathType Container) -and (Test-PathTrusted $script:SafeRoot)) { $bases.Add($script:SafeRoot) }
+    $sysTemp = Join-Path $env:SystemRoot 'Temp'
+    if ((Test-Path -LiteralPath $sysTemp -PathType Container) -and (Test-DirChainSecure $sysTemp)) { $bases.Add($sysTemp) }
+    foreach ($b in $bases.ToArray()) {
+        Remove-StalePrivateDirs $b $Prefix
+        $dir = Join-Path $b $leaf
+        if (Test-Path -LiteralPath $dir) { continue }
+        $sec = New-Object System.Security.AccessControl.DirectorySecurity
+        $sec.SetAccessRuleProtection($true, $false)
+        $inh = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+            $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', $inh, 'None', 'Allow')))
+        }
+        $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        try { $null = [IO.Directory]::CreateDirectory($dir, $sec) } catch { continue }
+        $ok = $false
+        try {
+            $it = Get-Item -LiteralPath $dir -Force -ErrorAction Stop
+            $ok = (Test-ItemTrusted $it) -and (@(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop).Count -eq 0)
+        } catch { $ok = $false }
+        if ($ok) { return $dir }
+        # Не прошла проверку. Свою (владелец доверенный) — убираем; чужую не
+        # трогаем: по ссылкам Remove-TreeNoFollow не ходит, а чужое не удаляет.
+        $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+        Remove-TreeNoFollow $dir $st -TrustedOwnerOnly
+    }
+    return ''
+}
+
+# Личные рабочие папки, оставшиеся от оборванного запуска, — через час.
+# Только с доверенным владельцем и не ссылки: в Windows\Temp папку с таким
+# же началом имени мог завести кто угодно.
+function Remove-StalePrivateDirs {
+    param([string]$Base, [string]$Prefix)
+    $cut = (Get-Date).AddHours(-1)
+    foreach ($d in @(Get-ChildItem -LiteralPath $Base -Directory -Force -Filter ($Prefix + '*') -ErrorAction SilentlyContinue)) {
+        if ($d.LastWriteTime -gt $cut -or ($d.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+        $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+        Remove-TreeNoFollow $d.FullName $st -TrustedOwnerOnly
+    }
+}
+
+# Файл из личной рабочей папки: в папке — ровно он один, это обычный файл (не
+# ссылка и не папка), его владелец — система или администраторы (у
+# повышенного движка), он не больше $MaxBytes и появился не раньше $Since.
+# Читается один раз, открытым без права записи для других. Иначе — $null:
+# такому файлу не верят, а не читают «что есть».
+function Read-PrivateWorkFile {
+    param([string]$Dir, [string]$Name, [datetime]$Since = [datetime]::MinValue, [int]$MaxBytes = 4194304)
+    try {
+        $all = @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction Stop)
+        if ($all.Count -ne 1 -or $all[0].Name -cne $Name -or $all[0].PSIsContainer) { return $null }
+        $it = $all[0]
+        if ($it.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $null }
+        if ($it.Length -gt $MaxBytes) { return $null }
+        if ($it.CreationTimeUtc -lt $Since.ToUniversalTime()) { return $null }
+        if ((Test-Admin) -and $script:TrustedSids -notcontains (Get-OwnerSid $it.FullName)) { return $null }
+        $fs = [IO.File]::Open($it.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        try {
+            $ms = New-Object System.IO.MemoryStream
+            $fs.CopyTo($ms)
+            return $ms.ToArray()
+        } finally { $fs.Dispose() }
+    } catch { return $null }
+}
+
+# Личная рабочая папка — прочь, обходом без ссылок
+function Remove-PrivateWorkDir {
+    param([string]$Dir)
+    if (-not $Dir) { return }
+    $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+    Remove-TreeNoFollow $Dir $st
+}
+
 # Переносимая папка данных лежит рядом с exe, и права ей достаются от папки
 # exe. Окну этого достаточно: кто может писать в эту папку, может подменить и
 # сам exe, который человек запускает. Но страж и наблюдение — задачи
@@ -1781,25 +1889,54 @@ function Save-Json {
 function Replace-FileAtomic {
     param([string]$Tmp, [string]$Path)
     for ($try = 1; ; $try++) {
+        $busy = $false
         try {
             if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($Tmp, $Path, [NullString]::Value) }
             else { [IO.File]::Move($Tmp, $Path) }
             return
-        } catch [System.IO.IOException] {
-            if ($try -ge 30) { throw }
-            Start-Sleep -Milliseconds 100
+        } catch {
+            # Вид ошибки — по самому исключению .NET (см. Test-IoBusy). Любая
+            # ошибка ввода-вывода — повтор, как и раньше: файл на месте мог
+            # появиться или пропасть между проверкой и заменой (Test-Path
+            # смотрится заново).
+            if (-not ($_.Exception.GetBaseException() -is [System.IO.IOException]) -or $try -ge 30) { throw }
+            $busy = $true
         }
+        if ($busy) { Start-Sleep -Milliseconds 100 }
     }
+}
+
+# Вид ошибки ввода-вывода — по самому исключению .NET, а не по фильтру
+# catch [тип] (T-4). Windows PowerShell 5.1 в цикле с ожиданием начинал (на
+# 18-м проходе, проверено) отдавать «файл занят другим процессом» —
+# IOException, обёрнутую в MethodInvocationException, — ветке
+# catch [DirectoryNotFoundException]: Read-TextShared отвечал «файла нет», и
+# занятый журнал отката читался как отсутствующий. Любая программа
+# пользователя может открыть журнал на чтение (права корня — «Пользователи:
+# чтение») без совместного доступа и так подменить повышенному движку «журнал
+# пуст»: откат сказал бы «возвращать нечего», а следующая запись затёрла бы
+# историю «как было».
+#   Test-IoMissing — файла или папки нет; Test-IoBusy — занят (повторить можно).
+function Test-IoMissing {
+    param($Exception)
+    $ex = $Exception.GetBaseException()
+    return ($ex -is [System.IO.FileNotFoundException] -or $ex -is [System.IO.DirectoryNotFoundException])
+}
+function Test-IoBusy {
+    param($Exception)
+    $ex = $Exception.GetBaseException()
+    return ($ex -is [System.IO.IOException] -and -not (Test-IoMissing $Exception))
 }
 
 # Текст файла данных. Открывается с правом на чтение, запись и удаление для
 # других: замена файла другим запуском (ReplaceFile) не упрётся в нас, а мы
 # прочитаем либо прежний файл, либо новый — целиком. Занят без права на
 # чтение (антивирус) — ждём и пробуем снова; не вышло — ошибка, а не «пусто».
-# Файла нет — $null.
+# Файла нет — $null. Вид ошибки — Test-IoMissing / Test-IoBusy (T-4).
 function Read-TextShared {
     param([string]$Path)
     for ($try = 1; ; $try++) {
+        $busy = $false
         try {
             $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read,
                                          ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
@@ -1807,12 +1944,12 @@ function Read-TextShared {
                 $sr = New-Object System.IO.StreamReader($fs, (New-Object System.Text.UTF8Encoding $false), $true)
                 return $sr.ReadToEnd()
             } finally { $fs.Dispose() }
-        } catch [System.IO.FileNotFoundException] { return $null }
-        catch [System.IO.DirectoryNotFoundException] { return $null }
-        catch [System.IO.IOException] {
-            if ($try -ge 30) { throw }
-            Start-Sleep -Milliseconds 100
+        } catch {
+            if (Test-IoMissing $_.Exception) { return $null }
+            if (-not (Test-IoBusy $_.Exception) -or $try -ge 30) { throw }
+            $busy = $true
         }
+        if ($busy) { Start-Sleep -Milliseconds 100 }
     }
 }
 # --- Резервная копия и точка восстановления --------------------------------- #
@@ -2125,7 +2262,9 @@ $script:JournalLockDepth = 0
 function Get-JournalLockPath { return (Join-Path $script:SafeRoot 'journal.lock') }
 
 function Open-JournalLockFile {
-    $p = Get-JournalLockPath
+    # -Path — другой замок того же устройства (замок операции, см. Enter-OpLock)
+    param([string]$Path = '')
+    $p = $(if ($Path) { $Path } else { Get-JournalLockPath })
     $dir = Split-Path $p -Parent
     if (Test-Admin) {
         # Корень заводится и проверяется до замка: корень, который успел
@@ -2178,14 +2317,22 @@ function Use-JournalLock {
     $fs = $null
     $until = (Get-Date).AddMilliseconds([double]$script:JournalLockTries * [double]$script:JournalLockWaitMs)
     while ($null -eq $fs) {
+        $busy = $false
         try { $fs = Open-JournalLockFile }
-        catch [System.UnauthorizedAccessException] {
-            throw (New-Object System.UnauthorizedAccessException 'замок журнала отката открывается только с правами администратора')
-        } catch [System.IO.IOException] {
+        catch {
+            # Вид ошибки — по самому исключению .NET, а не по фильтру catch
+            # [тип]: в этом цикле Windows PowerShell 5.1 отдавал ошибки не той
+            # ветке (T-4, см. Test-IoBusy)
+            $ex = $_.Exception.GetBaseException()
+            if ($ex -is [System.UnauthorizedAccessException]) {
+                throw (New-Object System.UnauthorizedAccessException 'замок журнала отката открывается только с правами администратора')
+            }
+            if (-not ($ex -is [System.IO.IOException])) { throw }
             # занят другим запуском (или антивирус проверяет файл) — ждём
             if ((Get-Date) -ge $until) { throw 'журнал отката занят другим запуском программы' }
-            Start-Sleep -Milliseconds 200
+            $busy = $true
         }
+        if ($busy) { Start-Sleep -Milliseconds 200 }
     }
     $script:JournalLockDepth = 1
     try { & $Body }
@@ -2581,6 +2728,124 @@ function Remove-JournalEntries {
         Write-JournalFile $rest $jf.legacy
     }
 }
+# --------------------------------------------------------------------------- #
+#  Записи о незаконченных операциях (T-3: восстановление из резервной копии;
+#  стирание номера устройства). Обе идут по шагам, и сделать их неделимыми
+#  нельзя: reg.exe import пишет значения по одному и, оборвавшись, оставляет
+#  уже записанное; стирание номера останавливает службы и запускает их
+#  только в конце. Поэтому, как и журнал отката, такая операция сначала
+#  пишет на диск, что собирается делать и на каком она шаге, и только потом
+#  делает. Оборвалась — запись остаётся, и следующий запуск знает, что
+#  операция не закончена (RecoveryRequired), а не считает, что всё в порядке.
+#  Запись — теми же средствами, что журнал: в папке данных (Save-Json: файл
+#  пишется рядом и подменяет прежний одним действием), под замком журнала,
+#  подписана тем же ключом (HMAC-SHA256 со своей приставкой: подпись записи
+#  за подпись журнала не сойдёт). Отдельным файлом op-<имя>.json, а не в
+#  changes.json: это не «как было» для отката, а состояние операции — в
+#  журнале его исполнял бы полный откат, а прежние версии программы
+#  отложили бы журнал с незнакомой записью как недоверенный.
+#  Пока операция идёт, её замок (файл <имя>.lock в защищённом корне — как
+#  замок журнала: только система и администраторы, без совместного доступа)
+#  держится открытым. Запись есть, а замок свободен — процесс, который её
+#  писал, умер посередине (Windows закрывает файл сама).
+# --------------------------------------------------------------------------- #
+function Get-OpRecordPath { param([string]$Name) return (Join-Path $script:DataDir ('op-{0}.json' -f $Name)) }
+
+function Get-OpRecordSig {
+    param([string]$Name, $Data, [switch]$ForWrite)
+    $canon = ('w11p-op|{0}|' -f $Name.ToLowerInvariant()) + (ConvertTo-Json -InputObject $Data -Depth 8 -Compress)
+    $h = [System.Security.Cryptography.HMACSHA256]::new([byte[]](Get-SignKey -Create:$ForWrite))
+    try { return (($h.ComputeHash([Text.Encoding]::UTF8.GetBytes($canon)) | ForEach-Object { $_.ToString('x2') }) -join '') }
+    finally { $h.Dispose() }
+}
+
+# Записать состояние операции. Не записалось — исключение: тогда операция
+# не начинается (или не идёт дальше) — без записи её обрыв никто бы не заметил.
+function Write-OpRecord {
+    param([string]$Name, $Data)
+    if (-not (Test-DataTrusted)) { throw 'папка данных программы не защищена от подмены' }
+    # подпись — по тексту, который даст разбор самого файла (как у журнала)
+    $parsed = ConvertFrom-Json (ConvertTo-Json -InputObject $Data -Depth 8 -Compress)
+    $sig = Get-OpRecordSig $Name $parsed -ForWrite
+    Use-JournalLock { Save-Json ('op-{0}.json' -f $Name) ([ordered]@{ schema = 1; op = $Name; updated = (Get-Date).ToString('s'); data = $parsed; sig = $sig }) }
+}
+
+# Прочитать запись операции. state: none — записи нет; valid — подпись
+# сошлась (data); untrusted — повреждена, подпись не сошлась или проверить
+# нечем (такой записи не верят и по ней ничего не делают); unreadable —
+# сейчас не читается (это не «записи нет»).
+function Read-OpRecord {
+    param([string]$Name)
+    $p = Get-OpRecordPath $Name
+    $res = @{ state = 'none'; data = $null; error = ''; path = $p }
+    # Файла нет — записи нет (обычный случай; замок и проверку папки ради
+    # этого не берём). «Не прочиталось» сюда не попадает: Test-Path на
+    # закрытом файле отвечает «есть».
+    if (-not (Test-Path -LiteralPath $p)) { return $res }
+    if (-not (Test-DataTrusted)) { $res.state = 'unreadable'; $res.error = 'папка данных программы не защищена от подмены'; return $res }
+    $box = @{ txt = $null }
+    try { Use-JournalLock { $box.txt = Read-TextShared $p } }
+    catch {
+        # без прав администратора замок журнала не взять — только посмотреть;
+        # любая другая ошибка — «не читается» (вид — по исключению, T-4)
+        if (-not ($_.Exception.GetBaseException() -is [System.UnauthorizedAccessException])) { $res.state = 'unreadable'; $res.error = "$($_.Exception.Message)"; return $res }
+        try { $box.txt = Read-TextShared $p } catch { $res.state = 'unreadable'; $res.error = "$($_.Exception.Message)"; return $res }
+    }
+    if ($null -eq $box.txt) { return $res }
+    $j = $null
+    try { $j = $box.txt | ConvertFrom-Json -ErrorAction Stop } catch { $j = $null }
+    if ($null -eq $j -or "$($j.schema)" -ne '1' -or "$($j.op)" -cne $Name -or -not "$($j.sig)" -or $null -eq $j.data) {
+        $res.state = 'untrusted'; $res.error = 'запись повреждена'; return $res
+    }
+    $want = $null
+    try { $want = Get-OpRecordSig $Name $j.data } catch { $want = $null }
+    if ($null -eq $want) { $res.state = 'untrusted'; $res.error = 'подпись записи проверить нечем'; return $res }
+    if ($want -cne "$($j.sig)") { $res.state = 'untrusted'; $res.error = 'подпись записи не сошлась'; return $res }
+    $res.state = 'valid'; $res.data = $j.data
+    return $res
+}
+
+# Убрать запись операции и проверить, что её нет. Ответ: $true — нет.
+function Remove-OpRecord {
+    param([string]$Name)
+    $p = Get-OpRecordPath $Name
+    Use-JournalLock { if (Test-Path -LiteralPath $p) { [IO.File]::Delete($p) } }
+    return (-not (Test-Path -LiteralPath $p))
+}
+
+# Недоверенная запись откладывается рядом под своим именем (как журнал) —
+# по ней ничего не делается, но и молча она не пропадает.
+function Set-OpRecordAside {
+    param([string]$Name)
+    $p = Get-OpRecordPath $Name
+    $bad = Join-Path $script:DataDir ('op-{0}.untrusted-{1}.json' -f $Name, (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    Use-JournalLock { if (Test-Path -LiteralPath $p) { Move-Item -LiteralPath $p -Destination $bad -Force -ErrorAction Stop } }
+    return (Split-Path $bad -Leaf)
+}
+
+# Замок операции: открытый файл <имя>.lock в защищённом корне. $null —
+# занят другим запуском; исключение — замка нет вовсе (корень не защищён,
+# нет прав). Закрывается Dispose() — или самой Windows, если процесс умер.
+function Enter-OpLock {
+    param([string]$Name)
+    try { return (Open-JournalLockFile -Path (Join-Path $script:SafeRoot ('{0}.lock' -f $Name))) }
+    catch {
+        # вид ошибки — по самому исключению .NET (T-4, см. Test-IoBusy)
+        if (Test-IoBusy $_.Exception) { return $null }
+        throw
+    }
+}
+
+# Идёт ли операция сейчас: её замок занят. $null — не проверить.
+function Test-OpRunning {
+    param([string]$Name)
+    try {
+        $l = Enter-OpLock $Name
+        if ($null -eq $l) { return $true }
+        $l.Dispose(); return $false
+    } catch { return $null }
+}
+
 # Файлы данных читаются только из папки, которой можно верить, — так же, как
 # пишутся (Save-Json). Раньше чтение не проверяло папку: подложенный файл
 # (например, profile.json — какие модули страж держит включёнными) прочитался
@@ -2948,23 +3213,38 @@ function Test-TamperProtection {
 #  тот же HKCU и показывала «применено».
 #  Владелец explorer.exe в этом сеансе — тот, кто вошёл в Windows.
 #  @{ sid; name; profile; isMe } или $null, если определить не удалось.
+#
+#  Только explorer.exe ЭТОГО сеанса (того, где работает движок). Раньше брался
+#  любой explorer.exe на компьютере: когда в Windows вошли двое (быстрая смена
+#  пользователей), «за компьютером» мог оказаться второй — и задача от имени
+#  пользователя (Invoke-AsUser), его кэш платформы устройств и его настройки
+#  HKCU шли не тому человеку. У задачи от имени SYSTEM (сеанс 0) explorer нет —
+#  «другого пользователя» у неё нет.
+#  Не удалось спросить Windows (WMI не ответил) — $script:SessionUserError: это
+#  не «за компьютером сам движок», а «неизвестно»; стирание номера тогда не
+#  начинается (Get-GdidPreflight), прочее ведёт себя как раньше.
 # --------------------------------------------------------------------------- #
 $script:SessionUserCache = $null
+$script:SessionUserError = ''
 function Get-SessionUser {
     if ($null -ne $script:SessionUserCache) { return $script:SessionUserCache.v }
     $found = $null
+    $script:SessionUserError = ''
     try {
-        foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop)) {
-            $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue
+        $mySession = [int][Diagnostics.Process]::GetCurrentProcess().SessionId
+        foreach ($p in @(Get-CimInstance Win32_Process -Filter ("Name='explorer.exe' AND SessionId={0}" -f $mySession) -ErrorAction Stop)) {
+            $o = $null
+            try { $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop } catch { }
             $sid = $(if ($o) { "$($o.Sid)" } else { '' })
-            if ($sid -notlike 'S-1-5-21-*') { continue }
+            # люди: локальные и доменные (S-1-5-21-…) и Entra ID (S-1-12-1-…)
+            if ($sid -notmatch '^S-1-(5-21|12-1)-[\d-]+$') { continue }
             $name = ''
             try { $name = (New-Object Security.Principal.SecurityIdentifier($sid)).Translate([Security.Principal.NTAccount]).Value } catch { }
             $prof = Get-MachinePath ('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $sid) 'ProfileImagePath' $null
             $found = @{ sid = $sid; name = $name; profile = $prof; isMe = ($sid -eq $script:UserSid) }
             if ($found.isMe) { break }     # свой сеанс важнее чужого
         }
-    } catch { }
+    } catch { $found = $null; $script:SessionUserError = "$($_.Exception.Message)" }
     $script:SessionUserCache = @{ v = $found }
     return $found
 }
@@ -3924,33 +4204,108 @@ function Write-FirefoxKey {
 #    самого создателя — замок, заведённый задачей от имени системы, откроет и
 #    движок окна (с правами по умолчанию системный замок администраторам
 #    недоступен, и раньше это и уводило в Local\).
-#  * Уже существующий замок годится, только если его владелец — система,
-#    администраторы или мы сами. Замок, заранее заведённый обычной программой,
-#    не используется: она могла бы держать его или отпускать, когда ей нужно.
+#  * Уже существующий замок годится, только если его владелец — система или
+#    администраторы, а ждать его (то есть взять и держать), менять его права,
+#    владельца или удалить могут только они же (Get-MutexSecurityProblem).
+#    Замок, заранее заведённый обычной программой, не используется: она могла
+#    бы держать его или отпускать, когда ей нужно.
+#
+#  Сама учётная запись движка «своей» считается, только когда он работает без
+#  повышения (тесты, ручной запуск): тогда границы прав нет. У повышенного
+#  движка тот же SID пользователя есть и у любой его обычной программы — она
+#  заводила замок «своим» и проходила проверку владельца, а право
+#  «полный доступ» для этого SID в новом замке давало ей взять и держать
+#  настоящий замок или переписать его права (T-1). Повышенный движок ставит
+#  новому замку владельцем «Администраторов»: обычная программа такого
+#  владельца назначить не может (Windows отвечает «этот SID нельзя назначить
+#  владельцем»).
+function Get-MutexTrustedSids {
+    $sids = @('S-1-5-18', 'S-1-5-32-544')
+    if (-not (Test-Admin)) { try { $sids += [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { } }
+    return $sids
+}
+
 function Test-MutexOwnerTrusted {
     param([string]$Sid)
     if (-not $Sid) { return $false }
-    if (@('S-1-5-18', 'S-1-5-32-544') -contains $Sid) { return $true }
-    try { return ($Sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) } catch { return $false }
+    return (@(Get-MutexTrustedSids) -contains $Sid)
+}
+
+# Права уже заведённого замка. Пустая строка — замок свой, иначе — почему нет:
+# права не читаются (дескриптор открыт без READ_CONTROL — так .NET открывает
+# чужой замок, к которому нет полного доступа), владелец чужой, или кто-то,
+# кроме своих, может его ждать (взять и держать), менять права и владельца,
+# удалить. Читать права и состояние замка — не опасно. Пустой список прав
+# (NULL DACL) .NET показывает как «Все: полный доступ» — тоже отказ.
+function Get-MutexSecurityProblem {
+    param($Security, [string[]]$Trusted = @(Get-MutexTrustedSids))
+    if ($null -eq $Security) { return 'права замка не читаются' }
+    $owner = ''
+    try { $owner = "$($Security.GetOwner([Security.Principal.SecurityIdentifier]).Value)" } catch { }
+    if (-not $owner) { return 'владелец замка не читается' }
+    if (@($Trusted) -notcontains $owner) { return ('замок заведён чужой учётной записью ({0})' -f $owner) }
+    $harmless = [int64](0x20000 -bor 0x1)   # READ_CONTROL, MUTANT_QUERY_STATE
+    try { $rules = @($Security.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) }
+    catch { return 'права замка не читаются' }
+    foreach ($r in $rules) {
+        if ("$($r.AccessControlType)" -ne 'Allow') { continue }
+        $sid = "$($r.IdentityReference.Value)"
+        if (@($Trusted) -contains $sid) { continue }
+        if (([int64][int]$r.MutexRights -band (-bnot $harmless)) -ne 0) { return ('замок открыт не только системе и администраторам ({0})' -f $sid) }
+    }
+    return ''
+}
+
+# Права нового замка программы: полный доступ — системе и администраторам (и
+# самой учётной записи, только если движок без повышения), наследования нет.
+# -Owner — владелец «Администраторы» (повышенный движок и SYSTEM).
+function New-ProgramMutexSecurity {
+    param([switch]$Owner)
+    $sec = New-Object System.Security.AccessControl.MutexSecurity
+    $sec.SetAccessRuleProtection($true, $false)
+    foreach ($s in @(Get-MutexTrustedSids)) {
+        $sid = New-Object Security.Principal.SecurityIdentifier($s)
+        $sec.AddAccessRule((New-Object System.Security.AccessControl.MutexAccessRule($sid, [System.Security.AccessControl.MutexRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)))
+    }
+    if ($Owner) { $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544'))) }
+    return $sec
+}
+
+# Замок программы по имени: свой новый или проверенный существующий — тот же
+# дескриптор, что проверен, и ждётся (повторного открытия по имени нет: между
+# проверкой и вторым открытием объект под этим именем могли бы подменить).
+# Не годится — исключение, защищаемое действие не выполняется.
+function Open-ProgramMutex {
+    param([string]$Name)
+    $created = $false
+    $m = $null
+    $elevated = Test-Admin
+    try { $m = [System.Threading.Mutex]::new($false, $Name, [ref]$created, (New-ProgramMutexSecurity -Owner:$elevated)) }
+    catch {
+        # вид ошибки — по самому исключению .NET, а не по фильтру catch [тип] (T-4)
+        $ex = $_.Exception.GetBaseException()
+        if ($ex -is [System.UnauthorizedAccessException]) { throw ('замок {0} не открылся: нет доступа -- его заранее занял кто-то чужой' -f $Name) }
+        if ($ex -is [System.Threading.WaitHandleCannotBeOpenedException]) { throw ('имя замка {0} занято объектом другого вида -- его заранее занял кто-то чужой' -f $Name) }
+        # «этот SID нельзя назначить владельцем»: у учётной записи нет права
+        # назначить «Администраторов» — тогда владелец остаётся по умолчанию
+        # (у SYSTEM — она сама). Чужой замок под этим именем всё равно
+        # проверяется ниже.
+        if (-not $elevated) { throw ('замок {0} не открылся: {1}' -f $Name, $_.Exception.Message) }
+        try { $m = [System.Threading.Mutex]::new($false, $Name, [ref]$created, (New-ProgramMutexSecurity)) }
+        catch { throw ('замок {0} не открылся ({1}) -- его мог заранее занять кто-то чужой' -f $Name, $_.Exception.Message) }
+    }
+    if (-not $created) {
+        $cur = $null
+        try { $cur = $m.GetAccessControl() } catch { $cur = $null }
+        $why = Get-MutexSecurityProblem $cur
+        if ($why) { $m.Dispose(); throw ('замок {0} не годится: {1}' -f $Name, $why) }
+    }
+    return $m
 }
 
 function Open-FirefoxMutex {
-    $name = 'Global\Win11Privacy-FirefoxPolicies'
-    $sec = New-Object System.Security.AccessControl.MutexSecurity
-    $sec.SetAccessRuleProtection($true, $false)
-    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
-    foreach ($sid in @((New-Object Security.Principal.SecurityIdentifier('S-1-5-18')), (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')), $me)) {
-        $sec.AddAccessRule((New-Object System.Security.AccessControl.MutexAccessRule($sid, [System.Security.AccessControl.MutexRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)))
-    }
-    $created = $false
-    try { $m = [System.Threading.Mutex]::new($false, $name, [ref]$created, $sec) }
-    catch { throw ('замок policies.json не открылся ({0}) -- его мог заранее занять кто-то чужой' -f $_.Exception.Message) }
-    if (-not $created) {
-        $owner = ''
-        try { $owner = $m.GetAccessControl().GetOwner([Security.Principal.SecurityIdentifier]).Value } catch { }
-        if (-not (Test-MutexOwnerTrusted $owner)) { $m.Dispose(); throw 'замок policies.json заведён чужой программой -- не пишем' }
-    }
-    return $m
+    try { return (Open-ProgramMutex 'Global\Win11Privacy-FirefoxPolicies') }
+    catch { throw ('{0} -- policies.json не пишем' -f $_.Exception.Message) }
 }
 
 # Сам ключ в файле по явному пути (его же проверяют тесты на временной папке).
@@ -3961,7 +4316,10 @@ function Update-FirefoxPoliciesFile {
     $mtx = $null; $got = $false
     try {
         $mtx = Open-FirefoxMutex
-        try { $got = $mtx.WaitOne(30000) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+        # «брошен» (прежний держатель умер) — замок наш; любая другая ошибка —
+        # не наш. Вид — по самому исключению .NET (T-4, см. Test-IoBusy).
+        try { $got = $mtx.WaitOne(30000) }
+        catch { if ($_.Exception.GetBaseException() -is [System.Threading.AbandonedMutexException]) { $got = $true } else { throw } }
         if (-not $got) { return @{ ok = $false; why = 'policies.json сейчас меняет другой запуск программы' } }
         $dir = Split-Path $Path -Parent
         foreach ($d in @($dir, $Path)) {
@@ -6003,11 +6361,14 @@ function Set-TaskEnabled {
     return 'fail'
 }
 
-# Часть команды: код 1, если хоть одна из записей ещё в хранилище, иначе 0
+# Часть команды: код 2, если список хранилища не прочитался (cmdkey /list не
+# с кодом 0), 1 — если хоть одна из записей ещё в хранилище, иначе 0. Раньше
+# сбой самого cmdkey давал пустой вывод, findstr ничего не находил, и это
+# читалось как «записей не осталось» — ошибка доступа выглядела отсутствием.
 function Get-CredCheckCmd {
     param([string[]]$Targets)
     $finds = @($Targets | ForEach-Object { '/c:"' + ($_ -replace '^.*target=', '') + '"' }) -join ' '
-    return '(cmdkey /list | findstr /i ' + $finds + ' >nul && exit 1 || exit 0)'
+    return '(cmdkey /list >nul 2>&1 || exit 2) & (cmdkey /list | findstr /i ' + $finds + ' >nul && exit 1 || exit 0)'
 }
 
 # Учётные данные «личности» устройства — у кого их чистить задачей от его
@@ -6024,10 +6385,16 @@ function Get-GdidCredUsers {
     if ($o) { $out.Add(@{ name = "$($o.name)"; sid = "$($o.sid)"; session = $true }); $seen["$($o.sid)"] = $true }
     else { $out.Add(@{ name = "$($script:RunAccount)"; sid = "$($script:UserSid)"; session = $true }) }
     $seen["$($script:UserSid)"] = $true
+    # Список подключённых кустов не прочитался — кто ещё вошёл в Windows,
+    # неизвестно; стирание тогда не начинается вовсе (Get-GdidPreflight:
+    # опись помечает HKEY_USERS как место без доступа). Люди — как в описи
+    # ($script:GdidUserSidRx): локальные, доменные и Entra ID (S-1-12-1-…).
+    # Раньше вторых здесь не было: их учётные данные устройства не чистились
+    # и не назывались непроверенными.
     $names = @()
     try { $names = @(Get-GdidHiveNames) } catch { }
     foreach ($sid in $names) {
-        if ($sid -notmatch '^S-1-5-21-[\d-]+$' -or $seen.ContainsKey($sid)) { continue }
+        if ($sid -notmatch $script:GdidUserSidRx -or $seen.ContainsKey($sid)) { continue }
         $seen[$sid] = $true
         $nm = ''
         try { $nm = (New-Object Security.Principal.SecurityIdentifier($sid)).Translate([Security.Principal.NTAccount]).Value } catch { }
@@ -6047,11 +6414,16 @@ function Clear-GdidUserCreds {
     foreach ($t in $script:GdidCredUser) { $null = & cmdkey.exe "/delete:$t" 2>&1 }
     if (Get-OtherSessionUser) {
         # движок — не тот, кто сидит за компьютером: его хранилище задача ниже
-        # не проверит, поэтому сверка здесь же
+        # не проверит, поэтому сверка здесь же. Список не прочитался (cmdkey
+        # не с кодом 0) — это «не проверено», а не «записей нет»: раньше пустой
+        # ответ ошибки читался как «убрано».
         $targets = @($script:GdidCredUser | ForEach-Object { $_ -replace '^.*target=', '' })
-        $left = @(@(& cmdkey.exe /list 2>&1) | ForEach-Object { "$_" } | Where-Object {
+        $listing = @(& cmdkey.exe /list 2>&1)
+        $listCode = $LASTEXITCODE
+        $left = @($listing | ForEach-Object { "$_" } | Where-Object {
                       $line = $_; @($targets | Where-Object { $line.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count -gt 0 })
-        if ($left.Count -gt 0) { Write-Log ("   [!] учётные данные устройства у {0} убрать не удалось" -f $script:RunAccount); $fails++ }
+        if ($listCode -ne 0) { Write-Log ("   [!] учётные данные устройства у {0} не проверены: список хранилища не прочитался (cmdkey, код {1})" -f $script:RunAccount, $listCode); $fails++ }
+        elseif ($left.Count -gt 0) { Write-Log ("   [!] учётные данные устройства у {0} убрать не удалось" -f $script:RunAccount); $fails++ }
     }
     foreach ($u in @(Get-GdidCredUsers)) {
         if (-not $u.name) {
@@ -6291,8 +6663,108 @@ function Get-GdidPreflight {
     $snap = Get-GdidServiceSnapshot
     $p.snapshot = $snap
     if (-not $snap.complete) { foreach ($x in @($snap.problems)) { $p.blockers.Add(("службы: {0}" -f $x)) } }
+    # Кто сидит за компьютером: от этого зависит, чьи учётные данные и чей
+    # кэш стираются. Windows не ответила — это «неизвестно», а не «сам движок».
+    $null = Get-SessionUser
+    if ($script:SessionUserError) { $p.blockers.Add(("кто сидит за компьютером, определить не удалось ({0}) -- чьи учётные данные и кэш стирать, неизвестно" -f $script:SessionUserError)) }
     $p.ok = ($p.blockers.Count -eq 0)
     return $p
+}
+
+# --------------------------------------------------------------------------- #
+#  Запись о ходе стирания (Write-OpRecord 'gdid-wipe'): какие службы работали
+#  до него. Стирание останавливает их и запускает только в конце; раньше этот
+#  список жил только в памяти, и после обрыва (закрыли окно, выключили
+#  питание) службы стояли до перезагрузки, а повторное стирание снимало их
+#  уже остановленными — и в конце не запускало. Теперь:
+#    * пока идёт стирание, держится замок операции (второе стирание сразу —
+#      отказ), а запись лежит на диске с самого начала, до первого изменения;
+#    * закончилось и службы вернулись — запись убирается; не вернулись —
+#      остаётся с тем, что не вернулось;
+#    * следующая смена номера берёт службы из оставшейся записи в свой
+#      список «запустить в конце», «Вернуть как было» запускает их сам.
+#  Сам по себе ничего не перезапускается: только по действию человека.
+# --------------------------------------------------------------------------- #
+$script:GdidWipeOp = 'gdid-wipe'
+
+# Оборванное стирание глазами окна. state: none; InProgress (идёт сейчас);
+# RecoveryRequired (оборвалось или службы не вернулись, и что-то из того,
+# что работало до него, стоит: stopped); Settled (запись осталась, но всё,
+# что работало, снова работает — например, после перезагрузки); Untrusted /
+# Unreadable. wlidsvc в stopped не считается: она запускается по требованию,
+# и «стоит» для неё — обычное дело (запустит её «Вернуть как было»).
+function Get-GdidWipeRecovery {
+    $r = Read-OpRecord $script:GdidWipeOp
+    $o = [ordered]@{ state = 'none'; recoveryRequired = $false; running = @(); stopped = @(); notBack = @(); started = ''; error = "$($r.error)" }
+    if ($r.state -eq 'none') { return $o }
+    if ($r.state -eq 'unreadable') { $o.state = 'Unreadable'; $o.recoveryRequired = $true; return $o }
+    if ($r.state -eq 'untrusted') { $o.state = 'Untrusted'; $o.recoveryRequired = $true; return $o }
+    $o.running = @(@($r.data.running) | ForEach-Object { "$_" } | Where-Object { Test-GdidWipeSvcName $_ })
+    $o.notBack = @(@($r.data.notBack) | ForEach-Object { "$_" } | Where-Object { $_ })
+    $o.started = "$($r.data.started)"
+    if ((Test-OpRunning $script:GdidWipeOp) -eq $true) { $o.state = 'InProgress'; return $o }
+    $o.stopped = @($o.running | Where-Object { $_ -ne 'wlidsvc' } | Where-Object { $v = Get-SvcScmView $_; -not $v.ok -or ($v.found -and -not $v.running) })
+    $o.recoveryRequired = (@($o.stopped).Count -gt 0)
+    $o.state = $(if ($o.recoveryRequired) { 'RecoveryRequired' } else { 'Settled' })
+    return $o
+}
+
+# Имена служб из записи — только того вида, какой пишет само стирание
+function Test-GdidWipeSvcName {
+    param([string]$Name)
+    return ($Name -cmatch '^(wlidsvc|CDPSvc|CDPUserSvc|DoSvc|CDPUserSvc_[0-9A-Fa-f]{1,16})$')
+}
+
+# «Вернуть как было» после оборванного стирания: запустить службы, которые
+# работали до него и сейчас стоят (если Windows даёт: отключённую не
+# запускаем — её тип запуска возвращает журнал отката, и это его решение).
+# Ответ: state — NotModified (записи не было), Restored (запущено и сверено,
+# запись убрана), RestoreFailed (что-то не запустилось — запись остаётся),
+# InProgress (стирание идёт сейчас); started, failed, skipped, warnings.
+function Restore-GdidInterruptedWipe {
+    $o = @{ state = 'NotModified'; started = @(); failed = @(); skipped = @(); error = '' }
+    $lock = $null
+    try {
+        $lock = Enter-OpLock $script:GdidWipeOp
+        if ($null -eq $lock) { $o.state = 'InProgress'; $o.error = 'стирание номера идёт сейчас'; return $o }
+        $r = Read-OpRecord $script:GdidWipeOp
+        if ($r.state -eq 'none') { return $o }
+        if ($r.state -eq 'unreadable') { $o.state = 'RestoreFailed'; $o.error = ("запись о прошлом стирании не читается: {0}" -f $r.error); return $o }
+        if ($r.state -eq 'untrusted') {
+            $aside = Set-OpRecordAside $script:GdidWipeOp
+            $o.error = ("запись о прошлом стирании недоверенная ({0}) -- по ней ничего не запускается, она отложена как {1}" -f $r.error, $aside)
+            $o.state = 'RestoreFailed'; return $o
+        }
+        $started = New-Object System.Collections.Generic.List[string]
+        $failed = New-Object System.Collections.Generic.List[string]
+        $skipped = New-Object System.Collections.Generic.List[string]
+        foreach ($n in @(@($r.data.running) | ForEach-Object { "$_" })) {
+            if (-not (Test-GdidWipeSvcName $n)) { $skipped.Add($n); continue }
+            $v = Get-SvcScmView $n
+            if (-not $v.ok) { $failed.Add(("{0} (диспетчер служб не ответил)" -f $n)); continue }
+            # копия CDPUserSvc ушла вместе с выходом пользователя — запускать нечего
+            if (-not $v.found) { $skipped.Add($n); continue }
+            if ($v.running) { continue }
+            if ((Get-SvcStartInfo $n).state -eq 'Disabled') { $skipped.Add(("{0} (отключена)" -f $n)); continue }
+            try {
+                Start-Service -Name $n -ErrorAction Stop -WarningAction SilentlyContinue
+                (Get-Service -Name $n -ErrorAction Stop).WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
+            } catch { }
+            $after = Get-SvcScmView $n
+            if ($after.ok -and $after.found -and "$($after.status)" -eq 'Running') { $started.Add($n) } else { $failed.Add($n) }
+        }
+        $o.started = $started.ToArray(); $o.failed = $failed.ToArray(); $o.skipped = $skipped.ToArray()
+        if ($failed.Count -gt 0) {
+            $d = [ordered]@{ state = 'RestoreFailed'; started = "$($r.data.started)"; running = @($r.data.running | ForEach-Object { "$_" }); notBack = $failed.ToArray() }
+            try { Write-OpRecord $script:GdidWipeOp $d } catch { }
+            $o.state = 'RestoreFailed'
+        } else {
+            if (-not (Remove-OpRecord $script:GdidWipeOp)) { $o.error = 'запись о прошлом стирании не убралась' }
+            $o.state = 'Restored'
+        }
+        return $o
+    } catch { $o.state = 'RestoreFailed'; $o.error = "$($_.Exception.Message)"; return $o }
+    finally { if ($null -ne $lock) { $lock.Dispose() } }
 }
 
 function Invoke-GdidWipe {
@@ -6348,6 +6820,46 @@ function Invoke-GdidWipe {
     # запускает снова; стоявшие до стирания не запускаются.
     $snap = $pre.snapshot
     $runningBefore = @(@($snap.services) | Where-Object { $_.running -and $_.scmFound } | ForEach-Object { "$($_.name)" })
+
+    # Замок и запись о ходе стирания — до первого изменения (см.
+    # Get-GdidWipeRecovery). Не вышло — не стираем: обрыв потом оставил бы
+    # службы стоять, и никто бы о них не знал.
+    $opLock = $null
+    $opWhy = ''
+    try { $opLock = Enter-OpLock $script:GdidWipeOp; if ($null -eq $opLock) { $opWhy = 'другое стирание номера идёт сейчас' } }
+    catch { $opWhy = ("замок стирания не открылся: {0}" -f $_.Exception.Message) }
+    if (-not $opWhy) {
+        $prevOp = Read-OpRecord $script:GdidWipeOp
+        if ($prevOp.state -eq 'unreadable') { $opWhy = ("запись о прошлом стирании не читается ({0})" -f $prevOp.error) }
+        elseif ($prevOp.state -eq 'untrusted') {
+            try { $aside = Set-OpRecordAside $script:GdidWipeOp; Write-Log ("   [!] запись о прошлом стирании недоверенная ({0}) -- по ней ничего не запускается, она отложена как {1}" -f $prevOp.error, $aside) }
+            catch { $opWhy = ("недоверенная запись о прошлом стирании не откладывается: {0}" -f $_.Exception.Message) }
+        } elseif ($prevOp.state -eq 'valid') {
+            # Прошлое стирание оборвалось (или службы после него не вернулись):
+            # службы, что работали до него, сейчас могут стоять — в конце их
+            # запускаем и мы, иначе они так и стояли бы до перезагрузки.
+            $carried = @(@($prevOp.data.running) | ForEach-Object { "$_" } | Where-Object { (Test-GdidWipeSvcName $_) -and $runningBefore -notcontains $_ })
+            if ($carried.Count -gt 0) {
+                Write-Log ("   [i] прошлое стирание номера не закончилось; службы, что работали до него, будут запущены в конце: {0}" -f ($carried -join ', '))
+                $res.warnings.Add(("прошлое стирание не закончилось: {0}" -f ($carried -join ', ')))
+                foreach ($e in @($snap.services)) {
+                    if ($carried -contains "$($e.name)" -and $e.scmFound) { $e['running'] = $true; $runningBefore += "$($e.name)" }
+                }
+            }
+        }
+    }
+    if (-not $opWhy) {
+        try { Write-OpRecord $script:GdidWipeOp ([ordered]@{ state = 'InProgress'; started = (Get-Date).ToString('s'); running = @($runningBefore); notBack = @() }) }
+        catch { $opWhy = ("запись о ходе стирания не записалась: {0}" -f $_.Exception.Message) }
+    }
+    if ($opWhy) {
+        if ($null -ne $opLock) { $opLock.Dispose() }
+        Write-Log ("   [!] номер устройства не тронут: {0} -- ничего не изменено" -f $opWhy)
+        $res.stages['services'] = 'refused'; $res.errors.Add($opWhy); $res.failed = 1
+        Set-GdidResultState $res 'Failed'
+        $script:Failures++; return $false
+    }
+
     # что стирание пыталось остановить — возвращается всё это (из тех, что работали)
     $touched = New-Object System.Collections.Generic.List[string]
     $notBackMsg = '   [!] службы не вернулись в прежнее состояние: {0}. Перезагрузка компьютера вернёт их.'
@@ -6421,6 +6933,16 @@ function Invoke-GdidWipe {
         if (@($restore.states).Count -gt 0) { $res.serviceStates = @($restore.states) }
         $res.stages['restore'] = $(if (@($restore.notBack).Count -gt 0) { 'Failed' } else { 'ok' })
         if (@($restore.notBack).Count -gt 0) { Write-Log ($notBackMsg -f (@($restore.notBack) -join ', ')) }
+        # Запись о ходе: службы вернулись — убираем; не вернулись — остаётся с
+        # тем, что не вернулось («Вернуть как было» запустит их снова)
+        try {
+            if (@($restore.notBack).Count -eq 0) {
+                if (-not (Remove-OpRecord $script:GdidWipeOp)) { Write-Log '   [i] запись о ходе стирания не убралась' }
+            } else {
+                Write-OpRecord $script:GdidWipeOp ([ordered]@{ state = 'RestoreFailed'; started = "$($res.timestamp)"; running = @($runningBefore); notBack = @($restore.notBack | ForEach-Object { "$_" }) })
+            }
+        } catch { Write-Log ("   [!] запись о ходе стирания не обновилась: {0}" -f $_.Exception.Message) }
+        $opLock.Dispose()
     }
     $res.removed = [int]$reg.removed; $res.denied = [int]$reg.denied
     if (@($res.notBack).Count -gt 0) { $fails++ }
@@ -6645,6 +7167,8 @@ function Get-GdidStatus {
         workAccount = [bool](Get-GdidManagement).workAccount
         accounts = @(Get-GdidAccounts)
         profiles = $scan.profiles
+        # оборванное стирание: службы, что работали до него, могут стоять
+        interruptedWipe = $(try { Get-GdidWipeRecovery } catch { [ordered]@{ state = 'Unreadable'; recoveryRequired = $true; running = @(); notBack = @(); error = "$($_.Exception.Message)" } })
         unknownIdentities = @($scan.unknown).Count
         admin = (Test-Admin)
         services = $svcs.ToArray()
@@ -6663,29 +7187,48 @@ function Get-GdidStatus {
 function Get-AuditSetting {
     param([string]$Guid = $script:AuditGuid)
     # auditpol пишет копию политики в файл, а читаем мы её с правами
-    # администратора. Пишем в защищённый корень, если он уже есть (его завело
-    # окно или применение), а не во временную папку пользователя: туда он мог
-    # бы подложить на наш путь ссылку. Корня ещё нет — случайное имя во
-    # временной папке (чтение политики не должно заводить корень само).
-    $dir = $(if ($script:SafeRoot -and (Test-Path -LiteralPath $script:SafeRoot -PathType Container)) { $script:SafeRoot } else { [IO.Path]::GetTempPath() })
-    $tmp = Join-Path $dir ('w11p-audit-' + [guid]::NewGuid().ToString('N') + '.csv')
+    # администратора (T-2). Файл — только в личной рабочей папке, куда
+    # обычной программе не дотянуться (New-PrivateWorkDir): защищённый корень,
+    # если он уже есть, иначе своя папка в Windows\Temp. Раньше, пока корня
+    # не было, файл ложился во временную папку пользователя: там его могли
+    # подменить между записью и чтением, а саму папку — заменить ссылкой.
+    # Места нет — политика «не прочиталась» (-1), а не прочитана откуда попало.
+    $work = New-PrivateWorkDir 'w11p-audit-'
+    if (-not $work) { return -1 }
+    $tmp = Join-Path $work 'audit.csv'
     try {
-        if ((Test-Path -LiteralPath $tmp) -and ((Get-Item -LiteralPath $tmp -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { return -1 }
+        $since = (Get-Date).AddSeconds(-5)
         $null = & auditpol.exe /backup /file:$tmp 2>&1
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $tmp)) { return -1 }
+        if ($LASTEXITCODE -ne 0) { return -1 }
+        # В папке — ровно этот файл, обычный, свежий, свой владелец; читается
+        # один раз, без права записи для других (Read-PrivateWorkFile)
+        $bytes = Read-PrivateWorkFile $work 'audit.csv' $since
+        if ($null -eq $bytes -or $bytes.Length -eq 0) { return -1 }
+        $enc = [Text.Encoding]::Default; $skip = 0
+        if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) { $enc = [Text.Encoding]::Unicode; $skip = 2 }
+        elseif ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { $enc = [Text.Encoding]::UTF8; $skip = 3 }
+        $text = $enc.GetString($bytes, $skip, $bytes.Length - $skip)
         # Заголовки столбцов в копии тоже бывают переведены («GUID подкатегории»,
         # «значение параметра» — проверено на русской Windows), поэтому читаем
         # по положению: порядок столбцов у /backup постоянный. Первая строка —
         # заголовок, её пропускаем.
-        $rows = @(Import-Csv -LiteralPath $tmp -Header 'pc', 'target', 'sub', 'guid', 'inc', 'exc', 'val' | Select-Object -Skip 1)
+        $lines = @($text -split "`r?`n" | Where-Object { $_ })
+        $rows = @($lines | ConvertFrom-Csv -Header 'pc', 'target', 'sub', 'guid', 'inc', 'exc', 'val' | Select-Object -Skip 1)
         # ни одного GUID на своём месте — формат не тот, не гадаем
         if (@($rows | Where-Object { "$($_.guid)" -match '^\{[0-9A-Fa-f-]{36}\}$' }).Count -eq 0) { return -1 }
         foreach ($row in $rows) {
-            if ("$($row.guid)" -eq $Guid) { return [int]("0" + "$($row.val)".Trim()) }
+            if ("$($row.guid)" -eq $Guid) {
+                # значение подкатегории — 0…3 (пусто — 0, как и раньше); другое
+                # — копия не та, не гадаем
+                $v = "$($row.val)".Trim()
+                if ($v -eq '') { return 0 }
+                if ($v -notmatch '^[0-3]$') { return -1 }
+                return [int]$v
+            }
         }
         return 0      # строки нет — подкатегория не настроена, а это «нет аудита»
     } catch { return -1 }
-    finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    finally { Remove-PrivateWorkDir $work }
 }
 
 function Get-MonitorEnabled {
@@ -9274,10 +9817,172 @@ function Test-RegImportContent {
     return ''
 }
 
+# --------------------------------------------------------------------------- #
+#  Сверка после импорта (T-3). reg.exe import неделим только на словах: он
+#  пишет значения по одному, и код 0 ещё не значит, что в реестре теперь то,
+#  что в копии (значение мог тут же переписать кто-то другой, часть могла не
+#  записаться). Поэтому после импорта ветка выгружается заново тем же
+#  reg.exe и сравнивается с файлом копии: каждый раздел копии есть, каждое
+#  значение — с теми же данными и того же вида (текст значения у reg.exe
+#  включает вид: dword:, hex(2): …). Значения, которых в копии не было,
+#  остаются — reg.exe import ничего не удаляет, и это не ошибка сверки.
+# --------------------------------------------------------------------------- #
+# Выгрузка reg.exe (текст) → @{ раздел (строчными) → @{ имя значения
+# (строчными) → данные } }. Строки, продолженные «\», склеиваются; имя
+# значения — в кавычках с «\"» и «\\» внутри, «@» — значение по умолчанию.
+# Строка, которая не начинается ни с «[», ни с «"», ни с «@», — продолжение
+# прежнего значения (перевод строки внутри строкового значения): так её
+# прочитают обе стороны сверки одинаково.
+function ConvertFrom-RegExportText {
+    param([string]$Text)
+    $map = @{}
+    $cur = $null; $name = $null; $data = $null; $cont = $false
+    $flush = { if ($null -ne $cur -and $null -ne $name) { $map[$cur][$name] = $data } }
+    foreach ($line in $Text.Split([string[]]@("`r`n"), [StringSplitOptions]::None)) {
+        if ($cont) {
+            $piece = $line.TrimStart()
+            if ($piece.EndsWith('\')) { $data += $piece.Substring(0, $piece.Length - 1) } else { $data += $piece; $cont = $false }
+            continue
+        }
+        if ($line.StartsWith('[') -and $line.EndsWith(']')) {
+            & $flush; $name = $null
+            $cur = $line.Substring(1, $line.Length - 2).ToLowerInvariant()
+            if (-not $map.ContainsKey($cur)) { $map[$cur] = @{} }
+            continue
+        }
+        if ($null -eq $cur -or $line -eq '') { continue }
+        $rest = $null
+        if ($line.StartsWith('@=')) { & $flush; $name = '@'; $rest = $line.Substring(2) }
+        elseif ($line.StartsWith('"')) {
+            $sb = New-Object System.Text.StringBuilder
+            $i = 1; $closed = $false
+            while ($i -lt $line.Length) {
+                $c = $line[$i]
+                if ($c -eq '\' -and $i + 1 -lt $line.Length) { $null = $sb.Append($line[$i + 1]); $i += 2; continue }
+                if ($c -eq '"') { $closed = $true; break }
+                $null = $sb.Append($c); $i++
+            }
+            if ($closed -and $i + 1 -lt $line.Length -and $line[$i + 1] -eq '=') {
+                & $flush; $name = $sb.ToString().ToLowerInvariant(); $rest = $line.Substring($i + 2)
+            }
+        }
+        if ($null -eq $rest) {
+            # продолжение строкового значения с переводом строки внутри
+            if ($null -ne $name) { $data += "`n" + $line }
+            continue
+        }
+        if ($rest.EndsWith('\')) { $data = $rest.Substring(0, $rest.Length - 1); $cont = $true } else { $data = $rest }
+    }
+    & $flush
+    return $map
+}
+
+# Первый раздел файла копии — сама ветка, как её записал reg.exe
+function Get-RegFileBranch {
+    param([byte[]]$Bytes)
+    $t = [Text.Encoding]::Unicode.GetString($Bytes, 2, $Bytes.Length - 2)
+    foreach ($line in $t.Split([string[]]@("`r`n"), [StringSplitOptions]::None)) {
+        if ($line.StartsWith('[') -and $line.EndsWith(']')) { return $line.Substring(1, $line.Length - 2) }
+    }
+    return ''
+}
+
+# Ветка копии (HKEY_LOCAL_MACHINE\…) → путь PowerShell (HKLM:\…) для New-RegBackup
+function ConvertTo-PsRegPath {
+    param([string]$Branch)
+    if ($Branch -match '^HKEY_LOCAL_MACHINE\\(.+)$') { return ('HKLM:\' + $Matches[1]) }
+    if ($Branch -match '^HKEY_CURRENT_USER\\(.+)$') { return ('HKCU:\' + $Matches[1]) }
+    return ''
+}
+
+# После импорта: ветка выгружается заново (в ту же защищённую рабочую
+# папку) и сравнивается с копией. state: restored — всё из копии на месте;
+# differs — чего-то нет или данные другие (missing — сколько); unverified —
+# выгрузить ветку заново не вышло, сверить не с чем.
+function Test-RegImported {
+    param([byte[]]$Bytes, [string]$Work, [string]$Name)
+    $out = @{ state = 'unverified'; missing = 0; error = '' }
+    try {
+        $branch = Get-RegFileBranch $Bytes
+        if (-not $branch) { $out.error = 'в копии нет раздела'; return $out }
+        $native = ($branch -replace '^HKEY_LOCAL_MACHINE\\', 'HKLM\' -replace '^HKEY_CURRENT_USER\\', 'HKCU\')
+        $file = Join-Path $Work ('verify-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '-' + $Name)
+        $why = Export-RegKey $native $file
+        if ($why) { $out.error = ("ветка не выгрузилась для сверки: {0}" -f $why); return $out }
+        $after = [IO.File]::ReadAllBytes($file)
+        try { [IO.File]::Delete($file) } catch { }
+        $want = ConvertFrom-RegExportText ([Text.Encoding]::Unicode.GetString($Bytes, 2, $Bytes.Length - 2))
+        $now = ConvertFrom-RegExportText ([Text.Encoding]::Unicode.GetString($after, 2, $after.Length - 2))
+        $miss = 0
+        foreach ($k in @($want.Keys)) {
+            if (-not $now.ContainsKey($k)) { $miss += [Math]::Max(1, $want[$k].Count); continue }
+            foreach ($v in @($want[$k].Keys)) {
+                if (-not $now[$k].ContainsKey($v) -or [string]$now[$k][$v] -cne [string]$want[$k][$v]) { $miss++ }
+            }
+        }
+        $out.missing = $miss
+        $out.state = $(if ($miss -eq 0) { 'restored' } else { 'differs' })
+        return $out
+    } catch { $out.state = 'unverified'; $out.error = "$($_.Exception.Message)"; return $out }
+}
+
+# --------------------------------------------------------------------------- #
+#  Восстановление из копии по шагам (T-3). Сделать импорт неделимым нельзя
+#  (у reg.exe import нет транзакции, и изображать её программа не будет),
+#  поэтому восстановление ведёт подписанную запись о своём ходе
+#  (Write-OpRecord 'restore') и держит замок операции (Enter-OpLock):
+#    Prepared          — копия проверена, состояние до восстановления
+#                        сохранено (снимок — обычная подписанная копия в
+#                        хранилище), запись на диске; реестр ещё не тронут;
+#    InProgress        — идёт импорт: у каждого файла своя стадия (pending,
+#                        importing — запись легла ДО запуска reg.exe,
+#                        restored — импортирован и сверен, failed, unverified);
+#    Restored          — все файлы импортированы и сверены: запись убирается;
+#    PartiallyRestored — запуск дожил до конца, но вернулось не всё: запись
+#                        остаётся, следующий запуск о ней скажет;
+#    Failed            — не импортировано ничего, реестр не тронут: записи нет;
+#    RecoveryRequired  — так её видит следующий запуск, если она осталась в
+#                        InProgress, а замок свободен (процесс умер посередине),
+#                        или в PartiallyRestored (Get-RestoreRecovery).
+#  Сам по себе ничего не повторяется: ни следующий запуск, ни страж не
+#  доделывают импорт без человека. Довести — снова выбрать ту же копию (её
+#  импорт можно повторять: те же значения запишутся так же) или вернуть
+#  снимок «до восстановления». Повтор после обрыва снимок не переснимает:
+#  остаётся самый первый — состояние до первого незаконченного восстановления.
+# --------------------------------------------------------------------------- #
+$script:RestoreOp = 'restore'
+
+# Незаконченное восстановление глазами окна и следующего запуска. state:
+# none; InProgress — идёт сейчас (замок занят); RecoveryRequired — оборвалось
+# посередине или вернулось не всё (recoveryRequired = $true); Interrupted —
+# оборвалось до первого импорта (реестр не тронут); Untrusted / Unreadable —
+# запись есть, но верить ей нельзя или она не читается.
+function Get-RestoreRecovery {
+    $r = Read-OpRecord $script:RestoreOp
+    $o = [ordered]@{ state = 'none'; recoveryRequired = $false; folder = ''; path = ''; snapshot = ''; stage = ''; restored = 0; files = 0; started = ''; error = "$($r.error)" }
+    if ($r.state -eq 'none') { return $o }
+    if ($r.state -eq 'unreadable') { $o.state = 'Unreadable'; $o.recoveryRequired = $true; return $o }
+    if ($r.state -eq 'untrusted') { $o.state = 'Untrusted'; $o.recoveryRequired = $true; return $o }
+    $d = $r.data
+    $o.folder = "$($d.folder)"; $o.path = "$($d.path)"; $o.snapshot = "$($d.snapshot)"; $o.stage = "$($d.state)"; $o.started = "$($d.started)"
+    $o.files = @($d.files).Count
+    $o.restored = @(@($d.files) | Where-Object { "$($_.state)" -eq 'restored' }).Count
+    # закончено и сверено, только запись не убралась — незаконченного нет
+    if ("$($d.state)" -eq 'Restored') { $o.state = 'none'; return $o }
+    $running = Test-OpRunning $script:RestoreOp
+    if ($running -eq $true) { $o.state = 'InProgress'; return $o }
+    if ("$($d.state)" -eq 'Prepared') { $o.state = 'Interrupted'; return $o }
+    $o.state = 'RecoveryRequired'; $o.recoveryRequired = $true
+    return $o
+}
+
 function Restore-BackupFolder {
     param([string]$Path)
-    $res = @{ restored = 0; failed = 0; refused = 0; error = '' }
+    $res = @{ restored = 0; failed = 0; refused = 0; error = ''; state = 'Failed'; snapshot = ''; unverified = 0; imported = 0; resumed = $false; files = @() }
     $work = $null
+    $lock = $null
+    $rec = $null
+    $recWritten = $false
     try {
         $dirItem = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
         if (-not $dirItem.PSIsContainer -or ($dirItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'папка копии -- ссылка или не папка' }
@@ -9316,38 +10021,128 @@ function Restore-BackupFolder {
             $dst = Join-Path $work $n
             $fs = [IO.File]::Open($dst, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
             try { $fs.Write($bytes, 0, $bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
-            $staged.Add(@{ name = $n; path = $dst; sig = $man.files[$n] })
+            $staged.Add(@{ name = $n; path = $dst; sig = $man.files[$n]; branch = (Get-RegFileBranch $bytes) })
         }
         if ($res.refused -gt 0) { throw 'в копии есть изменённые или чужие файлы -- не импортируется ничего' }
 
+        # --- Отсюда меняется реестр (T-3): сначала замок и запись о ходе ---
+        $lock = Enter-OpLock $script:RestoreOp
+        if ($null -eq $lock) { throw 'идёт другое восстановление из копии -- дождитесь его конца; ничего не импортировано' }
+        $prev = Read-OpRecord $script:RestoreOp
+        if ($prev.state -eq 'unreadable') { throw ("запись о прошлом восстановлении сейчас не читается ({0}) -- ничего не импортировано, повторите позже" -f $prev.error) }
+        if ($prev.state -eq 'untrusted') {
+            $aside = Set-OpRecordAside $script:RestoreOp
+            Write-Log ("   [!] запись о прошлом восстановлении недоверенная ({0}) -- по ней ничего не делается, она отложена как {1}" -f $prev.error, $aside)
+        }
+        $open = $null
+        if ($prev.state -eq 'valid' -and "$($prev.data.state)" -in @('InProgress', 'PartiallyRestored')) { $open = $prev.data }
+        if ($open) {
+            $res.resumed = $true
+            $res.snapshot = "$($open.snapshot)"
+            Write-Log ("   [!] прошлое восстановление из копии не закончено ({0}: {1}, вернулось файлов {2} из {3}) -- реестр мог остаться восстановленным частично" -f "$($open.folder)", "$($open.state)",
+                       @(@($open.files) | Where-Object { "$($_.state)" -eq 'restored' }).Count, @($open.files).Count)
+            if ($res.snapshot) { Write-Log ("   [i] снимок «до восстановления» остаётся прежним (состояние до первой попытки): {0}" -f $res.snapshot) }
+        } else {
+            # Состояние до восстановления — обычной подписанной копией тех же
+            # веток в хранилище (New-RegBackup). Не сохранилось — не
+            # импортируем ничего: вернуться потом было бы не к чему.
+            $keys = @($staged | ForEach-Object { ConvertTo-PsRegPath "$($_.branch)" } | Where-Object { $_ } | Select-Object -Unique)
+            $existing = @($keys | Where-Object { Test-Path -LiteralPath $_ })
+            if ($existing.Count -gt 0) {
+                $sn = New-RegBackup $existing
+                if ($sn.error -or -not $sn.dir -or [int]$sn.saved -lt $existing.Count) {
+                    $why = $(if ($sn.error) { $sn.error } elseif (@($sn.missed).Count -gt 0) { @($sn.missed)[0] } else { 'выгрузилось не всё' })
+                    throw ("состояние реестра до восстановления не сохранилось ({0}) -- ничего не импортировано: вернуться потом было бы не к чему" -f $why)
+                }
+                $res.snapshot = $sn.dir
+                Write-Log ("   [+] состояние до восстановления сохранено: {0}" -f $sn.dir)
+            } else { Write-Log '   [i] веток этой копии сейчас в реестре нет -- сохранять до восстановления нечего' }
+        }
+        $rec = [ordered]@{
+            state = 'Prepared'; folder = $folder; path = $dirItem.FullName; snapshot = $res.snapshot
+            started = (Get-Date).ToString('s'); attempt = $(if ($open) { [int]"0$($open.attempt)" + 1 } else { 1 })
+            previous = $(if ($open -and "$($open.path)" -ine $dirItem.FullName) { "$($open.path)" } else { '' })
+            files = @(foreach ($s in $staged) { [ordered]@{ name = "$($s.name)"; branch = "$($s.branch)"; state = 'pending' } })
+        }
+        Write-OpRecord $script:RestoreOp $rec
+        $recWritten = $true
+
+        $i = -1
         foreach ($s in $staged) {
+            $i++
+            # стадия файла — на диск ДО запуска reg.exe: оборвись импорт, запись
+            # скажет, какой файл мог остаться записанным наполовину
+            $rec.files[$i].state = 'importing'; $rec.state = 'InProgress'
+            Write-OpRecord $script:RestoreOp $rec
             # Файл открыт без права записи для других, пока reg.exe его читает:
             # подпись, сверенная здесь, — подпись импортируемых байтов
             $fs = [IO.File]::Open($s.path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
             try {
                 $ms = New-Object System.IO.MemoryStream
                 $fs.CopyTo($ms)
-                if ((Get-BackupBytesSig $ms.ToArray() $folder $s.name) -cne $s.sig) {
-                    Write-Log ("   [!] {0} -- копия в рабочей папке не сходится с подписью" -f $s.name); $res.refused++; continue
+                $b = $ms.ToArray()
+                if ((Get-BackupBytesSig $b $folder $s.name) -cne $s.sig) {
+                    Write-Log ("   [!] {0} -- копия в рабочей папке не сходится с подписью" -f $s.name); $res.refused++
+                    $rec.files[$i].state = 'refused'
+                } else {
+                    $r = Invoke-RegExe ('import "{0}"' -f $s.path)
+                    $res.imported++
+                    # «reg.exe закончил с кодом 0» — ещё не «в реестре то, что в копии»
+                    $v = Test-RegImported $b $work $s.name
+                    if ($r.code -eq 0 -and $v.state -eq 'restored') { Write-Log ("   [+] вернули и сверили: {0}" -f $s.name); $res.restored++; $rec.files[$i].state = 'restored' }
+                    elseif ($r.code -ne 0) { Write-Log ("   [!] не удалось: {0} (код {1}: {2})" -f $s.name, $r.code, $r.error); $res.failed++; $rec.files[$i].state = 'failed' }
+                    elseif ($v.state -eq 'unverified') { Write-Log ("   [!] {0} импортирован, но сверить его не удалось: {1}" -f $s.name, $v.error); $res.failed++; $res.unverified++; $rec.files[$i].state = 'unverified' }
+                    else { Write-Log ("   [!] {0} импортирован, но в реестре не то, что в копии: значений не на месте {1}" -f $s.name, $v.missing); $res.failed++; $rec.files[$i].state = 'failed' }
                 }
-                $r = Invoke-RegExe ('import "{0}"' -f $s.path)
-                if ($r.code -eq 0) { Write-Log ("   [+] вернули: {0}" -f $s.name); $res.restored++ }
-                else { Write-Log ("   [!] не удалось: {0} (код {1}: {2})" -f $s.name, $r.code, $r.error); $res.failed++ }
             } finally { $fs.Dispose() }
+            Write-OpRecord $script:RestoreOp $rec
         }
-    } catch { $res.error = $_.Exception.Message }
+        if ($res.restored -eq $staged.Count -and $res.failed -eq 0 -and $res.refused -eq 0) {
+            $rec.state = 'Restored'
+            Write-OpRecord $script:RestoreOp $rec
+            if (-not (Remove-OpRecord $script:RestoreOp)) { Write-Log '   [i] запись о ходе восстановления не убралась (в ней итог «восстановлено»)' }
+            $res.state = 'Restored'
+        } elseif ($res.imported -eq 0 -and -not $res.resumed) {
+            # не импортировано ничего, реестр не тронут: незаконченного нет
+            $null = Remove-OpRecord $script:RestoreOp
+            $res.state = 'Failed'
+        } else {
+            $rec.state = 'PartiallyRestored'
+            Write-OpRecord $script:RestoreOp $rec
+            $res.state = 'PartiallyRestored'
+        }
+        $recWritten = $false
+    } catch {
+        $res.error = $_.Exception.Message
+        # Запуск жив, но оборвался посередине: итог — по тому, что успело
+        # случиться. Не записалось — на диске остаётся InProgress, и следующий
+        # запуск увидит RecoveryRequired.
+        $partial = ($res.imported -gt 0 -or $res.resumed)
+        $res.state = $(if ($partial) { 'PartiallyRestored' } else { 'Failed' })
+        if ($recWritten -and $null -ne $rec) {
+            try {
+                if ($partial) { $rec.state = 'PartiallyRestored'; Write-OpRecord $script:RestoreOp $rec }
+                else { $null = Remove-OpRecord $script:RestoreOp }
+            } catch { }
+        }
+    }
     finally {
         if ($work -and (Test-Path -LiteralPath $work)) {
             $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
             Remove-TreeNoFollow $work $st
         }
+        if ($null -ne $lock) { $lock.Dispose() }
     }
+    if ($null -ne $rec) { $res.files = @(@($rec.files) | ForEach-Object { @{ name = "$($_.name)"; state = "$($_.state)" } }) }
     return $res
 }
 
 if ($ListBackups) {
     $bkList = @(Get-BackupList)
-    Emit-Json @{ items = $bkList; count = $bkList.Count }
+    # незаконченное восстановление — окно скажет о нём над списком копий
+    $rcv = $null
+    try { $rcv = Get-RestoreRecovery } catch { $rcv = [ordered]@{ state = 'Unreadable'; recoveryRequired = $true; error = "$($_.Exception.Message)" } }
+    Emit-Json @{ items = $bkList; count = $bkList.Count; recovery = $rcv }
     exit 0
 }
 
@@ -9368,16 +10163,27 @@ if ($RestoreBackup) {
     $rb = Restore-BackupFolder $BackupPath
     if ($rb.error) { Write-Log ("   [!] {0}" -f $rb.error); $script:Failures++ }
     $script:Changes += $rb.restored; $script:Failures += $rb.failed + $rb.refused
-    Write-Log ("   возвращено веток: {0}" -f $rb.restored)
+    Write-Log ("   возвращено и сверено веток: {0}" -f $rb.restored)
     if ($rb.failed -gt 0) { Write-Log ("   не удалось вернуть: {0}" -f $rb.failed) }
     if ($rb.refused -gt 0) { Write-Log ("   не импортировано из-за подписи: {0}" -f $rb.refused) }
-    if ($rb.restored -gt 0) { Write-Log '   Значения вернулись к состоянию на момент копии. Перезагрузите компьютер.' }
-    Emit-Json @{ restored = $rb.restored; failed = $rb.failed; refused = $rb.refused; error = $rb.error; path = $BackupPath }
+    switch ($rb.state) {
+        'Restored' { Write-Log '   Значения вернулись к состоянию на момент копии (сверено). Перезагрузите компьютер.' }
+        'PartiallyRestored' {
+            Write-Log '   [!] Восстановление не закончено: реестр восстановлен частично.'
+            Write-Log '       Довести его -- снова выбрать эту же копию (повторный импорт пишет те же значения).'
+            if ($rb.snapshot) { Write-Log ("       Вернуть как было до восстановления -- выбрать копию {0}" -f (Split-Path $rb.snapshot -Leaf)) }
+        }
+        default { Write-Log '   Реестр не изменён.' }
+    }
+    Emit-Json @{ restored = $rb.restored; failed = $rb.failed; refused = $rb.refused; error = $rb.error; path = $BackupPath
+                 state = $rb.state; snapshot = $rb.snapshot; unverified = $rb.unverified; imported = $rb.imported; resumed = $rb.resumed; files = @($rb.files) }
     Write-Log '###DONE###'
-    # 1 — ничего не вернулось (отказ или ошибка); 2 — вернулось не всё
-    # (reg.exe не принял часть файлов). Раньше второе давало 0, и окно
-    # писало «Готово».
-    exit $(if ($rb.error -or ($rb.restored -eq 0 -and ($rb.failed + $rb.refused) -gt 0)) { 1 } elseif (($rb.failed + $rb.refused) -gt 0) { 2 } else { 0 })
+    # 0 — всё импортировано и сверено (Restored); 2 — реестр восстановлен
+    # частично (PartiallyRestored: что-то импортировано, но не всё вернулось
+    # или не сверилось); 1 — не импортировано ничего, реестр не тронут
+    # (отказ или ошибка до импорта). Раньше «вернулось не всё» давало 0, а
+    # «reg.exe закончил с кодом 0» считалось «вернулось», без сверки.
+    exit $(if ($rb.state -eq 'Restored') { 0 } elseif ($rb.state -eq 'PartiallyRestored') { 2 } else { 1 })
 }
 
 if ($ListStartup) {
@@ -10231,6 +11037,26 @@ if ($GdidRestore) {
     foreach ($p in @($sync.pending)) { Write-Log ("   [i] служба {0}: тип запуска возвращён, но Windows применит его позже -- до тех пор она не работает" -f $p); $rr.warnings.Add(("отложено: {0}" -f $p)) }
     foreach ($f in @($sync.failed)) { Write-Log ("   [!] служба не запустилась: {0}" -f $f); $script:Failures++; $rr['failed'] = [int]$rr['failed'] + 1; $rr.errors.Add(("не запустилась: {0}" -f $f)) }
     $rr.stages['start'] = $(if (@($sync.failed).Count -gt 0) { 'RestoreFailed' } elseif (@($sync.pending).Count -gt 0) { 'Pending' } else { 'ok' })
+    # Оборванное стирание номера: службы, что работали до него и стоят
+    # сейчас, — запустить и сверить (Restore-GdidInterruptedWipe). Раньше о
+    # них не знал никто: список жил только в памяти оборвавшегося запуска.
+    $iw = Restore-GdidInterruptedWipe
+    switch ($iw.state) {
+        'NotModified' { & $stage 'interruptedWipe' 'NotModified' }
+        'Restored' {
+            foreach ($n in @($iw.started)) { Write-Log ("   [+] служба {0} снова работает (её остановило оборванное стирание номера)" -f $n) }
+            foreach ($n in @($iw.skipped)) { Write-Log ("   [i] служба {0} после оборванного стирания не запускается: её нет или она отключена" -f $n) }
+            if ($iw.error) { Write-Log ("   [i] {0}" -f $iw.error) }
+            if (@($iw.started).Count -gt 0) { $script:Changes++ }
+            & $stage 'interruptedWipe' 'Restored'
+        }
+        default {
+            foreach ($n in @($iw.failed)) { Write-Log ("   [!] служба {0} после оборванного стирания не запустилась" -f $n) }
+            if ($iw.error) { Write-Log ("   [!] {0}" -f $iw.error) }
+            $script:Failures++
+            & $stage 'interruptedWipe' 'RestoreFailed' ((@($iw.failed) + @($iw.error | Where-Object { $_ })) -join '; ')
+        }
+    }
     if ((Get-SvcStart 'wlidsvc') -eq 4 -and $restored -notcontains 'wlidsvc') {
         Write-Log '   [i] служба учётных записей Microsoft (wlidsvc) отключена, но не программой (в журнале отката её нет) -- она её не трогает'
     }

@@ -298,6 +298,114 @@ function Test-DirChainSecure {
     } catch { return $false }
 }
 
+# --------------------------------------------------------------------------- #
+#  Личная рабочая папка для файла, который пишет системная утилита, а читает
+#  движок с правами администратора (T-2: копия политики аудита, auditpol
+#  /backup). Раньше, пока защищённого корня ещё не было, файл ложился во
+#  временную папку пользователя: её может менять любая его программа, и
+#  подменённая или недописанная копия читалась бы с правами администратора
+#  (по ней — состояние монитора и «как было» в журнале отката), а сама
+#  временная папка могла оказаться ссылкой (junction) — auditpol писал бы по ней.
+#  Повышенный движок берёт только место, куда обычной программе не дотянуться:
+#    * защищённый корень ProgramData\Win11Privacy, если он уже есть и проверен
+#      вместе с путём (Test-PathTrusted). Без побочных действий: чтение
+#      политики корень не заводит и не чинит (Assert-SafeRoot здесь не зовётся);
+#    * иначе — системная временная папка Windows\Temp, если ни одну папку на
+#      пути к ней чужой не может удалить, переименовать или перенастроить
+#      (Test-DirChainSecure). Создавать в ней пользователи могут, а читать
+#      её список и чужие файлы, удалять чужое — нет.
+#  Там заводится новая папка со случайным именем и с правами с самого
+#  создания: только система и администраторы, без наследования, владелец —
+#  «Администраторы». Имя уже занято или папка после создания не прошла
+#  проверку (ссылка, чужой владелец, чужие права, не пуста) — она не наша.
+#  Без повышения границы прав нет (движок может то же, что любая программа
+#  пользователя) — годится и обычная временная папка.
+#  Ответ: путь новой пустой папки или '' — тогда файла не будет вовсе (отказ).
+# --------------------------------------------------------------------------- #
+function New-PrivateWorkDir {
+    param([string]$Prefix)
+    $leaf = $Prefix + [guid]::NewGuid().ToString('N')
+    if (-not (Test-Admin)) {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) $leaf
+        if (Test-Path -LiteralPath $dir) { return '' }
+        try { $null = [IO.Directory]::CreateDirectory($dir) } catch { return '' }
+        return $dir
+    }
+    $bases = New-Object System.Collections.Generic.List[string]
+    if ($script:SafeRoot -and (Test-Path -LiteralPath $script:SafeRoot -PathType Container) -and (Test-PathTrusted $script:SafeRoot)) { $bases.Add($script:SafeRoot) }
+    $sysTemp = Join-Path $env:SystemRoot 'Temp'
+    if ((Test-Path -LiteralPath $sysTemp -PathType Container) -and (Test-DirChainSecure $sysTemp)) { $bases.Add($sysTemp) }
+    foreach ($b in $bases.ToArray()) {
+        Remove-StalePrivateDirs $b $Prefix
+        $dir = Join-Path $b $leaf
+        if (Test-Path -LiteralPath $dir) { continue }
+        $sec = New-Object System.Security.AccessControl.DirectorySecurity
+        $sec.SetAccessRuleProtection($true, $false)
+        $inh = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+            $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', $inh, 'None', 'Allow')))
+        }
+        $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        try { $null = [IO.Directory]::CreateDirectory($dir, $sec) } catch { continue }
+        $ok = $false
+        try {
+            $it = Get-Item -LiteralPath $dir -Force -ErrorAction Stop
+            $ok = (Test-ItemTrusted $it) -and (@(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop).Count -eq 0)
+        } catch { $ok = $false }
+        if ($ok) { return $dir }
+        # Не прошла проверку. Свою (владелец доверенный) — убираем; чужую не
+        # трогаем: по ссылкам Remove-TreeNoFollow не ходит, а чужое не удаляет.
+        $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+        Remove-TreeNoFollow $dir $st -TrustedOwnerOnly
+    }
+    return ''
+}
+
+# Личные рабочие папки, оставшиеся от оборванного запуска, — через час.
+# Только с доверенным владельцем и не ссылки: в Windows\Temp папку с таким
+# же началом имени мог завести кто угодно.
+function Remove-StalePrivateDirs {
+    param([string]$Base, [string]$Prefix)
+    $cut = (Get-Date).AddHours(-1)
+    foreach ($d in @(Get-ChildItem -LiteralPath $Base -Directory -Force -Filter ($Prefix + '*') -ErrorAction SilentlyContinue)) {
+        if ($d.LastWriteTime -gt $cut -or ($d.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+        $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+        Remove-TreeNoFollow $d.FullName $st -TrustedOwnerOnly
+    }
+}
+
+# Файл из личной рабочей папки: в папке — ровно он один, это обычный файл (не
+# ссылка и не папка), его владелец — система или администраторы (у
+# повышенного движка), он не больше $MaxBytes и появился не раньше $Since.
+# Читается один раз, открытым без права записи для других. Иначе — $null:
+# такому файлу не верят, а не читают «что есть».
+function Read-PrivateWorkFile {
+    param([string]$Dir, [string]$Name, [datetime]$Since = [datetime]::MinValue, [int]$MaxBytes = 4194304)
+    try {
+        $all = @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction Stop)
+        if ($all.Count -ne 1 -or $all[0].Name -cne $Name -or $all[0].PSIsContainer) { return $null }
+        $it = $all[0]
+        if ($it.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $null }
+        if ($it.Length -gt $MaxBytes) { return $null }
+        if ($it.CreationTimeUtc -lt $Since.ToUniversalTime()) { return $null }
+        if ((Test-Admin) -and $script:TrustedSids -notcontains (Get-OwnerSid $it.FullName)) { return $null }
+        $fs = [IO.File]::Open($it.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        try {
+            $ms = New-Object System.IO.MemoryStream
+            $fs.CopyTo($ms)
+            return $ms.ToArray()
+        } finally { $fs.Dispose() }
+    } catch { return $null }
+}
+
+# Личная рабочая папка — прочь, обходом без ссылок
+function Remove-PrivateWorkDir {
+    param([string]$Dir)
+    if (-not $Dir) { return }
+    $st = @{ deleted = 0; failed = 0; skipped = 0; errors = (New-Object System.Collections.Generic.List[string]) }
+    Remove-TreeNoFollow $Dir $st
+}
+
 # Переносимая папка данных лежит рядом с exe, и права ей достаются от папки
 # exe. Окну этого достаточно: кто может писать в эту папку, может подменить и
 # сам exe, который человек запускает. Но страж и наблюдение — задачи
@@ -410,25 +518,54 @@ function Save-Json {
 function Replace-FileAtomic {
     param([string]$Tmp, [string]$Path)
     for ($try = 1; ; $try++) {
+        $busy = $false
         try {
             if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($Tmp, $Path, [NullString]::Value) }
             else { [IO.File]::Move($Tmp, $Path) }
             return
-        } catch [System.IO.IOException] {
-            if ($try -ge 30) { throw }
-            Start-Sleep -Milliseconds 100
+        } catch {
+            # Вид ошибки — по самому исключению .NET (см. Test-IoBusy). Любая
+            # ошибка ввода-вывода — повтор, как и раньше: файл на месте мог
+            # появиться или пропасть между проверкой и заменой (Test-Path
+            # смотрится заново).
+            if (-not ($_.Exception.GetBaseException() -is [System.IO.IOException]) -or $try -ge 30) { throw }
+            $busy = $true
         }
+        if ($busy) { Start-Sleep -Milliseconds 100 }
     }
+}
+
+# Вид ошибки ввода-вывода — по самому исключению .NET, а не по фильтру
+# catch [тип] (T-4). Windows PowerShell 5.1 в цикле с ожиданием начинал (на
+# 18-м проходе, проверено) отдавать «файл занят другим процессом» —
+# IOException, обёрнутую в MethodInvocationException, — ветке
+# catch [DirectoryNotFoundException]: Read-TextShared отвечал «файла нет», и
+# занятый журнал отката читался как отсутствующий. Любая программа
+# пользователя может открыть журнал на чтение (права корня — «Пользователи:
+# чтение») без совместного доступа и так подменить повышенному движку «журнал
+# пуст»: откат сказал бы «возвращать нечего», а следующая запись затёрла бы
+# историю «как было».
+#   Test-IoMissing — файла или папки нет; Test-IoBusy — занят (повторить можно).
+function Test-IoMissing {
+    param($Exception)
+    $ex = $Exception.GetBaseException()
+    return ($ex -is [System.IO.FileNotFoundException] -or $ex -is [System.IO.DirectoryNotFoundException])
+}
+function Test-IoBusy {
+    param($Exception)
+    $ex = $Exception.GetBaseException()
+    return ($ex -is [System.IO.IOException] -and -not (Test-IoMissing $Exception))
 }
 
 # Текст файла данных. Открывается с правом на чтение, запись и удаление для
 # других: замена файла другим запуском (ReplaceFile) не упрётся в нас, а мы
 # прочитаем либо прежний файл, либо новый — целиком. Занят без права на
 # чтение (антивирус) — ждём и пробуем снова; не вышло — ошибка, а не «пусто».
-# Файла нет — $null.
+# Файла нет — $null. Вид ошибки — Test-IoMissing / Test-IoBusy (T-4).
 function Read-TextShared {
     param([string]$Path)
     for ($try = 1; ; $try++) {
+        $busy = $false
         try {
             $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read,
                                          ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
@@ -436,11 +573,11 @@ function Read-TextShared {
                 $sr = New-Object System.IO.StreamReader($fs, (New-Object System.Text.UTF8Encoding $false), $true)
                 return $sr.ReadToEnd()
             } finally { $fs.Dispose() }
-        } catch [System.IO.FileNotFoundException] { return $null }
-        catch [System.IO.DirectoryNotFoundException] { return $null }
-        catch [System.IO.IOException] {
-            if ($try -ge 30) { throw }
-            Start-Sleep -Milliseconds 100
+        } catch {
+            if (Test-IoMissing $_.Exception) { return $null }
+            if (-not (Test-IoBusy $_.Exception) -or $try -ge 30) { throw }
+            $busy = $true
         }
+        if ($busy) { Start-Sleep -Milliseconds 100 }
     }
 }

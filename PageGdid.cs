@@ -179,6 +179,19 @@ namespace Win11Privacy
             // Где номер не искали: профили тех, кто сейчас не вошёл в Windows
             // (их реестр не подключён), и места без доступа на чтение. Без
             // этого «копий: 0» звучало бы как «нигде нет».
+            // Прошлое стирание оборвалось, а службы, что работали до него, стоят:
+            // раньше об этом не знал никто, и они стояли до перезагрузки
+            Dictionary<string, object> iw = Json.GetObj(d, "interruptedWipe");
+            if (iw != null && Json.GetBool(iw, "recoveryRequired"))
+            {
+                List<object> stopped = Json.GetArr(iw, "stopped");
+                string[] names = new string[stopped.Count];
+                for (int i = 0; i < stopped.Count; i++) names[i] = Json.Str(stopped[i]);
+                string text = L.T("Прошлое стирание номера не закончилось. «Вернуть как было» или новая смена номера снова запустят службы, что работали до него.");
+                if (names.Length > 0) text += " " + string.Format(L.T("Сейчас стоят: {0}."), string.Join(", ", names));
+                _gdidList.Controls.Add(new WipeRow("interrupted", L.T("Стирание оборвалось"), text,
+                    names.Length > 0 ? names.Length.ToString() : "!", GShield, false) { Font = this.Font });
+            }
             int notSeen = Json.GetInt(d, "uncheckedProfiles");
             int unread = Json.GetInt(d, "unreadable");
             if (notSeen > 0 || unread > 0)

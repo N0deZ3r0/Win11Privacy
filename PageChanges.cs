@@ -116,6 +116,22 @@ namespace Win11Privacy
         {
             RunJson(new EngineRequest("ListBackups"), L.T("Поиск резервных копий…"), delegate(Dictionary<string, object> d)
             {
+                // Прошлое восстановление не закончилось (T-3): импорт reg.exe
+                // неделим только на словах, и реестр мог остаться
+                // восстановленным частично. Сам движок его не доделывает —
+                // решает человек.
+                Dictionary<string, object> rcv = Json.GetObj(d, "recovery");
+                if (rcv != null && Json.GetBool(rcv, "recoveryRequired"))
+                {
+                    string snap = Json.GetStr(rcv, "snapshot");
+                    string msg = L.T("Прошлое восстановление из копии не закончилось — реестр мог остаться восстановленным частично.\n\n");
+                    string folder = Json.GetStr(rcv, "folder");
+                    if (folder.Length > 0) msg += L.T("Копия: ") + folder + "\n";
+                    msg += string.Format(L.T("Вернулось и сверено файлов: {0} из {1}."), Json.GetInt(rcv, "restored"), Json.GetInt(rcv, "files")) + "\n\n";
+                    msg += L.T("Довести его — выберите ту же копию ещё раз.");
+                    if (snap.Length > 0) msg += "\n" + L.T("Вернуть как было до него — выберите копию ") + Path.GetFileName(snap) + ".";
+                    MessageBox.Show(this, msg, L.T("Восстановление из копии"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
                 List<object> items = (d != null) ? Json.GetArr(d, "items") : new List<object>();
                 if (items.Count == 0)
                 {

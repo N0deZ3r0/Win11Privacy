@@ -17,6 +17,60 @@ required test could not be run.
 
 ---
 
+## Update of 2026-11-16 (after 2.1.0, base `700d84e`)
+
+The three open items of this report (T-1, T-2, T-3) were re-checked against the code
+and fixed; GDID was re-checked (user context, credentials, services, unloaded profiles,
+crash at every stage); a targeted review of the privilege boundary found one new
+defect (T-4). Full details, files and tests: `SECURITY_REMEDIATION_REPORT.md`, pass of
+2026-11-16; GDID: `GDID_AUDIT_3.md`, section 8. Nothing was committed, pushed, tagged or
+released.
+
+| ID | Severity | Status |
+|---|---|---|
+| T-1 Global mutex squatting | LOW (DoS); owner check was bypassable by any program of the same user | FIXED, residual DoS (names can still be pre-created; no privilege escalation path) |
+| T-2 audit policy temp file | LOW | FIXED |
+| T-3 non-transactional registry import | LOW | FIXED — crash-safe recovery with explicit states; residual: reg import merges |
+| T-4 busy file read as missing (new) | MEDIUM | FIXED, residual DoS (holding a data file blocks writes, nothing is lost) |
+| GDID-A session user from any session | MEDIUM | FIXED (live two-user test NOT VERIFIED) |
+| GDID-B `cmdkey` failure read as "no credentials" | LOW | FIXED |
+| GDID-C killed wipe leaves services stopped | MEDIUM (availability) | FIXED |
+
+**Targeted review, no new defect found:** window → engine requests (no new operation
+or argument; SelfTest boundary tests 140/0), backup HMAC and manifest (format
+unchanged, v1 legacy and v2 restore; the snapshot is a v2 backup; the progress records
+use their own HMAC prefix), ACL and trusted-path checks (unchanged; the private work
+folder and the lock files use them), reparse points and junctions (new code never
+follows links; a junction in place of the audit copy is refused and its target left
+intact), hard links (a standard user cannot create a hard link to a file without
+write access on this Windows build — checked on the host for `hosts` and
+`changes.json`; the private folder denies link creation, checked with LOCAL SERVICE),
+exit codes (restore 0 / 2 / 1 by state, GDID restore 2 when the interrupted-wipe stage
+fails), typed `catch` clauses (none of `FileNotFound`/`DirectoryNotFound` left;
+`UnauthorizedAccess` and cmdlet `ItemNotFound` clauses kept — they did not misroute in
+the probe).
+
+**Test evidence of the update** (all run on 2026-11-16 on the final tree):
+
+| Suite | Result |
+|---|---|
+| `tests/engine-tests.ps1` incl. `engine-remediation.ps1` — host, standard user | 879 passed, 0 failed, 5 admin-only blocks skipped with a note |
+| same — VM, administrator, clean snapshot | 890 passed, 0 failed, nothing skipped |
+| Pester 3.4 — host / VM | 44 / 0, 44 / 0 |
+| SelfTest — host / VM (administrator) | 140 / 0, 140 / 0 |
+| Live VM checks `guest-remed4.ps1` | 28 / 1 — the failure was harness timing (lock released before the SYSTEM task started); re-check with a start handshake 3 / 3 |
+| Not run | PSScriptAnalyzer (permission), UI text-fit scan, installer tests, roundtrip, GitHub Actions; live two-user / over-the-shoulder, Entra/hybrid/MDM, power loss |
+
+**Release recommendation for the update: CONDITIONAL RELEASE** — no critical or high
+finding is open; the remaining items are documented denials of service (lock names,
+a held data file), the merge semantics of `reg.exe import`, and the scenarios listed
+as not run. Conditions: commit, let the GitHub Actions workflow pass (it runs the
+engine tests as administrator), and accept the behaviour changes — a restore now
+refuses to start when the "before" snapshot cannot be saved, and the window opens
+even when another program holds its lock name.
+
+---
+
 ## Summary
 
 | Category | Result |
@@ -24,9 +78,9 @@ required test could not be run.
 | Critical vulnerabilities | 0 found |
 | High vulnerabilities | 3 (W11P-001, W11P-005, W11P-006) — all FIXED |
 | Medium vulnerabilities | 4 (W11P-002, W11P-003, W11P-007, W11P-008) — all FIXED |
-| Low vulnerabilities | 2 fixed (W11P-009, W11P-010); 3 open, accepted (T-1 lock-name squatting, T-2 audit-policy temp file, T-3 non-transactional registry import) |
+| Low vulnerabilities | 2 fixed (W11P-009, W11P-010); 3 open, accepted (T-1 lock-name squatting, T-2 audit-policy temp file, T-3 non-transactional registry import) — **all three fixed in the update of 2026-11-16 (residual DoS / merge semantics documented), see above** |
 | Fixed findings | 9 security findings + R-1…R-4 reliability defects |
-| Open findings | 3 low / theoretical, documented below (none allows a privileged write or a change of data) |
+| Open findings | 3 low / theoretical, documented below (none allows a privileged write or a change of data) — as of 2026-11-16 none open; one new MEDIUM (T-4) found and fixed |
 | Tests passed | 1598 test cases in 7 suites (details in *Test evidence*) |
 | Tests failed | 0 in the final runs (two earlier runs of the live checks failed one check each because of the test harness, see *Test evidence*) |
 | Tests not run | GitHub Actions workflow (nothing pushed); `tests/roundtrip.ps1` (CI-only by design); `make_winget.py` / `submit_winget.py` (unchanged in this pass, last run earlier in the session) |
@@ -261,9 +315,11 @@ cross-volume publication test was replaced because that code path no longer exis
 
 | ID | Severity | Status | Why it stays |
 |---|---|---|---|
-| T-1 | LOW | OPEN (accepted) | Any process can pre-create `Global\Win11Privacy-FirefoxPolicies` or `Global\Win11Privacy-App`. Effect: Firefox policy writes are refused / the window thinks it is already running. Denial of service only; no data change. A per-user or per-SID name would split the domain again (the very bug of W11P-007). |
-| T-2 | LOW | OPEN (theoretical) | `Get-AuditSetting` writes the `auditpol /backup` CSV into the user's TEMP (random name) only when the protected root does not exist yet. A user process could alter the CSV before it is read → the monitor status is misreported. Read-only data, no privileged write through it (fresh random name, reparse check). |
-| T-3 | LOW | PARTIALLY FIXED | `reg.exe import` is not transactional. A restore killed halfway leaves the imported files imported; the engine reports exit 2 when it survives, the work folder is cleaned next time, and the restore can be repeated (idempotent) or completed with the undo journal. |
+| T-1 | LOW | **FIXED, residual DoS** (2026-11-16) | Re-checked: the owner check trusted the engine's own user SID, which every non-elevated program of that user shares, and new locks granted that SID full control; DACLs of existing locks were not checked; the window quit on any object under its name. Fixed (owner + full DACL check, Administrators-owned locks, window starts when squatted). Residual: pre-creating a name is still possible — Firefox policy writes are refused (DoS), the window cannot detect a second window meanwhile, the installer's `AppMutex` check can be blocked. No privilege escalation path was found. Details: `SECURITY_REMEDIATION_REPORT.md`, pass of 2026-11-16. |
+| T-2 | LOW | **FIXED** (2026-11-16) | The CSV now goes only into a fresh private folder (SYSTEM + Administrators, owner Administrators) in the verified protected root or `Windows\Temp`; read once, only if it is the one regular, recent, admin-owned file. No protected place → "could not be read", auditpol is not called. Verified live in the VM with a LOCAL SERVICE probe. |
+| T-3 | LOW | **FIXED (crash-safe recovery), residual** (2026-11-16) | Restore lock, signed progress record with states Prepared / InProgress / Restored / PartiallyRestored / Failed and `RecoveryRequired` for the next run, mandatory snapshot before the first import, verification by re-export after each file, exit 0 / 2 / 1, window notice, no automatic repeat. Residual: reg import merges (values the backup lacks stay; the snapshot cannot express "did not exist"). |
+| T-4 | MEDIUM | **FIXED, residual DoS** (new, 2026-11-16) | Windows PowerShell 5.1 misrouted "file in use" to a `catch [DirectoryNotFoundException]` clause after repeated execution, so `Read-TextShared` answered "no such file": a user process holding `changes.json` open made the elevated engine see no journal and the next write replace the history. Error kinds now come from the exception itself. Residual: holding the file blocks journal writes (DoS, nothing lost). |
+| GDID-A…C | MEDIUM / LOW | **FIXED** (2026-11-16) | Session user only from the engine's own session (two signed-in users could get each other's tasks/cache cleanup); `cmdkey` listing failure is not "no credentials"; a killed wipe no longer leaves services stopped (signed record, restart by "Restore" and by the next wipe). See `GDID_AUDIT_3.md` section 8. |
 | — | INFO | by design | HMAC key (`journal.key`, 32 random bytes, SYSTEM/Administrators only, created with its ACL atomically, replaced only if found readable by others or corrupt). No rotation: rotating would invalidate every backup and the journal; an attacker who can read the key is already administrator. HMAC-SHA256 over the exact bytes, with domain-separated prefixes for files and the manifest — no change needed. |
 | — | INFO | by design | Portable-mode replay of an older journal (pre-existing, documented in `docs/security-model.md`). |
 | — | INFO | not a boundary | `QuoteArgs` for the self-relaunch with `runas` — the user's own arguments, behind the UAC prompt. |

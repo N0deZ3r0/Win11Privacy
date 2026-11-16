@@ -62,7 +62,33 @@ like ProgramData. Otherwise the task exits without doing anything.
 
 **Reading data files.** `Load-Json` and `Save-Json` both refuse a data folder
 that fails the checks above, so an elevated run never consumes a planted
-`profile.json`, journal or state file.
+`profile.json`, journal or state file. A data file that another process holds
+open is *busy*, never *missing* (T-4): on Windows PowerShell 5.1 a
+`catch [DirectoryNotFoundException]` clause started to receive the
+"file is used by another process" error after a few dozen checks, so
+`Read-TextShared` answered "no such file". Any program of the user may open the
+journal for reading (the data folder grants Users read) without sharing it, and
+the elevated engine then saw "no journal": a rollback said "nothing to restore"
+and the next journal write replaced the history. Error kinds are now decided
+from the .NET exception itself (`Test-IoBusy`, `Test-IoMissing`), not by typed
+catch filters; a busy journal is `unreadable`, and nothing is appended to it.
+
+**Named locks (T-1).** `Global\Win11Privacy-FirefoxPolicies` (engine) and
+`Global\Win11Privacy-App` (window) are kernel objects any process may create
+first. A lock counts as the program's own only if its owner is SYSTEM or
+Administrators and nobody else may wait on it (take and hold it), change its
+permissions or owner, or delete it; the account's own SID counts only when the
+code runs without elevation (an elevated engine shares that SID with every
+ordinary program of the same user, which used to pass the owner check, and new
+locks used to grant that SID full control). New locks are created owned by
+Administrators with access for SYSTEM and Administrators only. The check runs on
+the handle that is then waited on; the name is not reopened. A foreign Firefox
+lock refuses the `policies.json` write at once. A foreign object on the window's
+name is not "already running": the window starts anyway, because the data is
+protected by the engine's own locks (journal, `policies.json`, backup work
+folders), which already allow several runs at once (silent mode, the guard).
+Pre-creating either name remains possible — a denial of service, not a way to
+change data or gain rights.
 
 **Environment and PowerShell modules.** An elevated process inherits the
 environment of whoever started it, and the first folder in `PSModulePath` is the
@@ -213,6 +239,9 @@ unreadable — the record stays and it is an error.
 | while another user's hive is mounted | the next run unloads hives `W11P_<pid>_*` whose process is gone | unit test + VM test (`guest-hives.ps1`) |
 | while `hosts` is being rewritten | `hosts` is replaced atomically; the old file stays | unit test (read-only `hosts`: file unchanged, no temp file left) |
 | while another process rewrites the journal | reads wait for the lock and see the whole journal; nothing is set aside | test with a second writer process (100 writes while reading and cleaning up) |
+| while another process holds the journal open without sharing | the journal is `unreadable`, nothing is appended, the history stays (T-4) | test: a second process holds `changes.json`; read, write attempt, history compared byte for byte |
+| during a restore from a backup | the progress record says which file was being imported; next run: `RecoveryRequired`; repeating the restore finishes it and verifies (T-3) | test: child process killed after `Prepared`, inside the first import, after the first file (real reg.exe); VM: real engine killed mid-import |
+| during an ID wipe, after the services were stopped | the wipe record lists the services that were running; "Restore" and the next wipe start them again (GDID) | test: child process killed at each of 8 stages; VM: real wipe killed after CDPSvc stopped |
 
 Crash tests above that say "unit test" kill a real child PowerShell process
 (`[Environment]::Exit`) with the engine's own functions at the boundary, then
@@ -267,10 +296,29 @@ guarantees; kill during `reg.exe load/unload` itself.
   (2026-11-15) and never for a folder in the store — the folder name, date
   included, is part of every file signature, so it cannot be back-dated. Backups
   of older versions on the desktop or in `-BackupRoot` are still listed and
-  restored. Importing a backup is the fallback path and is not written to the
-  undo journal; a partial import (reg.exe refusing one file) is reported with exit
-  code 2 and can be repeated (each import is idempotent) or completed with the
-  undo journal.
+  restored.
+* **Restore in steps (T-3).** `reg.exe import` is not transactional — it writes
+  values one by one and keeps what it wrote when it is killed — and the program
+  does not pretend otherwise. Instead a restore holds its own lock
+  (`restore.lock`, like the journal lock: a second restore is refused) and keeps
+  a signed progress record `op-restore.json` in the data folder (written like the
+  journal: replaced in one step, under the journal lock, HMAC with its own
+  prefix). Before the first import the current state of the same branches is
+  saved as an ordinary signed backup in the store ("snapshot before the
+  restore"); if it cannot be saved, nothing is imported. Each file's stage goes
+  to disk *before* reg.exe starts (`importing`); after the import the branch is
+  exported again and every key and value of the backup must be there with the
+  same data and kind — "reg.exe exited with 0" alone no longer counts as
+  restored. States: `Prepared`, `InProgress`, `Restored` (record removed),
+  `PartiallyRestored` (record kept), `Failed` (nothing imported, no record); the
+  next run reports `RecoveryRequired` for a record left `InProgress` with a free
+  lock (the process died) or `PartiallyRestored`. Exit codes: 0 restored and
+  verified, 2 partly restored, 1 nothing imported. Nothing repeats an unfinished
+  import by itself; the window tells the person, who chooses the same backup
+  again (the snapshot taken first is kept) or the snapshot. `reg.exe import`
+  never deletes, so "restored" means every saved value is back, not that the
+  branch equals the backup, and going back to the snapshot leaves values the
+  import added. Importing a backup is not written to the undo journal.
 
 ## Settings of other programs (VS Code, Firefox)
 
@@ -293,9 +341,10 @@ guarantees; kill during `reg.exe load/unload` itself.
   and an existing `distribution` folder or `policies.json` must be owned by and
   writable only for SYSTEM/administrators. The file is replaced in one step under
   the lock `Global\Win11Privacy-FirefoxPolicies`, shared by the window's engine and
-  the SYSTEM tasks: it is created with rights for SYSTEM, administrators and its
-  creator only, a lock pre-created by anybody else is refused, and there is no
-  fallback to a per-session `Local\` lock (W11P-006).
+  the SYSTEM tasks: it is created owned by Administrators with rights for SYSTEM
+  and administrators only, a lock pre-created by anybody else (owner or
+  permissions, see *Named locks*) is refused, and there is no fallback to a
+  per-session `Local\` lock (W11P-006, T-1).
   An existing `policies.json` that does not parse (a comment, another encoding) is
   left untouched instead of overwritten, so policies already there — corporate ones
   included — are not lost.
@@ -325,6 +374,16 @@ guarantees; kill during `reg.exe load/unload` itself.
   `reg.exe load/unload`, `auditpol.exe` and `ipconfig.exe` are called by name:
   PowerShell resolves them through `PATH`, where `System32` comes first and the
   system part cannot be changed without administrator rights.
+* `auditpol /backup` writes its copy of the audit policy only into a private
+  work folder (T-2): a new folder with a random name, created with access for
+  SYSTEM and Administrators only (owner Administrators, no inheritance) inside
+  the protected root if that already exists and passes the full path check, or
+  else inside `Windows\Temp` if nobody else can rename or re-permission any
+  folder on the way. The user's `%TEMP%` is never used by an elevated engine
+  (it used to be when the root did not exist yet). The copy is read once, opened
+  without write sharing, and only if it is the one entry in the folder, a regular
+  recent file owned by Administrators; otherwise the policy "could not be read".
+  A non-elevated engine (nothing to protect) uses its own `%TEMP%`.
 * Whether a task is disabled is read from its settings (`Settings.Enabled`), not
   from `State`: Task Scheduler reports `Disabled` only while no instance is
   running.
@@ -361,15 +420,25 @@ number and CSV columns by position (checked on a Russian VM).
   still verified in full before it is imported.
 * A program of the user can pre-create the lock name
   `Global\Win11Privacy-FirefoxPolicies` (or `Global\Win11Privacy-App`). The engine
-  then refuses to write Firefox policies (and the window may think it is already
-  running) — a denial of service, not a way to change data.
+  then refuses to write Firefox policies — a denial of service, not a way to change
+  data (T-1). The window starts anyway, but while the name is held by someone else
+  a second window is not detected (two windows are safe for the data, see *Named
+  locks*). The installer's "the program is running" check (Inno Setup `AppMutex`)
+  only looks at the name and can be blocked the same way.
+* A program of the user can hold `changes.json` or a progress record
+  (`op-*.json`) open without sharing (the data folder grants Users read). The
+  engine then refuses to write the journal or start the step that needs the
+  record — a denial of service while the file is held; the history is not lost
+  (T-4).
 * **Elevation under another account.** A standard user may type an administrator's
   password. The engine then runs as that administrator while someone else is signed
-  in. Settings under `HKCU` still go to the signed-in user (his hive is written like
-  the other profiles), but the guard and the watch tasks run with the highest
-  privilege level, which only an administrator has: they are installed for the
-  administrator account and work while it is signed in. The engine says so when they
-  are enabled.
+  in. "Who is at the computer" is the owner of `explorer.exe` in the engine's own
+  Windows session (another signed-in user's session is not considered; if Windows
+  does not answer, the ID wipe does not start). Settings under `HKCU` still go to
+  the signed-in user (his hive is written like the other profiles), but the guard
+  and the watch tasks run with the highest privilege level, which only an
+  administrator has: they are installed for the administrator account and work
+  while it is signed in. The engine says so when they are enabled.
 * Firewall rule by addresses: names that live on shared endpoints (shared Azure
   Storage, `e-msedge`, Office front door) are not resolved into the rule — blocking
   their addresses would cut other services. They stay blocked by name in `hosts`.
@@ -401,6 +470,9 @@ number and CSV columns by position (checked on a Russian VM).
 * `tests/engine-tests.ps1` — read-only behaviour tests with stubs for every
   dangerous operation (firewall, auditpol, scheduler, reg load); registry writes
   only under `HKCU:\Software\W11P*` test keys, removed afterwards. Run in CI.
+  It includes `tests/engine-remediation.ps1` (T-1…T-4 and the GDID context and
+  interrupted-wipe checks: real mutexes and child processes, real `reg.exe` on
+  test keys, processes killed at every stage).
 * `tests/engine.Tests.ps1` — Pester tests for the six review areas (works with
   the in-box Pester 3.4 and Pester 5; run in CI).
 * `tests/roundtrip.ps1` — apply, verify and revert for real, then compare every
@@ -477,7 +549,34 @@ SYSTEM и администраторы — полный доступ, польз
 
 **Чтение файлов данных.** `Load-Json` и `Save-Json` одинаково отказываются от
 папки, не прошедшей эти проверки: движок с правами администратора не прочитает
-подложенный `profile.json`, журнал или файл состояния.
+подложенный `profile.json`, журнал или файл состояния. Файл данных, который
+держит открытым другой процесс, — *занят*, а не *отсутствует* (T-4): на Windows
+PowerShell 5.1 ветка `catch [DirectoryNotFoundException]` после нескольких
+десятков проверок начинала ловить ошибку «файл занят другим процессом», и
+`Read-TextShared` отвечал «файла нет». Открыть журнал на чтение без совместного
+доступа может любая программа пользователя (у папки данных «Пользователи:
+чтение»), и повышенный движок видел «журнала нет»: откат говорил «возвращать
+нечего», а следующая запись журнала затирала историю. Теперь вид ошибки
+определяется по самому исключению .NET (`Test-IoBusy`, `Test-IoMissing`), а не
+фильтрами `catch [тип]`; занятый журнал — «не читается», и в него ничего не
+дописывается.
+
+**Замки по имени (T-1).** `Global\Win11Privacy-FirefoxPolicies` (движок) и
+`Global\Win11Privacy-App` (окно) — объекты ядра, которые первым может завести
+любой процесс. Замок считается своим, только если его владелец — система или
+администраторы и никто другой не может его ждать (то есть взять и держать),
+менять права или владельца, удалить; SID самой учётной записи «свой», только
+когда код работает без повышения (у повышенного движка этот SID есть у любой
+обычной программы того же пользователя — она проходила проверку владельца, а
+новый замок давал этому SID полный доступ). Новые замки заводятся с владельцем
+«Администраторы» и правами только для системы и администраторов. Проверяется
+тот дескриптор, который потом и ждётся, — имя заново не открывается. Чужой замок
+Firefox — отказ записи `policies.json` сразу. Чужой объект на месте замка окна —
+не «уже запущено»: окно открывается, потому что данные защищают замки самого
+движка (журнал, `policies.json`, рабочие папки копий), а они и так рассчитаны на
+несколько одновременных запусков (тихий режим, страж). Заранее занять любое из
+имён по-прежнему можно — это отказ в работе, а не способ изменить данные или
+получить права.
 
 **Окружение и модули PowerShell.** Повышенный процесс получает окружение того,
 кто его запустил, а первой папкой в `PSModulePath` стоит
@@ -627,6 +726,9 @@ SYSTEM и администраторы — полный доступ, польз
 | пока подключён куст другого пользователя | следующий запуск отключает кусты `W11P_<pid>_*`, процесса которых больше нет | тест и проверка на VM (`guest-hives.ps1`) |
 | пока переписывается `hosts` | `hosts` подменяется одним действием, прежний остаётся | тест (`hosts` только для чтения: файл прежний, временного не осталось) |
 | пока другой процесс переписывает журнал | чтение ждёт замка и видит журнал целиком; ничего не откладывается | тест со вторым процессом-писателем (100 записей, пока идут чтение и уборка) |
+| пока другой процесс держит журнал открытым без совместного доступа | журнал «не читается», в него не дописывается, история цела (T-4) | тест: второй процесс держит `changes.json`; чтение, попытка записи, история сверяется побайтно |
+| во время возврата из копии | запись о ходе говорит, какой файл импортировался; следующий запуск — `RecoveryRequired`; повтор доводит и сверяет (T-3) | тест: дочерний процесс обрывается после `Prepared`, внутри первого импорта, после первого файла (настоящий reg.exe); VM: настоящий движок оборван посреди импорта |
+| во время смены номера, после остановки служб | в записи о ходе — какие службы работали; «Вернуть как было» и следующая смена номера запускают их (GDID) | тест: дочерний процесс обрывается на каждой из 8 стадий; VM: настоящее стирание оборвано после остановки CDPSvc |
 
 Проверки обрыва из таблицы, где сказано «тест», по-настоящему обрывают
 дочерний процесс PowerShell (`[Environment]::Exit`) с функциями самого движка
@@ -680,10 +782,30 @@ SYSTEM и администраторы — полный доступ, польз
   (2026-11-15) и никогда — у папки из хранилища; имя папки вместе с датой входит
   в подпись каждого файла, задним числом его не переименовать. Копии прежних
   версий на рабочем столе и в `-BackupRoot` по-прежнему видны в списке и
-  возвращаются. Возврат из копии — запасной путь, в журнал отката он не пишется;
-  частичный импорт (reg.exe не принял файл) сообщается кодом 2, его можно
-  повторить (импорт одних и тех же значений не меняет результата) или довести
-  откатом по журналу.
+  возвращаются.
+* **Возврат по шагам (T-3).** `reg.exe import` не транзакционен — пишет значения
+  по одному и, оборвавшись, оставляет записанное, — и программа не делает вид,
+  что это не так. Вместо этого восстановление держит свой замок (`restore.lock`,
+  как замок журнала: второе восстановление в это время — отказ) и ведёт
+  подписанную запись о ходе `op-restore.json` в папке данных (пишется как
+  журнал: подмена одним действием, под замком журнала, HMAC со своей
+  приставкой). До первого импорта нынешнее состояние тех же веток сохраняется
+  обычной подписанной копией в хранилище («снимок до восстановления»); не
+  сохранилось — не импортируется ничего. Стадия каждого файла ложится на диск
+  *до* запуска reg.exe (`importing`); после импорта ветка выгружается заново, и в
+  ней должен быть каждый раздел и каждое значение копии с теми же данными и того
+  же вида — «reg.exe закончил с кодом 0» само по себе больше не «вернулось».
+  Состояния: `Prepared`, `InProgress`, `Restored` (запись убирается),
+  `PartiallyRestored` (запись остаётся), `Failed` (не импортировано ничего,
+  записи нет); следующий запуск называет `RecoveryRequired` запись, оставшуюся в
+  `InProgress` при свободном замке (процесс умер), или в `PartiallyRestored`.
+  Коды выхода: 0 — вернулось и сверено, 2 — вернулось частично, 1 — не
+  импортировано ничего. Сам по себе незаконченный импорт не повторяется: окно
+  говорит о нём человеку, а он выбирает ту же копию ещё раз (снимок, сделанный
+  первым, остаётся) или снимок «до». `reg.exe import` ничего не удаляет, поэтому
+  «вернулось» значит «каждое сохранённое значение на месте», а не «ветка равна
+  копии», и возврат к снимку оставляет значения, которые добавил импорт. В
+  журнал отката возврат из копии не пишется.
 
 ## Настройки других программ (VS Code, Firefox)
 
@@ -707,9 +829,10 @@ SYSTEM и администраторы — полный доступ, польз
   `policies.json` — принадлежать системе или администраторам и не быть открыты на
   запись другим. Файл заменяется одним действием под замком
   `Global\Win11Privacy-FirefoxPolicies`, общим для движка окна и задач SYSTEM: он
-  заводится с правами только для системы, администраторов и создателя, замок,
-  заранее заведённый кем-то другим, не используется, а перехода на замок
-  `Local\` (у каждого сеанса свой) больше нет (W11P-006). Уже лежащий `policies.json`, который не разбирается (комментарий,
+  заводится с владельцем «Администраторы» и правами только для системы и
+  администраторов, замок, заранее заведённый кем-то другим (владелец или права —
+  см. *Замки по имени*), не используется, а перехода на замок `Local\` (у каждого
+  сеанса свой) больше нет (W11P-006, T-1). Уже лежащий `policies.json`, который не разбирается (комментарий,
   иная кодировка), не перезаписывается, а оставляется как есть — чтобы не стереть
   уже стоящие там политики, в том числе корпоративные.
 * Записи проверяются по форме при откате: программа из известных, допустимое имя
@@ -739,6 +862,16 @@ SYSTEM и администраторы — полный доступ, польз
   `reg.exe load/unload`, `auditpol.exe` и `ipconfig.exe` вызываются по имени:
   PowerShell ищет их по `PATH`, где `System32` стоит первым, а системную часть
   без прав администратора не изменить.
+* `auditpol /backup` пишет копию политики аудита только в личную рабочую папку
+  (T-2): новую папку со случайным именем и с правами с самого создания только для
+  системы и администраторов (владелец «Администраторы», без наследования) — в
+  защищённом корне, если он уже есть и прошёл проверку пути целиком, иначе в
+  `Windows\Temp`, если ни одну папку на пути к ней чужой не может переименовать
+  или перенастроить. Временную папку пользователя повышенный движок не берёт
+  (раньше брал, пока корня ещё не было). Копия читается один раз, открытой без
+  права записи для других, и только если она в папке одна, это обычный свежий
+  файл и его владелец — администраторы; иначе политика «не прочиталась». Движок
+  без повышения (защищать нечего) берёт свою временную папку.
 * Выключена ли задача, читается из её настроек (`Settings.Enabled`), а не из
   `State`: планировщик показывает `Disabled`, только пока у задачи нет
   работающего экземпляра.
@@ -775,11 +908,21 @@ ConstrainedLanguage (WDAC/AppLocker) движок сразу останавли�
   или лежащая в другом месте, перед импортом всё равно проверяется целиком.
 * Программа пользователя может заранее занять имя замка
   `Global\Win11Privacy-FirefoxPolicies` (или `Global\Win11Privacy-App`). Тогда
-  движок откажется писать политики Firefox (а окно может решить, что уже
-  запущено) — это отказ в работе, а не способ изменить данные.
+  движок откажется писать политики Firefox — это отказ в работе, а не способ
+  изменить данные (T-1). Окно открывается всё равно, но, пока имя держит чужой,
+  второе окно не распознаётся (два окна для данных безопасны, см. *Замки по
+  имени*). Проверка установщика «программа запущена» (`AppMutex` Inno Setup)
+  смотрит только на имя, и её можно занять так же.
+* Программа пользователя может держать открытым без совместного доступа
+  `changes.json` или запись о ходе (`op-*.json`): у папки данных «Пользователи:
+  чтение». Тогда движок отказывается писать журнал или начинать шаг, которому
+  нужна запись, — отказ в работе, пока файл занят; история не теряется (T-4).
 * **Повышение под другой учётной записью.** Обычный пользователь может ввести
   пароль администратора. Тогда движок работает от имени этого администратора, а за
-  компьютером сидит другой человек. Настройки `HKCU` всё равно доходят до вошедшего
+  компьютером сидит другой человек. «Кто за компьютером» — владелец `explorer.exe`
+  в том же сеансе Windows, где работает движок (сеанс другого вошедшего
+  пользователя не учитывается; если Windows не ответила, номер устройства не
+  стирается). Настройки `HKCU` всё равно доходят до вошедшего
   (его куст пишется так же, как у других профилей), но страж и слежение работают с
   наивысшим уровнем, который есть только у администратора: они ставятся на учётную
   запись администратора и работают, пока он в Windows. Движок говорит об этом при
@@ -815,7 +958,10 @@ ConstrainedLanguage (WDAC/AppLocker) движок сразу останавли�
 * `tests/engine-tests.ps1` — проверки поведения только на чтение, с заглушками
   на каждое опасное действие (брандмауэр, auditpol, планировщик, reg load); в
   реестр пишут только пробные ключи `HKCU:\Software\W11P*`, которые потом
-  убираются. Идут в CI.
+  убираются. Идут в CI. В них входит `tests/engine-remediation.ps1` (T-1…T-4,
+  контекст пользователя и оборванное стирание номера: настоящие замки и
+  дочерние процессы, настоящий `reg.exe` на пробных ключах, обрыв процесса на
+  каждой стадии).
 * `tests/engine.Tests.ps1` — Pester-проверки шести мест из ревью (работают со
   встроенным Pester 3.4 и с Pester 5; идут в CI).
 * `tests/roundtrip.ps1` — применить, проверить и откатить по-настоящему, затем
