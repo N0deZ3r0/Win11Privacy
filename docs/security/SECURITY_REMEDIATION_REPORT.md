@@ -261,8 +261,11 @@ left behind by the kills in this run.
   machine's actual ACL (insecure → the engine must refuse; the reason is printed
   as a `::notice::` annotation). Verified as administrator in the VM twice:
   normal Windows 11 and with `Windows\Temp` opened to Users (simulating the
-  runner) — 79 / 0 both times; host 880 / 0. The next CI run's result is not
-  part of this report.
+  runner) — 79 / 0 both times; host 880 / 0. **The CI run of `480305a` passed**
+  (the whole build job: engine tests, Pester, live apply and rollback, SelfTest,
+  UI pages, exe and installer build and installer tests), and its notice
+  confirmed the cause: on the runner image `BUILTIN\Users` has **Full control**
+  on `C:\Windows\Temp`, so refusing it as a private place is the correct result.
 * **Needs manual / special-environment testing:**
   two users signed in at once (fast user switching) and real over-the-shoulder
   elevation (the session filter is proven with stubs only; the VM has one account

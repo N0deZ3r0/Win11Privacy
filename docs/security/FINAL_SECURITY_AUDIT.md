@@ -60,6 +60,7 @@ the probe).
 | SelfTest — host / VM (administrator) | 140 / 0, 140 / 0 |
 | Live VM checks `guest-remed4.ps1` | 28 / 1 — the failure was harness timing (lock released before the SYSTEM task started); re-check with a start handshake 3 / 3 |
 | GitHub Actions on `395af49` | failed: 16 audit-policy checks in administrator mode — the runner's `Windows\Temp` does not pass the path check, so the engine correctly had no private place; the tests now use a protected test root in `ProgramData` and check the `Windows\Temp` branch by the machine's ACL (VM, both ACL variants: 79 / 0) — see `SECURITY_REMEDIATION_REPORT.md` |
+| GitHub Actions on `480305a` | **passed** (whole build job incl. live rollback and installer tests); notice: the runner's `C:\Windows\Temp` grants Users full control, refused as designed |
 | Not run | PSScriptAnalyzer (permission), UI text-fit scan, installer tests, roundtrip locally; live two-user / over-the-shoulder, Entra/hybrid/MDM, power loss |
 
 **Release recommendation for the update: CONDITIONAL RELEASE** — no critical or high
