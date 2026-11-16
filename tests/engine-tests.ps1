@@ -7,6 +7,16 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 $engine = Join-Path (Split-Path $PSScriptRoot -Parent) 'Win11-Privacy-Engine.ps1'
 if (-not (Test-Path $engine)) { Write-Host "не найден движок: $engine"; exit 1 }
+# Исходники окна — в src\ по папкам (App, Engine, Pages, Controls, Lang,…).
+# В VM туда копируются только движок и тесты: проверки исходников окна там
+# пропускаются, как и раньше; в репозитории их отсутствие — ошибка (ниже).
+$srcRoot = Join-Path (Split-Path $engine) 'src'
+function Get-SrcPath {
+    param([string]$Name)
+    $f = @(Get-ChildItem -LiteralPath $srcRoot -Recurse -File -Filter $Name -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($f.Count -gt 0) { return $f[0].FullName }
+    return (Join-Path $srcRoot $Name)
+}
 
 $script:Failed = 0
 $script:Passed = 0
@@ -236,7 +246,7 @@ $envText = [IO.File]::ReadAllText($engine, [Text.Encoding]::UTF8)
 Check 'шапка убирает COR_PROFILER и стартовые перехватчики .NET' (
       ($envText -match "'COR_PROFILER'") -and ($envText -match "'DOTNET_STARTUP_HOOKS'") -and
       ($envText -match "\[Environment\]::SetEnvironmentVariable\(\`$bad, \`$null, 'Process'\)"))
-$csHarden = Join-Path (Split-Path $engine) 'Engine.cs'
+$csHarden = Get-SrcPath 'Engine.cs'
 if (Test-Path $csHarden) {
     Check 'окно тоже чистит окружение запуска движка от профайлера' (
           [regex]::Match((Get-Content $csHarden -Raw -Encoding UTF8), '(?s)void Harden\(.*?\n        \}').Value -match 'EnvironmentVariables\.Remove\(bad\)')
@@ -1360,7 +1370,7 @@ if ($detect) {
     Check 'движок сообщает свою версию' ($engVer -match '^\d+\.\d+\.\d+$') ("получено: " + $engVer)
     # версия объявлена в двух местах, и разъехаться они не должны: об этом
     # человек судит на «О программе» и по ней же решает, обновляться ли
-    $appInfo = Join-Path (Split-Path $PSScriptRoot -Parent) 'AppInfo.cs'
+    $appInfo = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\App\AppInfo.cs'
     if (Test-Path -LiteralPath $appInfo) {
         $m = [regex]::Match((Get-Content -Raw -LiteralPath $appInfo), 'Version\s*=\s*"([0-9.]+)"')
         Check 'версии движка и интерфейса совпадают' ($m.Success -and $m.Groups[1].Value -eq $engVer) `
@@ -3046,11 +3056,11 @@ Check 'чистка: во временной папке свежие файлы 
 Check 'чистка: корзина — только по отдельному согласию' (
       ($cleanBlock -match 'if \(\$EmptyRecycleBin\) \{') -and
       ([regex]::Matches($engineText, 'Clear-RecycleBin').Count -eq 1))
-$cleanupCs = Join-Path (Split-Path $engine) 'MainForm.cs'
+$cleanupCs = Get-SrcPath 'MainForm.cs'
 if (Test-Path $cleanupCs) {
     Check 'чистка выключена по умолчанию' ((Get-Content $cleanupCs -Raw -Encoding UTF8) -match '"cleanup",L\.T\("Чистка временных файлов"\),[^\r\n]*,GDelete,false,')
 }
-$actionsCleanCs = Join-Path (Split-Path $engine) 'Actions.cs'
+$actionsCleanCs = Get-SrcPath 'Actions.cs'
 if (Test-Path $actionsCleanCs) {
     # корзина — только по отдельному согласию (bin), флагом запроса к движку
     Check 'окно спрашивает про корзину отдельно' ((Get-Content $actionsCleanCs -Raw -Encoding UTF8) -match 'req\.Switch\("EmptyRecycleBin", bin\)')
@@ -3160,7 +3170,7 @@ Write-Host 'Коды выхода, отказ службы, вид значен�
 Check 'применение заканчивается кодом 2, если были ошибки' (
       $engineText -match "(?s)Write-Log '###DONE###'\s+#[^\n]*\n(#[^\n]*\n)*if \(\`$script:JournalFailed -or \`$script:Failures -gt 0\) \{ exit 2 \}\s+exit 0")
 Check 'откат заканчивается кодом 2, если были ошибки' ($engineText -match "(?s)if \(\`$script:Failures -gt 0\) \{ exit 2 \}\s+exit 0\s+\}")
-$silentCs = Join-Path (Split-Path $engine) 'Program.cs'
+$silentCs = Get-SrcPath 'Program.cs'
 if (Test-Path $silentCs) {
     Check 'негодный профиль тихого режима — код 4, не путается с кодом 2 движка' ((Get-Content $silentCs -Raw -Encoding UTF8) -match 'return 4;')
 }
@@ -3807,7 +3817,13 @@ $auJob = Start-Job -ArgumentList $engine -ScriptBlock {
     }
     $script:Log = New-Object System.Collections.Generic.List[string]
     function Write-Log { param($m) $script:Log.Add("$m") }
-    # копия политики — в личной рабочей папке (T-2): владельцы и права проверяются
+    # Место для копии политики аудита (T-2) проверяют тесты T-2 в
+    # engine-remediation.ps1 на настоящих правах машины. Здесь проверяются
+    # разбор копии, журнал и порядок записи — поэтому копия ложится в свою
+    # временную папку, независимо от прав машины: на раннере GitHub (от
+    # администратора, без защищённого корня) своего места в Windows\Temp нет.
+    function New-PrivateWorkDir { param([string]$Prefix) $d = Join-Path $env:TEMP ($Prefix + [guid]::NewGuid().ToString('N')); $null = New-Item -ItemType Directory -Force $d; return $d }
+    # копия читается как в продукте (Read-PrivateWorkFile): владельцы и права проверяются
     $script:TrustedSids = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
     $script:ClearOwners = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-19', 'S-1-5-20', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
     $script:Failures = 0
@@ -3960,6 +3976,12 @@ $script:BlockedIds = @{}; $script:UnblockedIds = @{}; $DryRun = $false; $script:
 $script:AuditGuid = '{0CCE9226-69AE-11D9-BED3-505054503030}'; $script:SecurityLogKey = $Probe; $script:SecurityLogMin = 1
 function Write-Log { param($m) }
 function Ensure-Backup { }
+# Место для копии политики аудита (T-2) проверяют тесты T-2 в
+# engine-remediation.ps1 на настоящих правах машины. Здесь проверяются
+# разбор копии, журнал и порядок записи — поэтому копия ложится в свою
+# временную папку, независимо от прав машины: на раннере GitHub (от
+# администратора, без защищённого корня) своего места в Windows\Temp нет.
+function New-PrivateWorkDir { param([string]$Prefix) $d = Join-Path $env:TEMP ($Prefix + [guid]::NewGuid().ToString('N')); $null = New-Item -ItemType Directory -Force $d; return $d }
 function Read-JournalFileFor { param($Name) @(@((Read-JournalFile).items) | Where-Object { "$($_.name)" -eq $Name }) }
 # auditpol stub: the policy value lives in a file
 function auditpol.exe {
@@ -4038,6 +4060,12 @@ $crJob = Start-Job -ArgumentList $engine, $crashChild -ScriptBlock {
     $script:RunId = 'parent'; $script:Failures = 0; $DryRun = $false
     $script:AuditGuid = '{0CCE9226-69AE-11D9-BED3-505054503030}'
     function Write-Log { param($m) }
+    # Место для копии политики аудита (T-2) проверяют тесты T-2 в
+    # engine-remediation.ps1 на настоящих правах машины. Здесь проверяются
+    # разбор копии, журнал и порядок записи — поэтому копия ложится в свою
+    # временную папку, независимо от прав машины: на раннере GitHub (от
+    # администратора, без защищённого корня) своего места в Windows\Temp нет.
+    function New-PrivateWorkDir { param([string]$Prefix) $d = Join-Path $env:TEMP ($Prefix + [guid]::NewGuid().ToString('N')); $null = New-Item -ItemType Directory -Force $d; return $d }
     $script:AuditFile = Join-Path $root 'audit.txt'
     function auditpol.exe {
         $a = $args -join ' '
@@ -4503,9 +4531,9 @@ Check 'монитор отдаёт ошибку чтения журнала бе
 Check 'слежение за сетью не пропускает минуты, когда журнал не читался' ($engineText -match '\$last = \$\(if \(\$err\) \{ if \(\$state -and \$state\.last\) \{ "\$\(\$state\.last\)" \} else \{ \$since\.ToString\(''s''\) \} \}')
 Check 'журнал безопасности читается только через Read-SecurityEvents' ([regex]::Matches($engineText, "LogName\s*=\s*'Security'\s*;").Count -eq 0 -and [regex]::Matches($engineText, 'Get-WinEvent -FilterHashtable @\{ LogName = \$LogName').Count -eq 1)
 Check 'прежний откат ищет задачи по маске в любой папке, остальное — только в своих' ([regex]::Matches($engineText, 'Get-TaskGlobTasks \$d\.P -AnyFolder').Count -eq 1)
-$changesCs = Join-Path (Split-Path $engine) 'PageChanges.cs'
+$changesCs = Get-SrcPath 'PageChanges.cs'
 if (Test-Path $changesCs) { Check 'страница «Изменения» говорит, что журналу нельзя верить' ((Get-Content $changesCs -Raw -Encoding UTF8) -match 'Json\.GetBool\(d, "trusted"\)') }
-$actionsCs = Join-Path (Split-Path $engine) 'Actions.cs'
+$actionsCs = Get-SrcPath 'Actions.cs'
 if (Test-Path $actionsCs) { Check 'страница «Монитор» говорит, что журнал не читается' ((Get-Content $actionsCs -Raw -Encoding UTF8) -match 'Json\.GetStr\(d, "readError"\)') }
 # Движок выполняется сверху вниз: функция, описанная ниже места вызова, в
 # этот момент ещё не существует. Тесты с заглушками этого не видят (так
@@ -4562,7 +4590,7 @@ Check 'задачи стража запускают PowerShell по полном
 Check 'применение проверяет журнал заранее' ($engineText -match 'if \(-not \(Test-JournalWritable\)\) \{\s+Write-Log .ПРИМЕНЕНИЕ ОТМЕНЕНО')
 Check 'задача планировщика не работает с папкой, которую можно подменить' ($engineText -match 'if \(\$script:TaskRun -and -not \(Test-DataTrusted\)\) \{ exit 1 \}')
 Check 'страж в переносимом режиме не ставится на папку, которую можно подменить' ([regex]::Match($engineText, "(?s)function Install-TaskEngine \{.*?\n\}").Value -match 'Test-PortableTaskTrust')
-$engineCs = Join-Path (Split-Path $engine) 'Engine.cs'
+$engineCs = Get-SrcPath 'Engine.cs'
 if (Test-Path $engineCs) {
     $ecs = Get-Content $engineCs -Raw -Encoding UTF8
     Check 'движок не кладётся во временную папку, если защищённую подготовить не вышло' (($ecs -notmatch 'GetTempPath') -and ($ecs -match 'throw new InvalidOperationException\(L\.T\("Не удалось подготовить защищённую папку'))
@@ -4570,7 +4598,7 @@ if (Test-Path $engineCs) {
     Check 'окно (W11P-006): после замены прав корня проверяет всё ещё раз, с унаследованным' (($ecs -match 'if \(HasUntrusted\(root\)\) Quarantine\(root, "", FreshQuarantine\(root\), true\)') -and ($ecs -match 'GetAccessRules\(true, withInherited,'))
     Check 'окно (W11P-006): не трогает корень данных, если путь до него (ProgramData) можно подменить' ($ecs -match 'if \(!ChainSecure\(Path\.GetDirectoryName\(root\)\)\)')
     Check 'PowerShell запускается только по полному системному пути' (($ecs -match 'throw new FileNotFoundException\(L\.T\("Не найден системный PowerShell') -and
-        (@(Get-ChildItem (Split-Path $engine) -Filter '*.cs' | Where-Object { (Get-Content $_.FullName -Raw -Encoding UTF8) -match '"powershell\.exe"' }).Count -eq 0))
+        (@(Get-ChildItem $srcRoot -Recurse -Filter '*.cs' -ErrorAction SilentlyContinue | Where-Object { (Get-Content $_.FullName -Raw -Encoding UTF8) -match '"powershell\.exe"' }).Count -eq 0))
 }
 Check 'копия движка для задач — только через защищённую установку' (($engineText -notmatch "Copy-Item -LiteralPath \`$PSCommandPath -Destination \`$engineDst") -and ([regex]::Matches($engineText, '\$engineDst = Install-TaskEngine').Count -eq 4))
 
@@ -5316,6 +5344,14 @@ Check 'SensorSet через запрос: негодный ключ — код 1
 #  Исправления T-1, T-2, T-3 и GDID (2026-11-16) — отдельным файлом рядом
 # --------------------------------------------------------------------------- #
 . (Join-Path $PSScriptRoot 'engine-remediation.ps1')
+
+# Репозиторий целиком (не VM): исходники окна на месте — иначе проверки
+# исходников выше молча пропустились бы
+if (Test-Path (Join-Path (Split-Path $engine) '.github')) {
+    $csAll = @(Get-ChildItem $srcRoot -Recurse -Filter '*.cs' -ErrorAction SilentlyContinue)
+    Check 'исходники окна найдены в src\ (проверки исходников не пропущены)' ($csAll.Count -ge 30 -and (Test-Path (Get-SrcPath 'Engine.cs')) -and (Test-Path (Get-SrcPath 'Actions.cs')) -and
+          (Test-Path (Join-Path (Split-Path $engine) 'src\App\AppInfo.cs'))) ("файлов .cs: " + $csAll.Count)
+}
 
 # --------------------------------------------------------------------------- #
 Write-Host ''

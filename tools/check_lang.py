@@ -28,12 +28,19 @@ SKIP = {'Lang.cs', 'Mocks.cs'}
 
 
 def sources(root):
-    return sorted(n for n in os.listdir(root)
-                  if n.endswith('.cs') and n not in SKIP)
+    """Все исходники окна в src/ со вложенными папками, путями от корня."""
+    out = []
+    for d, _, files in os.walk(os.path.join(root, 'src')):
+        for n in files:
+            if n.endswith('.cs') and n not in SKIP:
+                out.append(os.path.relpath(os.path.join(d, n), root))
+    return sorted(out)
 
 
 def dicts(root):
-    names = [n for n in os.listdir(root)
+    """Словари src/Lang/lang-en*.txt по порядку номеров, путями от корня."""
+    lang = os.path.join(root, 'src', 'Lang')
+    names = [os.path.join('src', 'Lang', n) for n in os.listdir(lang)
              if n.startswith('lang-en') and n.endswith('.txt')]
 
     def num(n):

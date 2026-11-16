@@ -7,7 +7,9 @@ Win11Privacy-Setup.exe
 dist/
 installer/obj/
 
-# Результаты самопроверки движка (могут содержать данные компьютера)
+# Результаты самопроверки движка (могут содержать данные компьютера):
+# check-engine.cmd кладёт их в check-results\, прежние версии — в корень
+check-results/
 result-*.json
 result-*.txt
 

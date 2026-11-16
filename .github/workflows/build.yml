@@ -67,24 +67,24 @@ jobs:
           PYTHONIOENCODING: utf-8
         run: |
           python tools/gen_lang.py
-          git diff --exit-code -- Lang.cs
-          if ($LASTEXITCODE -ne 0) { throw "Lang.cs разошёлся с lang-en*.txt — перегенерируйте: python tools/gen_lang.py" }
+          git diff --exit-code -- src/Lang/Lang.cs
+          if ($LASTEXITCODE -ne 0) { throw "src/Lang/Lang.cs разошёлся со словарями src/Lang/lang-en*.txt — перегенерируйте: python tools/gen_lang.py" }
           python tools/check_lang.py
-          if ($LASTEXITCODE -ne 0) { throw "есть строки интерфейса без английского перевода — добавьте их в lang-en4.txt" }
-          Write-Host "Перевод: Lang.cs собран из словарей, непереведённых строк нет"
+          if ($LASTEXITCODE -ne 0) { throw "есть строки интерфейса без английского перевода — добавьте их в src/Lang/lang-en*.txt" }
+          Write-Host "Перевод: src/Lang/Lang.cs собран из словарей, непереведённых строк нет"
 
       - name: Сверить версии
         shell: pwsh
         env:
           PYTHONIOENCODING: utf-8
         run: |
-          $ui = (Select-String -Path AppInfo.cs -Pattern 'Version = "([0-9.]+)"').Matches[0].Groups[1].Value
+          $ui = (Select-String -Path src\App\AppInfo.cs -Pattern 'Version = "([0-9.]+)"').Matches[0].Groups[1].Value
           $eng = (Select-String -Path Win11-Privacy-Engine.ps1 -Pattern "EngineVersion\s*=\s*'([0-9.]+)'").Matches[0].Groups[1].Value
           Write-Host "интерфейс: $ui, движок: $eng"
-          if ($ui -ne $eng) { throw "версии разошлись: AppInfo.cs = $ui, движок = $eng" }
+          if ($ui -ne $eng) { throw "версии разошлись: src/App/AppInfo.cs = $ui, движок = $eng" }
           # ту же версию Windows показывает в свойствах файла
           python tools/set_version.py --check
-          if ($LASTEXITCODE -ne 0) { throw "версия в app.res отстала — запустите python tools/set_version.py" }
+          if ($LASTEXITCODE -ne 0) { throw "версия в src/Resources/app.res отстала — запустите python tools/set_version.py" }
           if ($env:GITHUB_REF -like 'refs/tags/v*') {
               $tag = $env:GITHUB_REF -replace '^refs/tags/v', ''
               if ($tag -ne $ui) { throw "тег $tag не совпадает с версией в программе ($ui)" }
@@ -139,8 +139,8 @@ jobs:
               /reference:System.dll /reference:System.Core.dll `
               /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
               /resource:Win11-Privacy-Engine.ps1,engine.ps1 `
-              /resource:app.ico,app.ico /resource:app.png,app.png `
-              *.cs
+              /resource:src\Resources\app.ico,app.ico /resource:src\Resources\app.png,app.png `
+              /recurse:src\*.cs
           if ($LASTEXITCODE -ne 0) { throw "сборка проверок интерфейса не удалась" }
           # граница окно → движок (F-08): SelfTest запускает настоящий движок
           # теми же функциями, что и окно, и проверяет, какую операцию он выбрал
@@ -159,8 +159,8 @@ jobs:
               /reference:System.dll /reference:System.Core.dll `
               /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
               /resource:Win11-Privacy-Engine.ps1,engine.ps1 `
-              /resource:app.ico,app.ico /resource:app.png,app.png `
-              *.cs
+              /resource:src\Resources\app.ico,app.ico /resource:src\Resources\app.png,app.png `
+              /recurse:src\*.cs
           if ($LASTEXITCODE -ne 0) { throw "тестовая сборка интерфейса не удалась" }
           # Та же сборка с крупным шрифтом — как при масштабе Windows 150 %. На
           # агенте масштаб 100 %, и раскладка, которая ломается только на
@@ -170,8 +170,8 @@ jobs:
               /reference:System.dll /reference:System.Core.dll `
               /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
               /resource:Win11-Privacy-Engine.ps1,engine.ps1 `
-              /resource:app.ico,app.ico /resource:app.png,app.png `
-              *.cs
+              /resource:src\Resources\app.ico,app.ico /resource:src\Resources\app.png,app.png `
+              /recurse:src\*.cs
           if ($LASTEXITCODE -ne 0) { throw "тестовая сборка интерфейса с крупным шрифтом не удалась" }
           # Тестовая сборка печатает в UTF-8, и читать её надо так же. Иначе
           # «ОБРЕЗАНО» и «ВЫЛЕЗ» приходят вопросительными знаками, и проверки
@@ -256,10 +256,10 @@ jobs:
           & $csc /nologo /target:winexe /optimize+ /out:Win11Privacy.exe `
               /reference:System.dll /reference:System.Core.dll `
               /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
-              /win32res:app.res `
+              /win32res:src\Resources\app.res `
               /resource:Win11-Privacy-Engine.ps1,engine.ps1 `
-              /resource:app.ico,app.ico /resource:app.png,app.png `
-              *.cs
+              /resource:src\Resources\app.ico,app.ico /resource:src\Resources\app.png,app.png `
+              /recurse:src\*.cs
           if ($LASTEXITCODE -ne 0) { throw "сборка не удалась" }
 
       - name: Проверить готовый файл
@@ -282,7 +282,7 @@ jobs:
           Write-Host "Движок вшит и совпадает с исходником"
 
           # программа обязана запрашивать права администратора
-          $manifest = Select-String -Path .\app.manifest -Pattern 'requireAdministrator' -Quiet
+          $manifest = Select-String -Path .\src\Resources\app.manifest -Pattern 'requireAdministrator' -Quiet
           if (-not $manifest) { throw "в манифесте нет requireAdministrator" }
           Write-Host "Манифест: права администратора запрашиваются"
 

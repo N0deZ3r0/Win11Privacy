@@ -14,7 +14,7 @@ namespace Win11Privacy
     //  применение настроек.
     //
     //  Собирается отдельным exe:
-    //      csc /define:SELFTEST /main:Win11Privacy.SelfTest ... *.cs
+    //      csc /define:SELFTEST /main:Win11Privacy.SelfTest ... /recurse:src\*.cs
     // ====================================================================== //
     internal static class SelfTest
     {

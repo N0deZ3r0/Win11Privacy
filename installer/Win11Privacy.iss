@@ -8,7 +8,7 @@
 ;     папке; в системе ничего не регистрируется.
 ;
 ; Собирается не руками, а скриптом installer\build.ps1 — он подставляет
-; версию из AppInfo.cs и рисует картинки мастера из app.png. На GitHub это
+; версию из src\App\AppInfo.cs и рисует картинки мастера из src\Resources\app.png. На GitHub это
 ; делает сборка релиза (.github\workflows\build.yml).
 ;
 ; Без окон (для winget и развёртывания):
@@ -21,6 +21,9 @@
 #endif
 #ifndef SourceDir
   #define SourceDir ".."
+#endif
+#ifndef IconFile
+  #define IconFile "..\src\Resources\app.ico"
 #endif
 #ifndef ImgDir
   #define ImgDir "obj"
@@ -87,7 +90,7 @@ WizardSizePercent=110
 ; был лишним (скрывается в InitializeWizard).
 WizardImageFile={#ImgDir}\wizard-100.png,{#ImgDir}\wizard-150.png,{#ImgDir}\wizard-200.png
 WizardImageFileDynamicDark={#ImgDir}\wizard-100.png,{#ImgDir}\wizard-150.png,{#ImgDir}\wizard-200.png
-SetupIconFile={#SourceDir}\app.ico
+SetupIconFile={#IconFile}
 ShowLanguageDialog=auto
 
 OutputDir={#OutDir}

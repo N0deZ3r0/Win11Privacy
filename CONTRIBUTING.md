@@ -32,6 +32,11 @@ The engine sources are the parts in `engine\`; `Win11-Privacy-Engine.ps1` is
 built from them and CI rejects a commit where the two differ. Edit the parts,
 not the built file.
 
+The window's C# sources are in `src\` (App, Pages, Controls, Engine, Lang,
+Resources, Tests); `build.cmd` compiles every `.cs` under it. The English
+dictionaries are `src\Lang\lang-en*.txt` — `python tools\gen_lang.py` rebuilds
+`src\Lang\Lang.cs` from them.
+
 CI builds on `windows-latest` for every push and pull request.
 
 ## Pull requests
@@ -86,6 +91,11 @@ build.cmd                      :: собрать Win11Privacy.exe
 Исходники движка — части в `engine\`; `Win11-Privacy-Engine.ps1` собирается из
 них, и CI не пропустит коммит, где они расходятся. Правьте части, а не
 собранный файл.
+
+Исходники окна на C# — в `src\` (App, Pages, Controls, Engine, Lang,
+Resources, Tests); `build.cmd` собирает все `.cs` оттуда. Словари перевода —
+`src\Lang\lang-en*.txt`, из них `python tools\gen_lang.py` собирает
+`src\Lang\Lang.cs`.
 
 CI собирает проект на `windows-latest` при каждом push и pull request.
 

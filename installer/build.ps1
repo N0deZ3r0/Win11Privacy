@@ -2,8 +2,8 @@
 #
 # Builds the installer dist\Win11Privacy-Setup.exe from an already built
 # Win11Privacy.exe (build.cmd or the CI step "build Win11Privacy.exe"):
-#   1. reads the version from AppInfo.cs,
-#   2. draws the wizard pictures from app.png into installer\obj,
+#   1. reads the version from src\App\AppInfo.cs,
+#   2. draws the wizard pictures from src\Resources\app.png into installer\obj,
 #   3. runs the Inno Setup compiler (ISCC.exe, Inno Setup 6.6 or newer) on
 #      installer\Win11Privacy.iss.
 #
@@ -30,12 +30,15 @@ $SourceDir = (Resolve-Path $SourceDir).Path
 $OutDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutDir)
 
 # --- version ------------------------------------------------------------------
-$info = Get-Content -LiteralPath (Join-Path $root 'AppInfo.cs') -Raw -Encoding UTF8
+$info = Get-Content -LiteralPath (Join-Path $root 'src\App\AppInfo.cs') -Raw -Encoding UTF8
 $m = [regex]::Match($info, 'Version\s*=\s*"([0-9.]+)"')
-if (-not $m.Success) { throw 'AppInfo.cs: version string not found' }
+if (-not $m.Success) { throw 'src\App\AppInfo.cs: version string not found' }
 $version = $m.Groups[1].Value
 
-foreach ($need in @('Win11Privacy.exe', 'LICENSE', 'app.ico')) {
+# the icon is a source file (src\Resources), the exe and LICENSE are what gets installed
+$iconFile = Join-Path $root 'src\Resources\app.ico'
+if (-not (Test-Path -LiteralPath $iconFile)) { throw "app.ico not found in $(Split-Path $iconFile)" }
+foreach ($need in @('Win11Privacy.exe', 'LICENSE')) {
     if ($ImagesOnly) { break }
     if (-not (Test-Path -LiteralPath (Join-Path $SourceDir $need))) {
         throw "$need not found in $SourceDir - build Win11Privacy.exe first (build.cmd)"
@@ -61,7 +64,7 @@ if (-not $ImagesOnly -and (-not $Iscc -or -not (Test-Path -LiteralPath $Iscc))) 
 Add-Type -AssemblyName System.Drawing
 $obj = Join-Path $here 'obj'
 New-Item -ItemType Directory -Force $obj | Out-Null
-$icon = [System.Drawing.Image]::FromFile((Join-Path $root 'app.png'))
+$icon = [System.Drawing.Image]::FromFile((Join-Path $root 'src\Resources\app.png'))
 
 function New-Canvas([int]$w, [int]$h) {
     $bmp = New-Object System.Drawing.Bitmap($w, $h, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
@@ -142,7 +145,7 @@ $iss = Join-Path $here 'Win11Privacy.iss'
 $prevEap = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try {
-    $isccOut = @(& $Iscc '/Qp' "/DAppVersion=$version" "/DSourceDir=$SourceDir" "/DImgDir=$obj" "/DOutDir=$OutDir" $iss 2>&1 | ForEach-Object { "$_" })
+    $isccOut = @(& $Iscc '/Qp' "/DAppVersion=$version" "/DSourceDir=$SourceDir" "/DIconFile=$iconFile" "/DImgDir=$obj" "/DOutDir=$OutDir" $iss 2>&1 | ForEach-Object { "$_" })
     $isccCode = $LASTEXITCODE
 } finally { $ErrorActionPreference = $prevEap }
 foreach ($l in $isccOut) { Write-Host $l }

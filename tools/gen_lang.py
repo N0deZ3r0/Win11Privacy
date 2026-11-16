@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Собирает Lang.cs из словарей lang-en*.txt.
+"""Собирает src/Lang/Lang.cs из словарей src/Lang/lang-en*.txt.
 
 Формат словаря: одна пара на строку, русский и английский разделены
 табуляцией. Строки, начинающиеся с #, и пустые пропускаются. Escape-
@@ -109,7 +109,8 @@ def dicts(root):
 
 
 def main():
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # словари и сам Lang.cs лежат вместе, в src/Lang
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src', 'Lang')
     pairs = []
     seen = set()
     for name in dicts(root):
@@ -138,7 +139,7 @@ def main():
     out = os.path.join(root, 'Lang.cs')
     with io.open(out, 'w', encoding='utf-8-sig', newline='\r\n') as f:
         f.write(text)
-    sys.stdout.write('Lang.cs: %d pairs\n' % len(pairs))
+    sys.stdout.write('src/Lang/Lang.cs: %d pairs\n' % len(pairs))
     return 0
 
 

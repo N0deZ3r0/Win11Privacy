@@ -248,8 +248,21 @@ left behind by the kills in this run.
   produce.
 * **`tests/installer-tests.ps1`** — not run (changes the system; VM/CI only). The
   installer script is unchanged; only the exe changed.
-* **`tests/roundtrip.ps1`** and the **GitHub Actions workflow** — not run (CI only;
-  nothing was pushed).
+* **`tests/roundtrip.ps1`** — not run locally (CI only).
+* **GitHub Actions** — the first run after the push (commit `395af49`) **failed**:
+  16 checks in "Проверки поведения движка". On the runner (administrator, no
+  protected root in the tests) `C:\Windows\Temp` does not pass the path check,
+  so `New-PrivateWorkDir` correctly found no private place and every audit-policy
+  test in administrator mode read `-1` — the product refused as designed, the
+  tests assumed a Windows 11 ACL. The tests were changed, not weakened: the
+  monitor and crash harnesses (their subject is the journal and the order of
+  writes) get their own place for the copy; the T-2 block uses a real protected
+  test root under `ProgramData` and checks the `Windows\Temp` branch by the
+  machine's actual ACL (insecure → the engine must refuse; the reason is printed
+  as a `::notice::` annotation). Verified as administrator in the VM twice:
+  normal Windows 11 and with `Windows\Temp` opened to Users (simulating the
+  runner) — 79 / 0 both times; host 880 / 0. The next CI run's result is not
+  part of this report.
 * **Needs manual / special-environment testing:**
   two users signed in at once (fast user switching) and real over-the-shoulder
   elevation (the session filter is proven with stubs only; the VM has one account

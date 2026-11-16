@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="app.png" width="96" alt="Win11Privacy">
+<img src="src/Resources/app.png" width="96" alt="Win11Privacy">
 
 # Win11Privacy
 
@@ -198,45 +198,59 @@ By hand, if you prefer (after editing `engine/`, run `python tools/build_engine.
 ```
 %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:Win11Privacy.exe ^
   /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll ^
-  /win32res:app.res ^
-  /resource:Win11-Privacy-Engine.ps1,engine.ps1 /resource:app.ico,app.ico /resource:app.png,app.png ^
-  *.cs
+  /win32res:src\Resources\app.res ^
+  /resource:Win11-Privacy-Engine.ps1,engine.ps1 /resource:src\Resources\app.ico,app.ico /resource:src\Resources\app.png,app.png ^
+  /recurse:src\*.cs
 ```
 
 ---
 
 ## What it is made of
 
+```
+build.cmd, check-engine.cmd    build the exe; read-only engine self-check (results in check-results\)
+Win11-Privacy-Engine.ps1       the built engine (from engine\) — embedded in the exe, shipped in releases
+engine\                        the engine sources, one part per section
+src\App\                       the window: entry point, main form, navigation, actions, report, version
+src\Pages\                     one file per page
+src\Controls\                  theme, frame, controls, rows, charts, dialogs
+src\Engine\                    unpacking and starting the engine, the request, JSON
+src\Lang\                      English dictionaries lang-en*.txt and the Lang.cs built from them
+src\Resources\                 icon, picture, manifest, Win32 resource
+src\Tests\                     SelfTest and the screenshot test data (test builds only)
+tests\, tools\, installer\, docs\
+```
+
 | File | What is inside |
 |---|---|
 | **Win11-Privacy-Engine.ps1** | The engine. All the work with the system: registry, services, scheduled tasks, hosts, firewall, telemetry X-ray, dossier (sensors and digital trace), the guard, state snapshots, cleanup. Embedded in the exe as the `engine.ps1` resource; before a launch it is placed in `C:\ProgramData\Win11Privacy\bin` — a folder nothing writes to without administrator rights. Can also run on its own. Built from the parts in `engine/` — edit those, not this file. |
 | **engine/NN-section.ps1** | The engine sources by section: parameters, shared functions, the data folder, the undo journal, setting definitions, applying and verifying, the device ID, X-ray, dossier, the guard, revert and so on. `python tools/build_engine.py` joins them in number order into one `Win11-Privacy-Engine.ps1`; `--check` compares the built file with the parts (the GitHub build does this); `--where N` tells which part holds line N from a PowerShell error message. A function must be defined in a part with a lower number than the place that calls it at start-up: the engine runs top to bottom. Each part is complete on its own: a function cannot start in one part and end in another (the GitHub build parses every part separately). |
-| **MainForm.cs** | The window: building the frame and pages, system detection at start, window state between launches, icon and title bar. |
-| **Navigation.cs** | Sections and tabs, the sidebar (collapse, its animation), moving between pages. |
-| **Page*.cs** | One file per page: Overview, Settings, Apps and Startup, Data collection, Traces on this PC, Network, Timeline, Device ID, Verify, Changes, Auto-protection, About, Log. |
-| **ListPage.cs** | The shared frame of list pages (search, card, buttons) and helpers for them. |
-| **EngineRunner.cs** | Launching the engine: streamed output, `###JSON###` replies, the busy state and the Stop button. |
-| **Program.cs** | The entry point, command-line mode and the interface test runs. |
-| **Actions.cs** | What each button does: applying, verifying, the monitor, the guard. |
-| **Report.cs** | The "before and after" HTML report. |
-| **Engine.cs** | Unpacking the engine: a folder writable by administrators only, and a SHA-256 check against what is embedded in the exe. |
-| **Crash.cs** | Catching unhandled errors: a clear window instead of the system one, plus `crash.log`. |
-| **AppInfo.cs** | The program version and the update check on GitHub — on a button only. |
-| **Welcome.cs** | The first-run window: one question instead of thirteen sections at once. |
-| **Mocks.cs** | Test data for interface screenshots, entirely under `#if UITEST`. |
-| **SingleInstance.cs** | One copy of the program: a second launch shows the window that is already open. |
-| **SelfTest.cs** | Checks for the pure functions of the interface — version comparison, parsing the engine's replies, "does this command change the system or only read it". A separate build under `#if SELFTEST`. |
-| **Theme.cs** | The theme (colours, fonts), dark scrollbars, keyboard-only focus frames, value animation, the dark menu. |
-| **Frame.cs** | The window frame: title bar, sidebar, navigation items and the sliding highlight. |
-| **Controls.cs** | Basic controls: cards, buttons, switches, tabs, search, section headers, the empty state. |
-| **Rows.cs** | List rows and the lists themselves: settings, verification, dossier, network, overview. |
-| **Charts.cs** | Charts and tiles: the index ring, ring and sensor charts, the timeline, the tile grid. |
-| **ListDialog.cs** | A window with a checklist — "What will change" and similar questions. |
-| **Lang.cs** | The English translation of the interface. Generated from `lang-en*.txt` by `python tools/gen_lang.py` — edit the dictionaries, not `Lang.cs` itself. `python tools/check_lang.py` lists strings that have no translation yet. |
-| **Json.cs** | JSON parsing without external libraries — the engine replies with `###JSON### {...}` lines. |
-| **app.manifest** | The administrator-rights requirement and display-scaling support. |
-| **app.res** | A prebuilt Win32 resource: manifest + icon (10 sizes, 16–256) + version. No need to rebuild it. |
-| **app.ico / app.png** | The application icon. To change it, run `python tools/set_icon.py logo-16.png ... logo-256.png`: it builds app.ico and puts the same images into app.res. |
+| **src/App/MainForm.cs** | The window: building the frame and pages, system detection at start, window state between launches, icon and title bar. |
+| **src/App/Navigation.cs** | Sections and tabs, the sidebar (collapse, its animation), moving between pages. |
+| **src/Pages/Page*.cs** | One file per page: Overview, Settings, Apps and Startup, Data collection, Traces on this PC, Network, Timeline, Device ID, Verify, Changes, Auto-protection, About, Log. |
+| **src/Pages/ListPage.cs** | The shared frame of list pages (search, card, buttons) and helpers for them. |
+| **src/Engine/EngineRunner.cs** | Launching the engine: streamed output, `###JSON###` replies, the busy state and the Stop button. |
+| **src/App/Program.cs** | The entry point, command-line mode and the interface test runs. |
+| **src/App/Actions.cs** | What each button does: applying, verifying, the monitor, the guard. |
+| **src/App/Report.cs** | The "before and after" HTML report. |
+| **src/Engine/Engine.cs** | Unpacking the engine: a folder writable by administrators only, and a SHA-256 check against what is embedded in the exe. |
+| **src/App/Crash.cs** | Catching unhandled errors: a clear window instead of the system one, plus `crash.log`. |
+| **src/App/AppInfo.cs** | The program version and the update check on GitHub — on a button only. |
+| **src/App/Welcome.cs** | The first-run window: one question instead of thirteen sections at once. |
+| **src/Tests/Mocks.cs** | Test data for interface screenshots, entirely under `#if UITEST`. |
+| **src/App/SingleInstance.cs** | One copy of the program: a second launch shows the window that is already open. |
+| **src/Tests/SelfTest.cs** | Checks for the pure functions of the interface — version comparison, parsing the engine's replies, "does this command change the system or only read it". A separate build under `#if SELFTEST`. |
+| **src/Controls/Theme.cs** | The theme (colours, fonts), dark scrollbars, keyboard-only focus frames, value animation, the dark menu. |
+| **src/Controls/Frame.cs** | The window frame: title bar, sidebar, navigation items and the sliding highlight. |
+| **src/Controls/Controls.cs** | Basic controls: cards, buttons, switches, tabs, search, section headers, the empty state. |
+| **src/Controls/Rows.cs** | List rows and the lists themselves: settings, verification, dossier, network, overview. |
+| **src/Controls/Charts.cs** | Charts and tiles: the index ring, ring and sensor charts, the timeline, the tile grid. |
+| **src/Controls/ListDialog.cs** | A window with a checklist — "What will change" and similar questions. |
+| **src/Lang/Lang.cs** | The English translation of the interface. Generated from `src/Lang/lang-en*.txt` by `python tools/gen_lang.py` — edit the dictionaries, not `Lang.cs` itself. `python tools/check_lang.py` lists strings that have no translation yet. |
+| **src/Engine/Json.cs** | JSON parsing without external libraries — the engine replies with `###JSON### {...}` lines. |
+| **src/Resources/app.manifest** | The administrator-rights requirement and display-scaling support. |
+| **src/Resources/app.res** | A prebuilt Win32 resource: manifest + icon (10 sizes, 16–256) + version. No need to rebuild it. |
+| **src/Resources/app.ico / app.png** | The application icon. To change it, run `python tools/set_icon.py logo-16.png ... logo-256.png`: it builds app.ico and puts the same images into app.res. |
 | **tests/engine-tests.ps1** | Behaviour checks for the engine; the GitHub build runs the same ones. Read-only. |
 | **tests/engine.Tests.ps1** | Pester tests for registry writes and their verification, the firewall address set, the single-swap hosts rewrite, service rollback and registry access errors. Works with the in-box Pester 3.4 and with Pester 5; the GitHub build runs it. |
 | **tests/roundtrip.ps1** | Apply, verify and revert for real, then compare every value with the original one. It changes the system, so it needs the `-Confirmed` switch; the build runs it on a disposable machine. |
@@ -247,7 +261,7 @@ By hand, if you prefer (after editing `engine/`, run `python tools/build_engine.
 | **tools/make_winget.py** | Builds the winget catalogue manifest from the version and the release checksum. The catalogue gets the installer `Win11Privacy-Setup.exe`. |
 | **installer/** | The installer (Inno Setup): `Win11Privacy.iss` — the wizard in English and Russian, a regular installation or a portable copy; `build.ps1` builds `Win11Privacy-Setup.exe` from a built `Win11Privacy.exe` (needs Inno Setup 6.6 or newer; the release build installs a pinned version itself). |
 | **tests/installer-tests.ps1** | Installs, reinstalls, uninstalls (with and without the data) and unpacks the portable copy for real. It changes the system, so it runs only with `WIN11_INSTALLER_TEST=1`; the build runs it on a disposable machine. |
-| **tools/set_version.py** | Writes the program version into `app.res` — the one Windows shows in the file properties. `--check` compares them, and the build insists on it. |
+| **tools/set_version.py** | Writes the program version into `src/Resources/app.res` — the one Windows shows in the file properties. `--check` compares them, and the build insists on it. |
 | **tools/submit_winget.py** | Submits the manifest of a new version to the winget catalogue: creates a branch in the fork, uploads the files and opens a pull request. The catalogue itself is never cloned — it weighs gigabytes. |
 | **check-engine.cmd** | Engine self-check. Read-only, changes nothing. |
 
@@ -353,8 +367,8 @@ to run. It applies the modules, makes sure the audit sees that, reverts and
 compares **every** value with the one from before: comparing only the totals would
 not be enough — errors cancelling each other out would go unnoticed.
 
-**`check-engine.cmd`** runs the engine in read-only mode and leaves four result
-files next to it: system detection, the settings audit, X-ray status and a test
+**`check-engine.cmd`** runs the engine in read-only mode and leaves its result
+files in `check-results\`: system detection, the settings audit, X-ray status and a test
 run. Nothing in the system is changed.
 
 ---
@@ -383,7 +397,7 @@ which simulates a display at 150% scaling, and `LIGHTTEST` for the light theme.
 The checks for the interface's pure functions build as a separate exe:
 
 ```
-csc /define:SELFTEST /main:Win11Privacy.SelfTest ... *.cs
+csc /define:SELFTEST /main:Win11Privacy.SelfTest ... /recurse:src\*.cs
 ```
 
 ---
@@ -470,7 +484,7 @@ created automatically.
 
 To cut a new version:
 
-1. Raise the number in two places — `AppInfo.cs` (`Version`) and the engine
+1. Raise the number in two places — `src/App/AppInfo.cs` (`Version`) and the engine
    (`$script:EngineVersion` in `engine/01-constants.ps1`) — then rebuild the
    engine and write the version into the version resource, the one Windows
    shows in the file properties:

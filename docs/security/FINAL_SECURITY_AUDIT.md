@@ -59,7 +59,8 @@ the probe).
 | Pester 3.4 — host / VM | 44 / 0, 44 / 0 |
 | SelfTest — host / VM (administrator) | 140 / 0, 140 / 0 |
 | Live VM checks `guest-remed4.ps1` | 28 / 1 — the failure was harness timing (lock released before the SYSTEM task started); re-check with a start handshake 3 / 3 |
-| Not run | PSScriptAnalyzer (permission), UI text-fit scan, installer tests, roundtrip, GitHub Actions; live two-user / over-the-shoulder, Entra/hybrid/MDM, power loss |
+| GitHub Actions on `395af49` | failed: 16 audit-policy checks in administrator mode — the runner's `Windows\Temp` does not pass the path check, so the engine correctly had no private place; the tests now use a protected test root in `ProgramData` and check the `Windows\Temp` branch by the machine's ACL (VM, both ACL variants: 79 / 0) — see `SECURITY_REMEDIATION_REPORT.md` |
+| Not run | PSScriptAnalyzer (permission), UI text-fit scan, installer tests, roundtrip locally; live two-user / over-the-shoulder, Entra/hybrid/MDM, power loss |
 
 **Release recommendation for the update: CONDITIONAL RELEASE** — no critical or high
 finding is open; the remaining items are documented denials of service (lock names,

@@ -192,7 +192,48 @@ $t2Job = Start-Job -ArgumentList $remedAllFns, $remedVars -ScriptBlock {
     Invoke-Expression $Fns; Invoke-Expression $Vars
     $r = @{}
     $adm = [bool](Test-Admin); $r.admin = $adm
-    $script:SafeRoot = ''      # корня ещё нет (первый запуск)
+    # Повышенный движок берёт защищённый корень (как в продукте: окно заводит
+    # его до запуска движка) — здесь это настоящая закрытая папка в ProgramData.
+    # Без повышения границы прав нет — временная папка пользователя.
+    $sysTemp = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot 'Temp')).TrimEnd('\')
+    $tr = ''
+    if ($adm) {
+        $tr = Join-Path $env:ProgramData ('W11P-t2-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        $sec = New-Object System.Security.AccessControl.DirectorySecurity
+        $sec.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) { $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))) }
+        $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        $null = [IO.Directory]::CreateDirectory($tr, $sec)
+        $r.trustRootOk = [bool](Test-PathTrusted $tr)
+        # Windows\Temp: годится ли как запасное место на ЭТОЙ машине, и если
+        # нет — почему (первая папка пути и запись прав, что мешают)
+        $r.winTempOk = [bool](Test-DirChainSecure $sysTemp)
+        $r.winTempWhy = ''
+        if (-not $r.winTempOk) {
+            $cur = $sysTemp
+            while ($cur -and -not $r.winTempWhy) {
+                $parent = [IO.Path]::GetDirectoryName($cur); $isRoot = (-not $parent)
+                $node = $(if ($isRoot) { $cur.TrimEnd('\') + '\' } else { $cur })
+                try {
+                    $it = Get-Item -LiteralPath $node -Force -ErrorAction Stop
+                    $acl = Get-Acl -LiteralPath $node -ErrorAction Stop
+                    $own = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+                    if (-not $isRoot -and ($it.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $r.winTempWhy = "$node is a reparse point" }
+                    elseif ($script:TrustedSids -notcontains $own) { $r.winTempWhy = "$node owner $own" }
+                    else {
+                        $mask = $(if ($isRoot) { 0x40 -bor 0x10000000 -bor 0x40000000 } else { 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x10000000 -bor 0x40000000 -bor 0x40 })
+                        foreach ($a in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+                            if ("$($a.AccessControlType)" -ne 'Allow' -or ($a.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -or $script:TrustedSids -contains $a.IdentityReference.Value) { continue }
+                            if (([int64]$a.FileSystemRights -band $mask) -ne 0) { $r.winTempWhy = ("{0}: {1} has {2} (0x{3:x})" -f $node, $a.IdentityReference.Value, $a.FileSystemRights, [int64]$a.FileSystemRights); break }
+                        }
+                    }
+                } catch { $r.winTempWhy = "$node unreadable: $($_.Exception.Message)" }
+                if ($isRoot) { break }; $cur = $parent
+            }
+            if (-not $r.winTempWhy) { $r.winTempWhy = 'chain check failed, cause not found' }
+        }
+    }
+    $script:SafeRoot = $tr
     $script:Files = New-Object System.Collections.Generic.List[string]
     $script:Mode = ''
     $script:Junk = Join-Path $env:TEMP ('w11p-t2-' + [guid]::NewGuid().ToString('N').Substring(0, 8)); $null = New-Item -ItemType Directory -Force $script:Junk
@@ -221,7 +262,7 @@ $t2Job = Start-Job -ArgumentList $remedAllFns, $remedVars -ScriptBlock {
     $r.okLeaf = Split-Path $f0 -Leaf
     $r.okGone = -not (Test-Path -LiteralPath $r.okDir)
     $r.okBase = [IO.Path]::GetFullPath((Split-Path $r.okDir -Parent)).TrimEnd('\')
-    $r.wantBase = $(if ($adm) { [IO.Path]::GetFullPath((Join-Path $env:SystemRoot 'Temp')).TrimEnd('\') } else { [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') })
+    $r.wantBase = $(if ($adm) { [IO.Path]::GetFullPath($tr).TrimEnd('\') } else { [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') })
     $r.userTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
     $modes = [ordered]@{ extra = -1; dir = -1; junction = -1; old = -1; big = -1; badval = -1; nonnum = -1; fail = -1; emptyval = 0 }
     $bad = @()
@@ -240,9 +281,18 @@ $t2Job = Start-Job -ArgumentList $remedAllFns, $remedVars -ScriptBlock {
     $r.noPlace = & { function Test-Admin { $true }; function Test-PathTrusted { param($Path) $false }; function Test-DirChainSecure { param($Dir) $false }; Get-AuditSetting }
     $r.noPlaceCalls = $script:Files.Count - $before
     # корень есть, но не защищён (временная папка) — не используется
-    $script:SafeRoot = Join-Path $script:Junk 'fake-root'; $null = New-Item -ItemType Directory -Force $script:SafeRoot
-    $r.fakeRootTrusted = [bool](Test-PathTrusted $script:SafeRoot)
+    $fake = Join-Path $script:Junk 'fake-root'; $null = New-Item -ItemType Directory -Force $fake
+    $r.fakeRootTrusted = [bool](Test-PathTrusted $fake)
     if ($adm) {
+        # корня нет / корень не защищён: своя папка в Windows\Temp, если путь к
+        # ней закрыт от чужих; иначе места нет вовсе — отказ, а не «куда-нибудь»
+        $script:SafeRoot = ''
+        $d0 = New-PrivateWorkDir 'w11p-audit-'; $r.noRootDir = "$d0"; if ($d0) { Remove-PrivateWorkDir $d0 }
+        $script:SafeRoot = $fake
+        $d1 = New-PrivateWorkDir 'w11p-audit-'; $r.fakeDir = "$d1"; if ($d1) { Remove-PrivateWorkDir $d1 }
+        $r.sysTemp = $sysTemp; $r.fake = [IO.Path]::GetFullPath($fake).TrimEnd('\')
+        # права самой личной папки — в защищённом корне
+        $script:SafeRoot = $tr
         $d = New-PrivateWorkDir 'w11p-audit-'
         $r.admDir = $d
         if ($d) {
@@ -268,6 +318,7 @@ $t2Job = Start-Job -ArgumentList $remedAllFns, $remedVars -ScriptBlock {
         $r.staleBait = (Test-Path -LiteralPath (Join-Path $script:Bait 'keep.txt'))
     }
     & cmd.exe /c ('rmdir /s /q "' + $script:Junk + '"') 2>$null
+    if ($tr) { & cmd.exe /c ('rmdir /s /q "' + $tr + '"') 2>$null }
     $r
 }
 $t2Done = Wait-Job $t2Job -Timeout 120
@@ -277,7 +328,7 @@ Check 'T-2: проверки копии политики аудита не за�
 if ($t2) {
     Check 'T-2: политика читается из копии в личной папке, папка убрана' ($t2.ok -eq 3 -and $t2.okLeaf -eq 'audit.csv' -and (Split-Path $t2.okDir -Leaf) -like 'w11p-audit-*' -and $t2.okGone) ("значение {0}, папка {1}" -f $t2.ok, $t2.okDir)
     if ($t2.admin) {
-        Check 'T-2 (админ): корня нет — копия в своей папке Windows\Temp, не во временной папке пользователя' ($t2.okBase -eq $t2.wantBase -and $t2.okBase -ne $t2.userTemp) $t2.okBase
+        Check 'T-2 (админ): копия — в своей папке внутри защищённого корня (ProgramData), не во временной папке пользователя' ($t2.trustRootOk -and $t2.okBase -eq $t2.wantBase -and $t2.okBase -ne $t2.userTemp) ("корень доверен: {0}, папка в {1}" -f $t2.trustRootOk, $t2.okBase)
     } else {
         Check 'T-2: без повышения — временная папка пользователя (границы прав нет)' ($t2.okBase -eq $t2.wantBase) $t2.okBase
     }
@@ -288,7 +339,17 @@ if ($t2) {
     if ($t2.admin) {
         Check 'T-2 (админ): личная папка — права только SYSTEM и Администраторам, без наследования, владелец «Администраторы»' (
               $t2.admDir -and $t2.admProtected -and $t2.admOwner -eq 'S-1-5-32-544' -and $t2.admSids -eq 'S-1-5-18,S-1-5-32-544' -and $t2.admTrusted -and $t2.admGone) ("{0} {1} {2}" -f $t2.admDir, $t2.admOwner, $t2.admSids)
-        Check 'T-2 (админ): корень не защищён — личная папка в Windows\Temp, а не в нём' ($t2.admUnder -eq $t2.wantBase) $t2.admUnder
+        if ($t2.winTempOk) {
+            Check 'T-2 (админ): корня нет — своя папка в Windows\Temp' ($t2.noRootDir -and ([IO.Path]::GetFullPath((Split-Path $t2.noRootDir -Parent)).TrimEnd('\')) -eq $t2.sysTemp) $t2.noRootDir
+            Check 'T-2 (админ): корень не защищён — своя папка в Windows\Temp, а не в нём' ($t2.fakeDir -and ([IO.Path]::GetFullPath((Split-Path $t2.fakeDir -Parent)).TrimEnd('\')) -eq $t2.sysTemp) $t2.fakeDir
+        } else {
+            # На этой машине Windows\Temp открыт чужим (так на раннере GitHub):
+            # запасного места нет, и это должен быть отказ, а не другая папка
+            Write-Host ('  [i]    T-2: Windows\Temp на этой машине не годится как личное место: ' + $t2.winTempWhy)
+            Write-Host ('::notice::T-2: Windows\Temp is not usable as a private place on this machine: ' + $t2.winTempWhy)
+            Check 'T-2 (админ): корня нет, а Windows\Temp открыт чужим — места нет, отказ (копии не будет)' (-not $t2.noRootDir) $t2.noRootDir
+            Check 'T-2 (админ): корень не защищён, а Windows\Temp открыт чужим — отказ, не в незащищённом корне' (-not $t2.fakeDir) $t2.fakeDir
+        }
         Check 'T-2 (админ): оставшиеся от обрыва — своя старая убирается, свежая и ссылка остаются, цель ссылки цела' ($t2.staleOld -and $t2.staleNew -and $t2.staleBait)
     } else {
         Write-Host '  [--]   T-2: права личной папки, Windows\Temp и уборка оставшихся: пропущено (нужны права администратора)'

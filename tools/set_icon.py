@@ -26,8 +26,8 @@ except Exception:
     pass
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ICO = os.path.join(ROOT, 'app.ico')
-RES = os.path.join(ROOT, 'app.res')
+ICO = os.path.join(ROOT, 'src', 'Resources', 'app.ico')
+RES = os.path.join(ROOT, 'src', 'Resources', 'app.res')
 RT_ICON, RT_GROUP_ICON = 3, 14
 
 

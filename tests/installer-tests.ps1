@@ -37,7 +37,7 @@ $dataDir = Join-Path $env:ProgramData 'Win11Privacy'
 $startMenu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
 $tasks = @('Win11Privacy Guard', 'Win11Privacy Sensor', 'Win11Privacy Network', 'Win11Privacy Watcher')
 $version = ''
-$info = Join-Path (Split-Path $PSScriptRoot -Parent) 'AppInfo.cs'
+$info = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\App\AppInfo.cs'
 if (Test-Path -LiteralPath $info) {
     $m = [regex]::Match((Get-Content -LiteralPath $info -Raw), 'Version\s*=\s*"([0-9.]+)"')
     if ($m.Success) { $version = $m.Groups[1].Value }

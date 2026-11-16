@@ -44,7 +44,7 @@ SCHEMA_URL = 'https://aka.ms/winget-manifest.%s.1.28.0.schema.json'
 
 
 def read_version():
-    src = io.open(os.path.join(ROOT, 'AppInfo.cs'), encoding='utf-8-sig').read()
+    src = io.open(os.path.join(ROOT, 'src', 'App', 'AppInfo.cs'), encoding='utf-8-sig').read()
     m = re.search(r'Version\s*=\s*"([0-9.]+)"', src)
     if not m:
         sys.exit('в AppInfo.cs не нашлась строка версии')

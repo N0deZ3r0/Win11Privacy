@@ -33,11 +33,11 @@ echo Sborka Win11Privacy.exe ...
   /reference:System.Core.dll ^
   /reference:System.Drawing.dll ^
   /reference:System.Windows.Forms.dll ^
-  /win32res:app.res ^
+  /win32res:src\Resources\app.res ^
   /resource:Win11-Privacy-Engine.ps1,engine.ps1 ^
-  /resource:app.ico,app.ico ^
-  /resource:app.png,app.png ^
-  *.cs
+  /resource:src\Resources\app.ico,app.ico ^
+  /resource:src\Resources\app.png,app.png ^
+  /recurse:src\*.cs
 
 if errorlevel 1 (
   echo.
