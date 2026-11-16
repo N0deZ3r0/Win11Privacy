@@ -22,7 +22,10 @@ namespace Win11Privacy
                 "{\"module\":\"ai\",\"title\":\"ИИ-функции Windows\",\"ok\":13,\"total\":15,\"items\":[" +
                     "{\"name\":\"Paint Cocreator — выкл\",\"ok\":false,\"actual\":\"не задано\"},{\"name\":\"Edge: Copilot не читает страницы\",\"ok\":false,\"actual\":\"не задано\"}]}," +
                 "{\"module\":\"services\",\"title\":\"Службы и задачи телеметрии\",\"ok\":5,\"total\":11,\"items\":[" +
-                    "{\"name\":\"задача Consolidator\",\"ok\":false,\"actual\":\"Ready\"},{\"name\":\"задача ProgramDataUpdater\",\"ok\":false,\"actual\":\"Ready\"}]}" +
+                    "{\"name\":\"задача Consolidator\",\"ok\":false,\"actual\":\"Ready\"},{\"name\":\"задача ProgramDataUpdater\",\"ok\":false,\"actual\":\"Ready\"}]}," +
+                // программ нет на компьютере: раздел не показывается, а называется в строке «Не установлены»
+                "{\"module\":\"app_firefox\",\"title\":\"Mozilla Firefox\",\"ok\":0,\"total\":0,\"absent\":true,\"items\":[{\"name\":\"Firefox: телеметрия — выкл\",\"ok\":false,\"absent\":true}]}," +
+                "{\"module\":\"app_office\",\"title\":\"Microsoft Office\",\"ok\":0,\"total\":0,\"absent\":true,\"items\":[]}" +
                 "],\"dns\":[{\"name\":\"v20.events.data.microsoft.com\",\"blocked\":true},{\"name\":\"telemetry.microsoft.com\",\"blocked\":true},{\"name\":\"self.events.data.microsoft.com\",\"blocked\":false}]," +
                 "\"buffer\":{\"mb\":\"4.7\",\"files\":9},\"edition\":{\"kind\":\"home\"},\"monitorEnabled\":true,\"hostsBlocked\":true}";
             RenderAudit(Json.ParseObject(audit));

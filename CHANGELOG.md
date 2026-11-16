@@ -47,6 +47,7 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - Отчёт третьего прохода: `docs/security/GDID_AUDIT_3.md`.
 
 **Окно**
+- «Проверка» не показывает разделы программ, которых нет на компьютере (VS Code, Firefox, Office, Visual Studio, PowerShell 7 / .NET SDK, NVIDIA, Chrome). Раньше они висели с «0 из 3» и тянули вниз общий итог, индекс на «Обзоре», отчёт и код выхода тихой проверки, хотя применить их было нельзя. Теперь такие пункты в счёт не входят, а программы перечислены одной свёрнутой строкой «Не установлены на этом компьютере». Определяются программы так же, как для раздела «Настройки»; если определить не удалось, не скрывается ничего.
 - «Хронология» в невысоком окне (например, экран 1024 × 768 или крупный масштаб) прокручивается целиком. Раньше график сплющивался так, что подписи оси наезжали друг на друга, а список «Что случилось» сжимался меньше чем до двух строк.
 
 ### What's new
@@ -86,6 +87,7 @@ the `## X.Y.Z` section and puts it into the GitHub release. New entries go under
 - Third-pass report: `docs/security/GDID_AUDIT_3.md`.
 
 **Window**
+- "Verify" no longer shows sections for programs that are not installed (VS Code, Firefox, Office, Visual Studio, PowerShell 7 / .NET SDK, NVIDIA, Chrome). They used to show "0 of 3" and pull down the overall result, the index on "Overview", the report and the exit code of the silent check, although they could not be applied. Such items are no longer counted, and the programs are listed in one collapsed row "Not installed on this computer". Programs are detected the same way as for "Settings"; if detection fails, nothing is hidden.
 - "Timeline" scrolls as a whole in a short window (for example a 1024 × 768 screen or a large scale). The chart used to be squashed until its axis labels overlapped, and the "What happened" list shrank to less than two lines.
 
 ## 2.1.0 — 2026-11-15

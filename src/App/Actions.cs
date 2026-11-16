@@ -419,11 +419,25 @@ namespace Win11Privacy
 
             _auditGroups.Controls.Clear();
             RenderProof();
+            // Разделы программ, которых на компьютере нет, движок помечает
+            // absent и в счёт не берёт; здесь они не показываются, а только
+            // перечислены в одной свёрнутой строке после остальных
+            List<object> absent = new List<object>();
             foreach (object go in Json.GetArr(d, "groups"))
             {
                 Dictionary<string, object> g = Json.Obj(go);
+                if (Json.GetBool(g, "absent"))
+                {
+                    Dictionary<string, object> app = new Dictionary<string, object>();
+                    app["name"] = Json.GetStr(g, "title"); app["ok"] = true; app["actual"] = "";
+                    absent.Add(app);
+                    continue;
+                }
                 _auditGroups.Controls.Add(new AuditGroupRow(L.T(Json.GetStr(g, "title")), Json.GetInt(g, "ok"), Json.GetInt(g, "total"), Json.GetArr(g, "items")) { Font = this.Font });
             }
+            if (absent.Count > 0)
+                _auditGroups.Controls.Add(new AuditGroupRow(L.T("Не установлены на этом компьютере"), 0, 0, absent)
+                    { Font = this.Font, Note = L.T("не проверяются") + " (" + absent.Count + ")" });
             if (dns.Count > 0)
             {
                 SectionHeader sh = new SectionHeader(L.T("Обращения к доменам телеметрии (из кэша DNS)")); sh.Font = Font; _auditGroups.Controls.Add(sh);

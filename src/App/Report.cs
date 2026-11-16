@@ -84,14 +84,20 @@ namespace Win11Privacy
                 h.Append(L.T("<div class=\"tile\"><div class=\"c\">Не применено</div><div class=\"v\">")).Append(total - ok)
                  .Append(L.T("</div><div class=\"s\">требуют внимания</div></div></div>"));
                 h.Append(L.T("<table><tr><th>Раздел</th><th>Применено</th></tr>"));
+                List<string> absentApps = new List<string>();
                 foreach (object o in Json.GetArr(_lastAudit, "groups"))
                 {
                     Dictionary<string, object> g = Json.Obj(o);
+                    // программы нет на компьютере: в счёт не входит, названа ниже
+                    if (Json.GetBool(g, "absent")) { absentApps.Add(L.T(Json.GetStr(g, "title"))); continue; }
                     int go = Json.GetInt(g, "ok"), gt = Json.GetInt(g, "total");
                     h.Append("<tr><td>").Append(Esc(L.T(Json.GetStr(g, "title")))).Append("</td><td class=\"")
                      .Append(go == gt ? "ok" : "bad").Append("\">").Append(go).Append(" / ").Append(gt).Append("</td></tr>");
                 }
                 h.Append("</table>");
+                if (absentApps.Count > 0)
+                    h.Append("<p>").Append(Esc(L.T("Не установлены на этом компьютере и не проверялись: ") + string.Join(", ", absentApps.ToArray()) + "."))
+                     .Append("</p>");
                 List<object> dns = Json.GetArr(_lastAudit, "dns");
                 if (dns.Count > 0)
                 {

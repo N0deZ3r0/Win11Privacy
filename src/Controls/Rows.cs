@@ -467,6 +467,9 @@ namespace Win11Privacy
         private readonly string _title; private readonly int _ok, _total;
         private readonly List<Dictionary<string, object>> _rows = new List<Dictionary<string, object>>();
         private bool _open, _hover;
+        // Строка без счёта (программы, которых нет на компьютере): точки
+        // серые, справа это пояснение вместо «N из M»
+        public string Note;
 
         // В раскрытой группе видны несоответствия, а если их нет — все пункты.
         // Список один и для высоты, и для отрисовки: раньше каждая решала это
@@ -504,14 +507,14 @@ namespace Win11Privacy
             if (_hover) { using (GraphicsPath p = Theme.RoundRect(new RectangleF(0.5F, 0.5F, Width - 1, HeadH - 1), 6)) using (SolidBrush b = new SolidBrush(Theme.RowHover)) g.FillPath(b, p); }
 
             bool all = _ok == _total;
-            Color badge = all ? Theme.Ok : (_ok == 0 ? Theme.Err : Theme.Warn);
+            Color badge = Note != null ? Theme.TextFaint : (all ? Theme.Ok : (_ok == 0 ? Theme.Err : Theme.Warn));
             Font icon = Theme.IconFont(Font.Size * 0.85F);
             string glyph = _open ? "" : "";
             if (icon != null) TextRenderer.DrawText(g, glyph, icon, new Rectangle((int)(u * 0.3F), 0, (int)(u * 1.4F), HeadH), Theme.TextDim, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
             int tx = (int)(u * 1.9F);
             // справа — точка состояния и «17 из 17» обычным текстом, без цветной пилюли
-            string score = _ok + " " + L.T("из") + " " + _total;
+            string score = Note ?? (_ok + " " + L.T("из") + " " + _total);
             Size ss = TextRenderer.MeasureText(score, Font);
             TextRenderer.DrawText(g, _title, Font, new Rectangle(tx, 0, Width - tx - ss.Width - (int)(u * 2.4F), HeadH),
                 Theme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
@@ -529,7 +532,7 @@ namespace Win11Privacy
                     bool ok = Json.GetBool(it, "ok");
                     bool blocked = Json.GetBool(it, "blocked");
                     // «Windows не разрешает» — не наша вина и не красное: серым
-                    Color dot = ok ? Theme.Ok : (blocked ? Theme.TextFaint : Theme.Err);
+                    Color dot = Note != null ? Theme.TextFaint : (ok ? Theme.Ok : (blocked ? Theme.TextFaint : Theme.Err));
                     using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, u * 1.9F, y + (RowH - u * 0.45F) / 2F, u * 0.45F, u * 0.45F);
                     string nm = L.T(Json.GetStr(it, "name")); string act = L.T(Json.GetStr(it, "actual"));
                     Size acs = TextRenderer.MeasureText(act, Font);

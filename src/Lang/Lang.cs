@@ -59,7 +59,7 @@ namespace Win11Privacy
 
         private static void Build()
         {
-            _map = new Dictionary<string, string>(1566, StringComparer.Ordinal);
+            _map = new Dictionary<string, string>(1569, StringComparer.Ordinal);
             _map[" ч"] = " h";
             _map[" МБ"] = " MB";
             _map[" ч "] = " h ";
@@ -1626,6 +1626,9 @@ namespace Win11Privacy
             _map["Прошлое стирание номера не закончилось. «Вернуть как было» или новая смена номера снова запустят службы, что работали до него."] = "The previous ID wipe did not finish. \"Restore\" or a new \"Change the ID\" will start again the services that were running before it.";
             _map["Сейчас стоят: {0}."] = "Stopped now: {0}.";
             _map["Стирание оборвалось"] = "Wipe interrupted";
+            _map["Не установлены на этом компьютере"] = "Not installed on this computer";
+            _map["не проверяются"] = "not checked";
+            _map["Не установлены на этом компьютере и не проверялись: "] = "Not installed on this computer and not checked: ";
         }
     }
 }

@@ -14,7 +14,7 @@ function Get-ProofSnapshot {
     if ($null -ne $Checked) {
         foreach ($r in @($Checked)) {
             if ($r.module -in @('cleanup', 'startup', 'buffer', 'oem')) { continue }
-            if ($r.blocked -or $r.na) { continue }
+            if ($r.blocked -or $r.na -or $r.absent) { continue }   # absent — программы нет на компьютере
             $tot++
             if ($r.ok) { $ok++ }
             if ($r.module -eq 'etw') { $etwTotal++; if ($r.ok) { $etwOff++ } }

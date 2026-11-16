@@ -389,6 +389,10 @@ if ($withProof -and $withProof.proof) {
     Check 'снимок «после» есть' ($null -ne $withProof.proof.after)
     Check 'числа снимка совпадают с аудитом' ([int]$withProof.proof.after.ok -eq [int]$withProof.ok) `
           ("аудит " + $withProof.ok + ", снимок " + $withProof.proof.after.ok)
+    # и итог тоже: пункты программ, которых нет на компьютере, не входят ни в
+    # аудит, ни в снимок (раньше снимок их считал)
+    Check 'итог снимка совпадает с аудитом' ([int]$withProof.proof.after.total -eq [int]$withProof.total) `
+          ("аудит " + $withProof.total + ", снимок " + $withProof.proof.after.total)
     Check 'в снимке есть автозапуск' ($null -ne $withProof.proof.after.startupOn)
 }
 
@@ -1273,7 +1277,9 @@ if ($factFound.Count -eq 1 -and $script:FactRules) {
 Write-Host ''
 Write-Host 'Применимость к версии Windows'
 $naItems = @()
-if ($all) { foreach ($g in @($all.groups)) { foreach ($i in @($g.items)) { if ($i.na) { $naItems += $i } } } }
+# пункты разделов программ, которых нет на компьютере (absent), окно не
+# показывает — и в «нет на этой Windows N» они не входят
+if ($all) { foreach ($g in @($all.groups)) { foreach ($i in @($g.items)) { if ($i.na -and -not $i.absent) { $naItems += $i } } } }
 Check 'аудит отдаёт число неприменимых настроек' ($null -ne $all.notApplicable)
 Check 'неприменимые не входят в итог' ([int]$all.notApplicable -eq $naItems.Count) `
       ("notApplicable=" + $all.notApplicable + ", помечено: " + $naItems.Count)
@@ -1314,6 +1320,103 @@ if ($engineSrc.Contains($buildLine)) {
         Check 'у неприменимых честная причина' (@($naNames | Where-Object { $_ -match 'нет на этой версии' }).Count -ge 10)
     }
     Remove-Item -LiteralPath $fake -Force -ErrorAction SilentlyContinue
+}
+
+# --------------------------------------------------------------------------- #
+Write-Host ''
+Write-Host 'Программы, которых нет на компьютере'
+# Разделы программ, которых нет (то же Detect-Apps, по которому окно гасит их
+# строки в настройках), движок помечает absent: пункты остаются в ответе, но
+# не входят ни в итог, ни в счёт раздела, а окно такие разделы не показывает.
+# Если определить программы не удалось, не скрывается ничего.
+function Invoke-FakeEngineJson {
+    param([string]$Source, [string]$EngineArgs)
+    $path = Join-Path $env:TEMP ('w11p-tests-fakeapps-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.ps1')
+    $Source | Set-Content -LiteralPath $path -Encoding UTF8
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = (Get-Command powershell.exe).Source
+        $psi.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $path + '" ' + $EngineArgs
+        $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+        $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+        $pr = [System.Diagnostics.Process]::Start($psi)
+        $o = $pr.StandardOutput.ReadToEnd(); $null = $pr.StandardError.ReadToEnd(); $pr.WaitForExit()
+        $j = $null
+        foreach ($line in ($o -split "`n")) {
+            $t = $line.TrimStart()
+            if ($t.StartsWith('###JSON###')) { try { $j = ($t.Substring(10).Trim() | ConvertFrom-Json) } catch { } }
+        }
+        return @{ json = $j; out = $o }
+    } finally { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+}
+
+$appMods = @()
+if ($all) { $appMods = @(@($all.groups) | ForEach-Object { "$($_.module)" } | Where-Object { $_ -like 'app_*' }) }
+Check 'в полном аудите есть все разделы программ' ($appMods.Count -ge 7) ("получено: " + ($appMods -join ','))
+if ($appMods.Count -gt 0) {
+    $appArg = ((@($appMods) + 'telemetry') -join ',')
+    $real = Get-EngineJson @('-Audit', '-Modules', $appArg)
+    Check 'аудит разделов программ отвечает' ($null -ne $real)
+    if ($real) {
+        $absentGroups = @(@($real.groups) | Where-Object { $_.absent })
+        Write-Host ("  нет на этом компьютере: " + $(if ($absentGroups.Count) { (@($absentGroups | ForEach-Object { $_.module }) -join ', ') } else { 'ничего' }))
+        Check 'число отсутствующих программ сообщается' ([int]$real.notInstalled -eq $absentGroups.Count) `
+              ("notInstalled=" + $real.notInstalled + ", помечено разделов: " + $absentGroups.Count)
+        $badGroups = @($absentGroups | Where-Object { ([int]$_.ok -ne 0) -or ([int]$_.total -ne 0) -or (@(@($_.items) | Where-Object { -not $_.absent }).Count -gt 0) })
+        Check 'раздел отсутствующей программы вне счёта, все его пункты помечены' ($badGroups.Count -eq 0) `
+              ("не так: " + (@($badGroups | ForEach-Object { $_.module }) -join ','))
+        $leak = @(@($real.groups) | Where-Object { -not $_.absent } | ForEach-Object { @($_.items) } | Where-Object { $_.absent })
+        Check 'в разделах установленного пометки нет' ($leak.Count -eq 0) ("помечено лишних: " + $leak.Count)
+        $counted = 0
+        foreach ($g in @($real.groups)) { foreach ($i in @($g.items)) { if ((-not $i.blocked) -and (-not $i.na) -and (-not $i.absent)) { $counted++ } } }
+        Check 'итог = пункты без пометок blocked, na и absent' ([int]$real.total -eq $counted) `
+              ("итог " + $real.total + ", посчитано " + $counted)
+        $telReal = @(@($real.groups) | Where-Object { $_.module -eq 'telemetry' })
+        Check 'раздел Windows не помечен' ($telReal.Count -eq 1 -and -not $telReal[0].absent)
+        # скрыто ровно то, что -Detect (по нему окно гасит строки настроек)
+        # называет отсутствующим
+        $det = Get-EngineJson @('-Detect')
+        Check 'определение системы для сверки отвечает' ($null -ne $det -and $null -ne $det.apps)
+        if ($det -and $det.apps) {
+            $missing = @(@($det.apps) | Where-Object { -not $_.found } | ForEach-Object { "$($_.id)" } | Sort-Object)
+            $hidden = @($absentGroups | ForEach-Object { "$($_.module)" } | Sort-Object)
+            Check 'скрыто ровно то, чего нет по -Detect' (($missing -join ',') -eq ($hidden -join ',')) `
+                  ("нет: " + ($missing -join ',') + "; скрыто: " + ($hidden -join ','))
+        }
+
+        # Копии движка: «программ нет совсем» и «определение программ упало»
+        $engineSrcApps = Get-Content -LiteralPath $engine -Raw -Encoding UTF8
+        $fnHead = 'function Detect-Apps {'
+        $fnCount = ([regex]::Matches($engineSrcApps, [regex]::Escape($fnHead))).Count
+        Check 'определение программ описано в движке один раз' ($fnCount -eq 1) ("найдено: " + $fnCount)
+        if ($fnCount -eq 1) {
+            $noneHead = ('function Detect-Apps { $r = @(Detect-AppsReal); foreach ($a in $r) { $a.found = $false }; return $r }' + "`r`n" + 'function Detect-AppsReal {')
+            $none = Invoke-FakeEngineJson ($engineSrcApps.Replace($fnHead, $noneHead)) ('-Audit -Modules ' + $appArg)
+            $nj = $none.json
+            Check 'аудит «программ нет совсем» отвечает' ($null -ne $nj)
+            if ($nj) {
+                $shown = @(@($nj.groups) | Where-Object { ("$($_.module)" -like 'app_*') -and (-not $_.absent) } | ForEach-Object { "$($_.module)" })
+                Check 'все разделы программ скрыты' ($shown.Count -eq 0 -and [int]$nj.notInstalled -eq $appMods.Count) `
+                      ("показаны: " + ($shown -join ',') + "; notInstalled=" + $nj.notInstalled)
+                $telNone = @(@($nj.groups) | Where-Object { $_.module -eq 'telemetry' })
+                Check 'раздел Windows при этом не скрыт' ($telNone.Count -eq 1 -and -not $telNone[0].absent -and [int]$telNone[0].total -gt 0)
+                Check 'в итоге остались только пункты Windows' ($telNone.Count -eq 1 -and [int]$nj.total -eq [int]$telNone[0].total) `
+                      ("итог " + $nj.total)
+            }
+            $brokeHead = ('function Detect-Apps { throw ''тест: определение программ сломано'' }' + "`r`n" + 'function Detect-AppsReal {')
+            $broke = Invoke-FakeEngineJson ($engineSrcApps.Replace($fnHead, $brokeHead)) ('-Audit -Modules ' + $appArg)
+            $bjApps = $broke.json
+            Check 'сбой определения программ не роняет аудит' ($null -ne $bjApps)
+            if ($bjApps) {
+                Check 'при сбое определения не скрыто ничего' ((@(@($bjApps.groups) | Where-Object { $_.absent }).Count -eq 0) -and [int]$bjApps.notInstalled -eq 0)
+                Check 'о сбое определения сказано в выводе' ($broke.out -match 'Не удалось определить установленные программы')
+                $cntB = 0
+                foreach ($g in @($bjApps.groups)) { foreach ($i in @($g.items)) { if ((-not $i.blocked) -and (-not $i.na)) { $cntB++ } } }
+                Check 'при сбое все разделы программ снова в счёте' ([int]$bjApps.total -eq $cntB -and [int]$bjApps.total -ge [int]$real.total) `
+                      ("итог " + $bjApps.total + ", посчитано " + $cntB + ", обычно " + $real.total)
+            }
+        }
+    }
 }
 
 # --------------------------------------------------------------------------- #

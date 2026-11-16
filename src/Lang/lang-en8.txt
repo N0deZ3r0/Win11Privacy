@@ -414,3 +414,6 @@ Temp, кэш обновлений, эскизы, дампы. Удалённое 
 Прошлое стирание номера не закончилось. «Вернуть как было» или новая смена номера снова запустят службы, что работали до него.	The previous ID wipe did not finish. "Restore" or a new "Change the ID" will start again the services that were running before it.
 Сейчас стоят: {0}.	Stopped now: {0}.
 Стирание оборвалось	Wipe interrupted
+Не установлены на этом компьютере	Not installed on this computer
+не проверяются	not checked
+Не установлены на этом компьютере и не проверялись: 	Not installed on this computer and not checked: 
